@@ -1,0 +1,93 @@
+{
+  "id": "gticlub2",
+  "title": "GTI Club: Corso Italiano",
+  "aka": [
+    "GTI Club 2",
+    "Driving Party: Racing in Italy"
+  ],
+  "version": "ver JAB",
+  "mame_set": "gticlub2",
+  "binary": "gticlub2",
+  "files": {
+    "chd": {
+      "name": "941b02.chd",
+      "dir": "gticlub2",
+      "sha1": "943bc9b1ea7273a8382b94c8a75010dfe296df14",
+      "sha1_note": "internal CHD SHA1 (chdman info)"
+    },
+    "nvram": {
+      "name": "941jab_nvram.u39",
+      "dir": "gticlub2",
+      "sha1": "2753dda42cdd81af22dc6780678f1ddeb3c62013",
+      "sha1_note": "MAME also lists nvram.u39 (d0604e84) for this set; 941jab_nvram.u39 is the one it loads last"
+    },
+    "bios": {
+      "name": "941b01.u25",
+      "dir": "kviper",
+      "sha1": "66ff268d5bf78fbfa48cdc3e1b08f8956cfd6cfb"
+    },
+    "ds2430": {
+      "name": "ds2430.u3",
+      "dir": "kviper",
+      "sha1": "ed7cd9b2763b3e377df9663943160f9871f65105"
+    }
+  },
+  "year": 2000,
+  "status": "not yet verified",
+  "modules": [
+    {
+      "name": "game",
+      "prefix": "g",
+      "path": "game/prog.zin",
+      "layout": "app"
+    },
+    {
+      "name": "fpga",
+      "prefix": "fp",
+      "path": "fpga/prog.zin",
+      "layout": "app"
+    },
+    {
+      "name": "gl",
+      "prefix": "gl",
+      "path": "gl/prog.zin",
+      "layout": "lib"
+    },
+    {
+      "name": "grphinit",
+      "prefix": "gi",
+      "path": "grphinit/prog.zin",
+      "layout": "lib"
+    },
+    {
+      "name": "sound",
+      "prefix": "s",
+      "path": "sound/prog.zin",
+      "layout": "lib"
+    }
+  ],
+  "hints": {},
+  "inputs": {
+    "defaults": [
+      255,
+      255,
+      67,
+      255,
+      255,
+      255,
+      255,
+      255
+    ],
+    "analog_rest": [
+      0,
+      -200,
+      -200,
+      -200
+    ],
+    "handbrake": true
+  },
+  "calibration": null,
+  "notes": [
+    "Japanese version."
+  ]
+}

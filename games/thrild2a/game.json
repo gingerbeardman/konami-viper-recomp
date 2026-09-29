@@ -1,0 +1,29 @@
+{
+  "inherits": "thrild2",
+  "id": "thrild2a",
+  "version": "ver AAA",
+  "mame_set": "thrild2a",
+  "binary": "td2a",
+  "status": "not yet verified",
+  "files": {
+    "chd": {
+      "name": "a41a02.chd",
+      "sha1": "bbb71e23bddfa07dfa30b6565a35befd82b055b8",
+      "sha1_note": "internal CHD SHA1 (chdman info); the same card is used by ver JAA and ver AAA",
+      "dir": [
+        "thrild2a",
+        "thrild2j"
+      ]
+    },
+    "nvram": {
+      "name": "a41aaa_nvram.u39",
+      "dir": "thrild2a",
+      "sha1": "768bcd46a6ad20948f60f5e0ecd2f7b9c2901061"
+    }
+  },
+  "calibration": null,
+  "notes": [
+    "Asian version; same CF card as ver JAA, the region comes from the NVRAM.",
+    "MAME uses the GTI Club 2 input layout (K-type steering wheel) for this version; the analog mapping and the calibration script still have to be verified."
+  ]
+}

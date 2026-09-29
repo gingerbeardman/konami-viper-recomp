@@ -1,0 +1,40 @@
+{
+  "inherits": "gticlub2",
+  "id": "gticlub2ea",
+  "title": "Driving Party: Racing in Italy",
+  "aka": [
+    "GTI Club 2",
+    "GTI Club: Corso Italiano"
+  ],
+  "version": "ver EAA",
+  "mame_set": "gticlub2ea",
+  "binary": "gticlub2ea",
+  "files": {
+    "chd": {
+      "name": "941a02.chd",
+      "dir": "gticlub2ea",
+      "sha1": "dd180ad92dd344b38f160e31833077e342cee38d",
+      "sha1_note": "internal CHD SHA1 (chdman info)"
+    },
+    "nvram": {
+      "name": "941eaa_nvram.u39",
+      "dir": "gticlub2ea",
+      "sha1": "92e0ce01049308f459985d466fbfcfac82f34a47"
+    }
+  },
+  "inputs": {
+    "defaults": [
+      255,
+      255,
+      65,
+      255,
+      255,
+      255,
+      255,
+      255
+    ]
+  },
+  "notes": [
+    "MAME: DIP switch SW:3 must be ON (IN2 bit 0x02 = 0), otherwise the game asks for a password."
+  ]
+}

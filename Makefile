@@ -1,0 +1,80 @@
+# Konami Viper static recompilation - build
+#   make games                 : list the supported games (games/<id>/game.json)
+#   make check     GAME=<id>   : verify the files in roms/ against the expected SHA1s
+#   make extract   GAME=<id>   : roms/ -> work/<id>/  (CF image, kernel, game modules; needs chdman)
+#   make recomp    GAME=<id>   : work/<id>/ -> generated/<id>/*.c
+#   make           GAME=<id>   : build the executable (./td2 for thrild2)
+#   make distclean GAME=<id>   : remove everything derived from that game's data
+# GAME defaults to thrild2.
+
+GAME    ?= thrild2
+BIN     := $(shell python3 tools/game.py $(GAME) binary)
+ifeq ($(BIN),)
+$(error GAME=$(GAME) has no profile in games/ (see 'make games'))
+endif
+GEN     := generated/$(GAME)
+BUILD   := build/$(GAME)
+
+CC      ?= cc
+OPT     ?= -O2
+ARCHFLAGS := $(shell uname -m | grep -q x86_64 && echo -mfma -mavx2)
+CFLAGS  += $(EXTRA) $(OPT) $(ARCHFLAGS) -g -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -Iruntime -I$(GEN) \
+           -ffp-contract=off -fno-strict-aliasing -Wall -Wno-unused-label -Wno-unused-variable \
+           -Wno-unused-function
+GENFLAGS := -Wno-unused-but-set-variable -Wno-parentheses-equality -frounding-math
+SDL_CFLAGS := $(shell sdl2-config --cflags)
+SDL_LIBS := $(shell sdl2-config --libs)
+LDFLAGS += -lpthread -lm $(SDL_LIBS)
+
+CXX     ?= c++
+CXXFLAGS += $(EXTRA) $(OPT) $(ARCHFLAGS) -g -std=c++20 -Iruntime/voodoo -Wno-unused-private-field \
+            -Wno-deprecated-declarations
+RT_SRCS := runtime/cpu.c runtime/sched.c runtime/hw.c runtime/main.c runtime/frontend_sdl.c
+VD_SRCS := runtime/voodoo/voodoo.cpp runtime/voodoo/voodoo_2.cpp runtime/voodoo/voodoo_banshee.cpp \
+           runtime/voodoo/voodoo_render.cpp runtime/voodoo/voodoo_bridge.cpp runtime/voodoo/video/rgbutil.cpp
+-include $(GEN)/sources.mk
+
+RT_OBJS := $(RT_SRCS:%.c=$(BUILD)/%.o)
+GEN_OBJS := $(GEN_SRCS:%.c=$(BUILD)/%.o)
+VD_OBJS := $(VD_SRCS:%.cpp=$(BUILD)/%.o)
+
+ifeq ($(wildcard $(GEN)/sources.mk),)
+$(BIN):
+	@echo "$(GEN)/ is missing: run 'make extract GAME=$(GAME)' and 'make recomp GAME=$(GAME)' first" >&2
+	@exit 1
+else
+$(BIN): $(RT_OBJS) $(VD_OBJS) $(GEN_OBJS)
+	$(CXX) -o $@ $^ $(LDFLAGS)
+endif
+
+$(BUILD)/runtime/voodoo/%.o: runtime/voodoo/%.cpp runtime/voodoo/*.h runtime/voodoo/video/*.h
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/runtime/%.o: runtime/%.c runtime/*.h $(GEN)/modules.h $(GEN)/game_config.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) -c $< -o $@
+
+$(BUILD)/$(GEN)/%.o: $(GEN)/%.c runtime/ppc_rt.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(GENFLAGS) -c $< -o $@
+
+games:
+	@python3 tools/game.py list
+
+check:
+	@python3 tools/game.py $(GAME) check
+
+extract:
+	python3 tools/extract.py $(GAME)
+
+recomp:
+	python3 recomp/recomp.py $(GAME)
+
+clean:
+	rm -rf $(BUILD) $(BIN)
+
+distclean: clean
+	rm -rf work/$(GAME) $(GEN) $(BIN)_nvram.bin
+
+.PHONY: games check extract recomp clean distclean

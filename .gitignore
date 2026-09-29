@@ -1,0 +1,35 @@
+# --- Copyrighted game data: never commit (see README, "Legal") ---
+*.chd
+*.u25
+*.u39
+*.u3
+*.img
+/kviper/
+/thrild2*/
+roms/**
+!roms/
+!roms/*/
+!roms/README.md
+!roms/*/README.txt
+
+# --- Outputs of extraction / recompilation / build ---
+/work/
+/generated/
+/build/
+/td2
+/td2j
+/td2a
+/td2c
+/gticlub2
+/gticlub2ea
+*.exe
+*_nvram.bin*
+*.saved
+*.log
+*.wav
+*.ppm
+dispatch_miss.txt
+
+# --- Misc ---
+.DS_Store
+__pycache__/

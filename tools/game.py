@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Game profiles (games/<id>/game.json) and the paths derived from them.
+
+A profile may start with "inherits": "<other id>": it is then deep-merged over that profile
+(objects merge key by key, anything else replaces; null removes the inherited value).
+A file's "dir" may be a list of roms/ subfolders (e.g. a CHD shared by two sets): the first
+one containing the file is used. "optional": true files may be missing (no known dump).
+
+usage: game.py list
+       game.py <id> binary|title            (used by the Makefile)
+       game.py <id> check                   (verify the user's files against the expected SHA1s)
+       game.py roms-readme                  (regenerate roms/*/README.txt from the profiles)
+"""
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROMS = os.path.join(ROOT, 'roms')
+
+
+def ids():
+    d = os.path.join(ROOT, 'games')
+    return sorted(x for x in os.listdir(d) if os.path.exists(os.path.join(d, x, 'game.json')))
+
+
+def merge(base, over):
+    out = dict(base)
+    for k, v in over.items():
+        if v is None:
+            out.pop(k, None)
+        elif isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def load(gid):
+    p = os.path.join(ROOT, 'games', gid, 'game.json')
+    if not os.path.exists(p):
+        raise SystemExit(f"unknown game '{gid}' (known: {', '.join(ids())})")
+    g = json.load(open(p))
+    if 'inherits' in g:
+        g = merge(load(g.pop('inherits')), g)
+    return g
+
+
+def dirs(f):
+    return f['dir'] if isinstance(f['dir'], list) else [f['dir']]
+
+
+def file_path(g, key):
+    f = g['files'][key]
+    cands = [os.path.join(ROMS, d, f['name']) for d in dirs(f)]
+    return next((c for c in cands if os.path.exists(c)), cands[0])
+
+
+def work_dir(g):
+    return os.path.join(ROOT, 'work', g['id'])
+
+
+def gen_dir(g):
+    return os.path.join(ROOT, 'generated', g['id'])
+
+
+def sha1_of(g, key):
+    """SHA1 as listed by MAME: for a CHD the internal one reported by chdman, else the file hash."""
+    p = file_path(g, key)
+    if p.endswith('.chd'):
+        if not shutil.which('chdman'):
+            return None
+        out = subprocess.run(['chdman', 'info', '-i', p], capture_output=True, text=True).stdout
+        m = re.search(r'^SHA1:\s+([0-9a-f]{40})', out, re.M)
+        return m.group(1) if m else None
+    return hashlib.sha1(open(p, 'rb').read()).hexdigest()
+
+
+def check(g, keys=None):
+    ok = True
+    for key in keys or g['files']:
+        f, p = g['files'][key], file_path(g, key)
+        rel = os.path.relpath(p, ROOT)
+        if not os.path.exists(p):
+            if f.get('optional'):
+                print(f"  (absent) {rel}: optional, no known dump")
+                continue
+            print(f"  MISSING  {rel}")
+            ok = False
+            continue
+        h = sha1_of(g, key)
+        if not f.get('sha1'):
+            print(f"  ?        {rel} (no reference SHA1)")
+        elif h is None:
+            print(f"  ?        {rel} (cannot compute SHA1)")
+        elif h == f['sha1']:
+            print(f"  OK       {rel}")
+        else:
+            print(f"  MISMATCH {rel}: {h}, expected {f['sha1']} (continuing anyway)")
+    return ok
+
+
+def c_str(s):
+    return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def write_config_header(g, out):
+    """generated/<id>/game_config.h: the per-game constants the runtime is built with."""
+    rel = lambda p: os.path.relpath(p, ROOT)
+    inp = g['inputs']
+    cal = g.get('calibration') or {}
+    if 'script' not in cal:
+        cal = {}
+    lines = [
+        f"/* generated from games/{g['id']}/game.json */",
+        "#pragma once",
+        f"#define GAME_ID {c_str(g['id'])}",
+        f"#define GAME_TITLE {c_str(g['title'] + ' (' + g['version'] + ')')}",
+        f"#define GAME_DEFAULT_WORK {c_str(rel(work_dir(g)))}",
+        f"#define GAME_DEFAULT_NVRAM {c_str(rel(file_path(g, 'nvram')))}",
+        f"#define GAME_DEFAULT_DS2430 {c_str(rel(file_path(g, 'ds2430')))}",
+        f"#define GAME_DEFAULT_BIOS {c_str(rel(file_path(g, 'bios')))}",
+        f"#define GAME_NVRAM_SAVE {c_str(g['binary'] + '_nvram.bin')}",
+        "#define GAME_INPUT_DEFAULTS {" + ", ".join(f"0x{v:02x}" for v in inp['defaults']) + "}",
+        "#define GAME_ANALOG_REST {" + ", ".join(str(v) for v in inp['analog_rest']) + "}",
+        f"#define GAME_HAS_HANDBRAKE {1 if inp.get('handbrake') else 0}",
+        f"#define GAME_CALIBRATION_SCRIPT {c_str(cal['script']) if cal else 'NULL'}",
+        f"#define GAME_CALIBRATION_SECONDS {cal.get('seconds', 0)}",
+    ]
+    open(os.path.join(out, 'game_config.h'), 'w').write("\n".join(lines) + "\n")
+
+
+def write_roms_readmes():
+    """One README.txt per roms/ subfolder, listing the files expected there."""
+    folders = {}
+    for gid in ids():
+        g = load(gid)
+        for key, f in g['files'].items():
+            for d in dirs(f):
+                folders.setdefault(d, {}).setdefault(f['name'], (f, set()))[1].add(gid)
+    for d, files in sorted(folders.items()):
+        users = sorted({gid for _, (_, gs) in files.items() for gid in gs})
+        own = [x for x in users if load(x)['mame_set'] == d]
+        if d == 'kviper':
+            head = ["Konami Viper BIOS set (MAME \"kviper\"), shared by every game."]
+        else:
+            users = own or users
+            g = load(users[0])
+            names = [g['title']] + g.get('aka', [])
+            head = [f"{names[0]} ({g['version']}), MAME set \"{g['mame_set']}\"."]
+            if len(names) > 1:
+                head.append("Also known as: " + ", ".join(names[1:]) + ".")
+            for n in g.get('notes', []):
+                head.append("Note: " + n)
+        lines = head + ["", "Put these files in this folder:", ""]
+        w = max(len(n) for n in files)
+        for name, (f, gs) in sorted(files.items(), key=lambda kv: (not kv[0].endswith('.chd'), kv[0])):
+            if f.get('sha1'):
+                desc = "SHA1 " + f['sha1'] + (" (internal CHD SHA1, see 'chdman info')" if name.endswith('.chd') else "")
+            else:
+                desc = "no known dump: optional, the game starts with an empty NVRAM"
+            lines.append(f"  {name.ljust(w)}  {desc}")
+            others = [x for x in dirs(f) if x != d]
+            if others:
+                lines.append(f"  {''.ljust(w)}  (shared with roms/{', roms/'.join(others)}/: one copy in either folder is enough)")
+        lines.append("")
+        if d != 'kviper':
+            lines.append("Also needed: roms/kviper/ (941b01.u25, ds2430.u3).")
+        lines.append("Check with: make check GAME=<id>" if d == 'kviper' else
+                     "Check with: " + "; ".join(f"make check GAME={x}" for x in users))
+        os.makedirs(os.path.join(ROMS, d), exist_ok=True)
+        open(os.path.join(ROMS, d, 'README.txt'), 'w').write("\n".join(lines) + "\n")
+        gk = os.path.join(ROMS, d, '.gitkeep')
+        if os.path.exists(gk):
+            os.remove(gk)
+
+
+if __name__ == '__main__':
+    a = sys.argv[1:]
+    if not a or a[0] == 'list':
+        for i in ids():
+            g = load(i)
+            print(f"{i:12s} {g['title']} ({g['version']}) - {g['status']}")
+    elif a[0] == 'roms-readme':
+        write_roms_readmes()
+    elif a[1] in ('binary', 'title'):
+        print(load(a[0])[a[1]])
+    elif a[1] == 'check':
+        sys.exit(0 if check(load(a[0])) else 1)
+    else:
+        raise SystemExit(__doc__)

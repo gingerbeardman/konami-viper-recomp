@@ -1,0 +1,104 @@
+{
+  "id": "thrild2",
+  "title": "Thrill Drive 2",
+  "aka": [],
+  "version": "ver EBB",
+  "year": 2001,
+  "mame_set": "thrild2",
+  "binary": "td2",
+  "status": "playable",
+  "files": {
+    "chd": {
+      "name": "a41b02.chd",
+      "dir": "thrild2",
+      "sha1": "0426f4bb9001cf457f44e2c22e3d7575b8049aa3",
+      "sha1_note": "internal CHD SHA1 (chdman info)"
+    },
+    "nvram": {
+      "name": "a41ebb_nvram.u39",
+      "dir": "thrild2",
+      "sha1": "e14ea2ba95b72edf0a3331ab82c192760bfdbce3"
+    },
+    "bios": {
+      "name": "941b01.u25",
+      "dir": "kviper",
+      "sha1": "66ff268d5bf78fbfa48cdc3e1b08f8956cfd6cfb"
+    },
+    "ds2430": {
+      "name": "ds2430.u3",
+      "dir": "kviper",
+      "sha1": "ed7cd9b2763b3e377df9663943160f9871f65105"
+    }
+  },
+  "modules": [
+    {
+      "name": "game",
+      "prefix": "g",
+      "path": "game/prog.zin",
+      "layout": "app"
+    },
+    {
+      "name": "fpga",
+      "prefix": "fp",
+      "path": "fpga/prog.zin",
+      "layout": "app"
+    },
+    {
+      "name": "gl",
+      "prefix": "gl",
+      "path": "gl/prog.zin",
+      "layout": "lib"
+    },
+    {
+      "name": "grphinit",
+      "prefix": "gi",
+      "path": "grphinit/prog.zin",
+      "layout": "lib"
+    },
+    {
+      "name": "sound",
+      "prefix": "s",
+      "path": "sound/prog.zin",
+      "layout": "lib"
+    }
+  ],
+  "hints": {
+    "gl": {
+      "local_indirect": {
+        "0x211c8": {
+          "slots": [
+            "0x20760",
+            "0x211a0",
+            32
+          ],
+          "targets": [
+            "0x211a0"
+          ]
+        }
+      }
+    }
+  },
+  "inputs": {
+    "defaults": [
+      255,
+      255,
+      67,
+      255,
+      255,
+      255,
+      255,
+      255
+    ],
+    "analog_rest": [
+      0,
+      -200,
+      -200,
+      0
+    ],
+    "handbrake": false
+  },
+  "calibration": {
+    "script": "12:3=fd,12.5:3=ff,20.00:4=fe,20.30:4=ff,20.80:4=fe,21.10:4=ff,21.60:4=fe,21.90:4=ff,22.40:4=fe,22.70:4=ff,23.20:4=fe,23.50:4=ff,24.00:4=fe,24.30:4=ff,24.80:4=fe,25.10:4=ff,25.60:4=fe,25.90:4=ff,26.40:4=fe,26.70:4=ff,27.70:3=ef,28.00:3=ff,32:3=ef,32.3:3=ff,35:3=ef,35.3:3=ff,36:10=ff38,38:3=ef,38.3:3=ff,39:10=00c8,41:3=ef,41.3:3=ff,42:10=0,45:3=ef,45.3:3=ff,47:4=fe,47.3:4=ff,48.5:3=ef,48.8:3=ff,52:11=00c8,54:3=ef,54.3:3=ff,55:11=ff38,59:3=ef,59.3:3=ff,61:4=fe,61.3:4=ff,62.5:3=ef,62.8:3=ff,66:12=00c8,68:3=ef,68.3:3=ff,69:12=ff38,73:3=ef,73.3:3=ff,75:4=fe,75.3:4=ff,76.5:4=fe,76.8:4=ff,78:3=ef,78.3:3=ff",
+    "seconds": 82
+  }
+}
