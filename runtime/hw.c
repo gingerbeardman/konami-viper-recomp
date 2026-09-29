@@ -169,6 +169,37 @@ enum { I2C_ADDR = 1, I2C_DATA };
  * ADC0838 in differential mode, once per polarity (see i2c_read), and rebuilds 0x100 +/- d. */
 int16_t g_analog[4] = GAME_ANALOG_REST;
 
+/* K-type force-feedback wheel motor (0xffe20000, written by the game): bit7 motor on, bit4
+ * direction (1 = right), bits3-0 torque. Motor-equipped cabinets (MOTOR TYPE: K-TYPE, e.g. the
+ * gticlub2 NVRAM) calibrate the steering by ramping the torque up once per second until the
+ * wheel starts to turn; a wheel that never moves ends in "STEERING WHEEL : ERROR".
+ * With RT_FFB_WHEEL=1 (set by the first-run calibration) the virtual wheel follows the motor:
+ * above a breakaway torque it turns at a speed proportional to the excess torque, up to the end
+ * stops. Otherwise the motor is ignored and the frontend alone positions the wheel. */
+#define FFB_BREAKAWAY 3          /* lowest torque step that turns the wheel */
+#define FFB_SPEED 60.0           /* ADC position units per second per torque step above it */
+#define FFB_END_STOP 200         /* matches the frontend's steering range */
+static uint8_t g_motor;
+static uint64_t g_motor_t;
+static double g_ffb_pos;
+static int g_ffb_wheel = -1;
+
+static void ffb_update(void) {
+    uint64_t now = rt_now();
+    double dt = (double)(now - g_motor_t) / CPU_HZ;
+    g_motor_t = now;
+    if (g_ffb_wheel < 0) g_ffb_wheel = getenv("RT_FFB_WHEEL") != NULL;
+    int torque = g_motor & 15;
+    if (!g_ffb_wheel || !(g_motor & 0x80) || torque < FFB_BREAKAWAY) { g_ffb_pos = g_analog[0]; return; }
+    double v = (torque - FFB_BREAKAWAY + 1) * FFB_SPEED * dt;
+    g_ffb_pos += (g_motor & 0x10) ? v : -v;
+    if (g_ffb_pos > FFB_END_STOP) g_ffb_pos = FFB_END_STOP;
+    if (g_ffb_pos < -FFB_END_STOP) g_ffb_pos = -FFB_END_STOP;
+    g_analog[0] = (int16_t)g_ffb_pos;
+}
+
+static void motor_write(uint8_t v) { ffb_update(); g_motor = v; }
+
 static void i2c_done(void *arg) {
     (void)arg;
     i2c.sr |= 0x80;
@@ -196,6 +227,7 @@ static uint8_t i2c_read(uint32_t off) {
         if (i2c.rw && (i2c.addr_latch & 0xf0) == 0x10) {
             /* the address byte is the ADC0838 mux word: bit3 SGL/DIF, bit2 ODD/SIGN, bits1-0 SELECT */
             if (i2c.addr_latch == 0x1c) return 0x80;          /* single-ended supply monitor: 5.0 V */
+            if ((i2c.addr_latch & 3) == 0) ffb_update();
             int pos = g_analog[i2c.addr_latch & 3];
             int d = (i2c.addr_latch & 4) ? -pos : pos;        /* CH+ - CH-, or reversed */
             res = (uint8_t)(d < 0 ? 0 : d > 255 ? 255 : d);
@@ -846,6 +878,10 @@ static uint8_t io_read(uint32_t off) {
     return g_in[off & 7];
 }
 
+/* The BIOS passes the IN2 byte it read at boot (DIP switches, DS2430 line) in the top byte of
+ * r31 (MAME: 0x63ffffff for thrild2 with IN2=0x43, 0x61ffffff for gticlub2ea with IN2=0x41). */
+uint32_t hw_boot_param(void) { return ((uint32_t)io_read(2) << 24) | 0x00ffffffu; }
+
 static void io_write(uint32_t off, uint8_t v) {
     if (off == 0) {
         g_sound_irq_enabled = (v >> 5) & 1;
@@ -1019,7 +1055,7 @@ static void hw_write_(uint32_t ea, int size, uint32_t v) {
     if (ea >= 0xffe88000u && ea < 0xffe88008u) { if ((ea & 7) == 0) ds_data_w(0); return; }
     if (ea >= 0xffe80000u && ea < 0xffe80008u) return;
     if (ea >= 0xffe08000u && ea < 0xffe08008u) return;        /* watchdog */
-    if (ea >= 0xffe20000u && ea < 0xffe20008u) return;        /* force feedback motor */
+    if (ea >= 0xffe20000u && ea < 0xffe20008u) { if ((ea & 7) == 0) motor_write((uint8_t)(v >> (8 * (size - 1)))); return; }
     if (ea >= 0xffe28000u && ea < 0xffe28008u) return;
     if (ea >= 0xffe40000u && ea < 0xffe40008u) return;
     if (ea >= 0xffe60000u && ea < 0xffe60008u) return;

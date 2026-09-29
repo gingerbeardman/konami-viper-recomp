@@ -13,6 +13,10 @@
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
+#include <limits.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 uint8_t *g_ram;
 static int g_verbose;
@@ -157,7 +161,9 @@ static void inev_setup(void) {
 /* First-run calibration: drives the game's own TEST MODE -> CALIBRATION with scripted
  * inputs (steering centre/left/right, accelerator and brake rest/full), then SAVE AND EXIT.
  * The resulting NVRAM matches the frontend's analog ranges exactly. The script is per game
- * (games/<id>/game.json, "calibration"); NULL means the game has none yet. */
+ * (games/<id>/game.json, "calibration"); NULL means the game has none yet. RT_FFB_WHEEL makes
+ * the virtual wheel follow the force-feedback motor, for cabinets whose NVRAM declares one
+ * (the motor-driven steering test would otherwise fail, as on a real cabinet without it). */
 static const char *k_calibration_script = GAME_CALIBRATION_SCRIPT;
 
 static int file_exists(const char *p) { FILE *f = fopen(p, "rb"); if (f) fclose(f); return f != NULL; }
@@ -166,7 +172,7 @@ static int run_first_time_calibration(const char *self, const char *work, const 
     if (!k_calibration_script) return 0;
     fprintf(stderr, "first run: calibrating steering and pedals in TEST MODE (a few seconds)...\n");
     char cmd[4096];
-    snprintf(cmd, sizeof cmd, "RT_INPUT='%s' '%s' --headless --work '%s' --nvram '%s' --nvram-save '%s' --seconds %d >/dev/null 2>&1",
+    snprintf(cmd, sizeof cmd, "RT_FFB_WHEEL=1 RT_INPUT='%s' '%s' --headless --work '%s' --nvram '%s' --nvram-save '%s' --seconds %d >/dev/null 2>&1",
              k_calibration_script, self, work, nvram, nvsave, GAME_CALIBRATION_SECONDS);
     int rc = system(cmd);
     if (rc != 0 || !file_exists(nvsave)) { fprintf(stderr, "calibration failed (rc=%d)\n", rc); return -1; }
@@ -181,10 +187,38 @@ static const RtModuleInfo *const k_modules[] = { RT_ALL_MODULES };
 
 static const char *g_argv0 = "";
 
+/* The default files (work/, roms/, the saved NVRAM) live next to the executable, so it also
+ * works when started from another directory, e.g. by double-clicking it in the file manager.
+ * Paths given on the command line stay relative to the current directory. */
+static char g_exe[PATH_MAX], g_exe_dir[PATH_MAX];
+
+static void find_executable(const char *argv0) {
+    char raw[PATH_MAX] = "";
+#ifdef __APPLE__
+    uint32_t size = sizeof raw;
+    if (_NSGetExecutablePath(raw, &size) != 0) raw[0] = 0;
+#else
+    ssize_t n = readlink("/proc/self/exe", raw, sizeof raw - 1);
+    raw[n > 0 ? n : 0] = 0;
+#endif
+    if (!raw[0] || !realpath(raw, g_exe)) {
+        if (!realpath(argv0, g_exe)) snprintf(g_exe, sizeof g_exe, "%s", argv0);
+    }
+    snprintf(g_exe_dir, sizeof g_exe_dir, "%s", g_exe);
+    char *slash = strrchr(g_exe_dir, '/');
+    if (slash) *slash = 0; else snprintf(g_exe_dir, sizeof g_exe_dir, ".");
+}
+
+static const char *beside_exe(const char *rel) {
+    char buf[PATH_MAX];
+    snprintf(buf, sizeof buf, "%s/%s", g_exe_dir, rel);
+    return strdup(buf);
+}
+
 static void usage(void) {
     fprintf(stderr,
             GAME_TITLE ", recompiled\n"
-            "usage: %s [options]\n"
+            "usage: %s [options]   (default paths are relative to the executable's directory)\n"
             "  --work DIR      extracted data (kernel.bin), default: " GAME_DEFAULT_WORK "\n"
             "  --cf FILE       raw CF image, default: DIR/cf.img\n"
             "  --nvram FILE    M48T58 dump, default: " GAME_DEFAULT_NVRAM "\n"
@@ -203,9 +237,11 @@ static void usage(void) {
 }
 
 int main(int argc, char **argv) {
-    const char *work = GAME_DEFAULT_WORK, *cf = NULL, *nvram = GAME_DEFAULT_NVRAM, *ds = GAME_DEFAULT_DS2430,
-               *bios = GAME_DEFAULT_BIOS, *wav = NULL, *nvsave = GAME_NVRAM_SAVE;
     g_argv0 = argv[0];
+    find_executable(argv[0]);
+    const char *work = beside_exe(GAME_DEFAULT_WORK), *cf = NULL, *nvram = beside_exe(GAME_DEFAULT_NVRAM),
+               *ds = beside_exe(GAME_DEFAULT_DS2430), *bios = beside_exe(GAME_DEFAULT_BIOS), *wav = NULL,
+               *nvsave = beside_exe(GAME_NVRAM_SAVE);
     int headless = 0, scale = 2, nvsave_explicit = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -227,7 +263,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "-v")) g_verbose = 1;
         else usage();
     }
-    if (!headless && !file_exists(nvsave)) run_first_time_calibration(argv[0], work, nvram, nvsave);
+    if (!headless && !file_exists(nvsave)) run_first_time_calibration(g_exe, work, nvram, nvsave);
     static char cfbuf[1024], kbuf[1024];
     if (!cf) { snprintf(cfbuf, sizeof cfbuf, "%s/cf.img", work); cf = cfbuf; }
     snprintf(kbuf, sizeof kbuf, "%s/kernel.bin", work);
@@ -255,13 +291,14 @@ int main(int argc, char **argv) {
 
     /* CPU state as BIOS 941B01 stage 2 leaves it (verified against MAME at kernel entry 0x10):
      * every GPR/SPRG/LR/CR = 0xdeadbeef, FPRs = 0x7ff5beef4afc0721, CTR = entry, MSR = 0x2070,
-     * r31 = boot parameter word (0x63ffffff on a normal boot; the kernel saves it at 0xfc and the
-     * game derives the boot-time switch state from it, e.g. "TEST held -> initialise RTC"). */
+     * r31 = boot parameter word (IN2 << 24 | 0xffffff, see hw_boot_param; the kernel saves it at
+     * 0xfc and the game derives the boot-time switch state from it, e.g. "TEST held -> initialise
+     * RTC", and in gticlub2ea the DIP SW:3 that unlocks the game). */
     PPCContext *c = &g_ctx;
     for (int i = 0; i < 32; i++) c->r[i] = 0xdeadbeefu;
     for (int i = 0; i < 32; i++) c->f[i] = BITS_FPR(0x7ff5beef4afc0721ull);
     for (int i = 0; i < 4; i++) c->sprg[i] = 0xdeadbeefu;
-    c->r[31] = 0x63ffffffu;
+    c->r[31] = hw_boot_param();
     c->lr = 0xdeadbeefu;
     rt_cr_unpack(c, 0xdeadbeefu, 0xff);
     c->ctr = 0x10;

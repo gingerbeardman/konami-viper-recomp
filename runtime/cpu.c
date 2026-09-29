@@ -128,7 +128,7 @@ static void check_bp(PPCContext *c, uint32_t target) {
             rt_log("BPHIT %x -> stop\n", target);
             rt_fatal("breakpoint");
         } else if (g_bp[i] == target)
-            rt_log("BPHIT %x r3=%08x r4=%08x r5=%08x r6=%08x r7=%08x r8=%08x lr=%08x r1=%08x m=%08x\n", target, c->r[3],
+            rt_log("BPHIT %x r0=%08x r3=%08x r4=%08x r5=%08x r6=%08x r7=%08x r8=%08x lr=%08x r1=%08x m=%08x\n", target, c->r[0], c->r[3],
                    c->r[4], c->r[5], c->r[6], c->r[7], c->r[8], c->lr, c->r[1], LD32(g_bp_mem));
 }
 

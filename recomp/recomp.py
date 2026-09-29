@@ -62,6 +62,19 @@ def load_modules(work, modules=None):
     return mods
 
 
+def apply_hints(m, h):
+    """Apply a module's profile hints; returns the extra entry points for discover()."""
+    extra = [int(x, 16) for x in h.get('entries', [])]
+    for ent, spec in h.get('local_indirect', {}).items():
+        tg = {int(x, 16) for x in spec.get('targets', [])}
+        if 'slots' in spec:
+            lo, hi, step = int(spec['slots'][0], 16), int(spec['slots'][1], 16), spec['slots'][2]
+            tg |= {a for a in range(lo, hi, step) if m.word(a) != 0 and m.insn(a) is not None}
+        m.local_indirect[int(ent, 16)] = tg
+        extra.append(int(ent, 16))
+    return extra
+
+
 def main(gid):
     g = game.load(gid)
     work, out = game.work_dir(g), game.gen_dir(g)
@@ -73,16 +86,7 @@ def main(gid):
     all_funcs = {}
     for m in mods:
         t0 = time.time()
-        h = hints.get(m.name, {})
-        extra = [int(x, 16) for x in h.get('entries', [])]
-        for ent, spec in h.get('local_indirect', {}).items():
-            tg = {int(x, 16) for x in spec.get('targets', [])}
-            if 'slots' in spec:
-                lo, hi, step = int(spec['slots'][0], 16), int(spec['slots'][1], 16), spec['slots'][2]
-                tg |= {a for a in range(lo, hi, step) if m.word(a) != 0 and m.insn(a) is not None}
-            m.local_indirect[int(ent, 16)] = tg
-            extra.append(int(ent, 16))
-        funcs, entries = discover(m, extra)
+        funcs, entries = discover(m, apply_hints(m, hints.get(m.name, {})))
         all_funcs[m.name] = (m, funcs, entries)
         ninsn = sum(len(f.insns) for f in funcs.values())
         nbad = sum(1 for f in funcs.values() if f.bad)

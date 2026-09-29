@@ -21,8 +21,8 @@ from copyrighted material and must not be redistributed.
 | **Thrill Drive 2** | JAA (Japan) | `thrild2j` | `./td2j` | Not yet verified |
 | **Thrill Drive 2** | AAA (Asia) | `thrild2a` | `./td2a` | Not yet verified |
 | **Thrill Drive 2** | EAA (Europe, older) | `thrild2c` | `./td2c` | Not yet verified; the only known CF dump is bad |
-| **GTI Club: Corso Italiano** (2000), also known as _GTI Club 2_ and _Driving Party: Racing in Italy_ | JAB (Japan) | `gticlub2` | `./gticlub2` | Not yet verified |
-| **Driving Party: Racing in Italy** (2000), also known as _GTI Club 2_ and _GTI Club: Corso Italiano_ | EAA (Europe) | `gticlub2ea` | `./gticlub2ea` | Not yet verified |
+| **GTI Club: Corso Italiano** (2000), also known as _GTI Club 2_ and _Driving Party: Racing in Italy_ | JAB (Japan) | `gticlub2` | `./gticlub2` | Playable |
+| **Driving Party: Racing in Italy** (2000), also known as _GTI Club 2_ and _GTI Club: Corso Italiano_ | EAA (Europe) | `gticlub2ea` | `./gticlub2ea` | Boots and races; not yet played interactively |
 
 The `GAME=` value is the name of the game's MAME set.
 - **Profiles:** each version is described by a profile in `games/<id>/game.json`, which lists
@@ -45,11 +45,25 @@ They still have to be verified, and their automatic calibration is disabled unti
 - For EAA, MAME marks the only known CF dump as bad (blue screens), and its NVRAM has never
   been dumped: that version starts from an empty NVRAM.
 
-**GTI Club 2**: the profiles exist, but the game has not been extracted or run yet.
-- Expect the control mapping (K-type steering wheel, handbrake) and the automatic calibration
-  to need work.
-- For the EAA version, MAME notes that a DIP switch must be set, otherwise the game asks for a
-  password. The profile already sets it.
+**GTI Club 2**
+- **EAA (`gticlub2ea`):** boots like the original board, runs the full attract mode, and
+  coin-up, car/course selection, races and TEST MODE all work. The automatic calibration is the
+  same as Thrill Drive 2 and works. So far it has only been tested with scripted inputs, not
+  played by hand.
+  - MAME notes that this version needs DIP switch SW:3 on, otherwise it shows "GAME MODE
+    LOCKED! PLEASE SET THE PASSWORD". The profile sets it.
+  - The EAA cabinet has no handbrake: the version code in its NVRAM selects a cabinet
+    configuration without one, so there is no handbrake in CALIBRATION or I/O CHECK.
+- **JAB (`gticlub2`):** playable, including the handbrake.
+  Its cabinet has a handbrake and a force-feedback steering wheel ("MOTOR TYPE: K-TYPE").
+  - The automatic calibration covers the handbrake too.
+  - On a cabinet with the motor, the game calibrates the steering by turning the wheel with the
+    motor, and the step fails if the wheel does not move. During the first-run calibration the
+    runtime simulates a motorised wheel, so the step passes. In play the motor is ignored and
+    the wheel follows your keyboard or gamepad.
+  - The first-run calibration takes longer than for the other games (about 150 emulated
+    seconds), because the motor test alone lasts about 50 seconds.
+  - The race runs as "PLAYER 2": the dumped NVRAM comes from a linked cabinet.
 
 **Platforms:** tested on macOS (Apple Silicon). The code targets x86-64 and arm64. Linux should
 build with the same Makefile but has not been tested yet. Windows is not supported yet.
@@ -138,8 +152,11 @@ derived from that game's data.
 ./td2
 ```
 
-**First launch:** if the game has an automatic calibration (currently Thrill Drive 2), it runs
-before the window opens.
+The executable finds `work/`, `roms/` and its saved NVRAM in its own folder, so it can also be
+started from another directory or by double-clicking it.
+
+**First launch:** if the game has an automatic calibration (currently Thrill Drive 2 EBB and
+GTI Club 2 JAB and EAA), it runs before the window opens.
 - The game's TEST MODE calibration runs in the background and takes a few seconds.
 - The result is saved to `<executable>_nvram.bin` (for example `td2_nvram.bin`).
 - The game then starts with steering and pedals centred. To redo the calibration, delete that
@@ -155,7 +172,7 @@ every 60 seconds and on exit.
 | Steer           | ← / →    | Left stick |
 | Accelerator     | ↑        | R2 (or A)  |
 | Brake           | ↓        | L2 (or B)  |
-| Handbrake (GTI Club 2 only) | Space    | X          |
+| Handbrake (GTI Club 2 JAB; EAA has none) | Space    | X          |
 | Shift up / down | A / Z    | R1 / L1    |
 | Insert coin     | 5        | Back       |
 | Start           | 1        | Start      |

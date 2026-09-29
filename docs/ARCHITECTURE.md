@@ -6,12 +6,13 @@ hardware (Voodoo3, EPIC, CF, audio, I/O) is reimplemented by a runtime shared by
 
 The reference game is Thrill Drive 2 **ver EBB**: most of this document was reverse engineered
 on it. Other games and versions run on the same board with the same BIOS and have profiles in
-`games/`, but have not been extracted yet:
+`games/`:
 - **Other Thrill Drive 2 versions:** `thrild2j` (ver JAA) and `thrild2a` (ver AAA) share the
   CF card `a41a02`; `thrild2c` (ver EAA) has a CF dump that MAME marks bad, and an NVRAM that
   has never been dumped.
 - **GTI Club 2**, also known as *GTI Club: Corso Italiano* and *Driving Party: Racing in
-  Italy*: MAME sets `gticlub2` (ver JAB) and `gticlub2ea` (ver EAA).
+  Italy*: MAME sets `gticlub2` (ver JAB) and `gticlub2ea` (ver EAA). Both boot and race (see
+  section 6).
 
 ## 1. Input assets (verified against MAME)
 
@@ -56,8 +57,35 @@ The profile fields:
 `recomp.py` turns the profile into `generated/<id>/game_config.h` (`GAME_*` macros). The runtime
 is compiled once per game against it; there is no runtime game switch. The unverified profiles
 inherit TD2's module list and hints, with calibration disabled. The differences MAME documents (K-type 8-bit wheel
-centred at 0x80, handbrake on AN3, DIP SW:3 on for EAA) are already in the profiles. Everything
-else will be checked once the files are available.
+centred at 0x80, handbrake on AN3, DIP SW:3 on for EAA) are already in the profiles.
+
+What GTI Club 2 turned out to need:
+- **Shared modules:** JAB and EAA have identical kernel, `gl`, `grphinit` and `sound`; `game`
+  and `fpga` differ.
+- **`gl` hints:** the same hand-written command-list dispatcher as TD2, moved: entry `0x210A8`,
+  slots from `0x20720`, continuation `0x21080` (section 4). TD2's hints do not apply. The hints
+  are in `gticlub2`, and `gticlub2ea` inherits them.
+- **Inputs:** the game reads the same ADC channels as TD2 (`0x10`/`0x14` steering,
+  `0x15`/`0x16`/`0x17` accelerator, brake, handbrake), so the differential model in section 5
+  applies unchanged; MAME's 8-bit "K-type" description is not needed.
+- **Calibration:** the TEST MODE menu and the CALIBRATION flow are the same as TD2, so the
+  profile reuses TD2's script.
+- **Handbrake:** the game knows which controls the cabinet has from a table of 7 cabinet
+  configurations at `0xBADDC` (7 bytes each: type, steering, accelerator, brake, handbrake, …).
+  The entry is chosen by the version code at the start of the NVRAM (`GK941 EAA`, `GK941 EBA`,
+  `GM941 JAA`, `GE941 JAA`, `GM941 AAA`, `GE941 AAA`, `GK941 UAA`), and the flags are copied to
+  NVRAM `0x74` and to RAM `0x7F6341`. Only the two `GE941` entries have a handbrake. The EAA
+  NVRAM is `GK941 EAA`, so this version has no handbrake: no HAND BRAKE item in CALIBRATION or
+  I/O CHECK, the same as in MAME. The game still polls ADC channel `0x17`. The JAB NVRAM is
+  `GE941 JAB` (flags `01 01 01 01 01`): handbrake present, and type byte 1 = MOTOR TYPE
+  K-TYPE (0 = NOT INSTALLED).
+- **K-type force-feedback motor** (JAB): see the motor entry in section 5. With the motor
+  declared, the steering calibration becomes centre / left / right followed by a motor test
+  ("DO NOT TOUCH THE STEERING WHEEL WHEN THE MACHINE IS BEING INITIALIZED", about 50 s).
+- **JAB calibration script:** TD2's script, with every step after the steering centre moved
+  50 s later (the motor test), plus HAND BRAKE (rest, pulled fully, released) before SAVE AND
+  EXIT. Timing note: the Voodoo produces about 57.5 frames per emulated second, so frame
+  numbers from `--frames` are not seconds × 60.
 
 ## 2. Boot chain (reverse engineering)
 
@@ -152,7 +180,9 @@ The modules use the PowerOpen/AIX ABI: function pointers are descriptors `{code,
   - An earlier version charged back-edges with the address span of the loop instead. On large
     loops containing a `switch` this overestimated the cost many times over, and in-game the
     frame rate dropped to 7–8 virtual fps. It now runs at 30 fps, like the hardware.
-- `coverage.py`: reports coverage gaps and unresolved `bctr`s.
+- `coverage.py`: reports coverage gaps and unresolved `bctr`s. It applies the profile's
+  hints like `recomp.py` does (`apply_hints()`), and does not count the `bctr`s of a
+  `local_indirect` function, which become a `switch`.
 - Debug probes: `RECOMP_PROBES=addr,…` inserts trace/breakpoint points before specific
   instructions (use with `RT_BP`).
 
@@ -181,6 +211,13 @@ The modules use the PowerOpen/AIX ABI: function pointers are descriptors `{code,
   - r31 is a boot-parameter word that the kernel saves at `0xFC`. The game derives the state of
     the boot-time switches from it; with a wrong value it believes TEST is held and
     reinitialises the NVRAM.
+  - Its top byte is the IN2 byte (DIP switches, DS2430 line) as the BIOS read it:
+    `0x63ffffff` for thrild2 (IN2 `0x43`), `0x61ffffff` for gticlub2ea (IN2 `0x41`), checked
+    against MAME. The runtime builds it from the profile's IN2 (`hw_boot_param()`).
+  - gticlub2ea copies it to the halfword at `0x826`. If bit `0x2000` (DIP SW:3) is clear, the
+    check at `0x54628` falls through to a rental/expiry lock ("GAME MODE LOCKED! PLEASE SET THE
+    PASSWORD", with an "EXPIRY DATE" in the NVRAM). With a hard-coded TD2 value the game always
+    showed the lock screen.
 - **Devices** (`hw.c`, behaviour taken from MAME `viper.cpp`):
   - EPIC (IRQs + 4 global timers);
   - I2C with an **ADC0838 in differential mode** for steering and pedals:
@@ -198,6 +235,16 @@ The modules use the PowerOpen/AIX ABI: function pointers are descriptors `{code,
     R/W bits);
   - I/O ports at `0xFFE10000`;
   - DS2430A 1-Wire (ported from the MAME device; TD2 does not use it);
+  - K-type force-feedback motor at `0xFFE20000` (MAME ignores it). A byte write sets bit 7 =
+    motor on, bit 4 = direction (1 = right), bits 3-0 = torque.
+    - The motor test ramps the torque by one step per second: right `0x91`→`0x9F`, left
+      `0x81`→`0x8F`, right again, then it centres the wheel (`0x88`→`0x80`). It reads the
+      steering ADC throughout, and a wheel that never moves ends in "STEERING WHEEL : ERROR".
+      A real cabinet without the motor fails the same way unless the wheel is turned by hand.
+    - With `RT_FFB_WHEEL=1`, which the first-run calibration sets, the virtual wheel follows the
+      motor. Above a breakaway torque of 3 it turns at 60 units/s per extra step, up to the end
+      stops at ±200. Without it the motor is ignored and the frontend alone positions the
+      wheel;
   - **K056230 LANC** (registers and 8 KB of RAM, needed by the boot self-test);
   - 16552 UART (output goes to the log);
   - serial port at `0xFF300000`;
@@ -229,12 +276,20 @@ The modules use the PowerOpen/AIX ABI: function pointers are descriptors `{code,
     - Levels are low (peaks around 1.5 % of full scale), because the cabinet has an LA4705
       amplifier. The default gain is therefore ×16 (`--volume`).
   - Persistent NVRAM in `<executable>_nvram.bin` (`td2_nvram.bin` for TD2); the original dump is never modified.
+  - Default paths (`work/<id>`, `roms/…`, the saved NVRAM) are resolved against the
+    executable's directory (`_NSGetExecutablePath` on macOS, `/proc/self/exe` on Linux), so a
+    launch from Finder, where the current directory is `~`, works. Command-line paths stay
+    relative to the current directory.
   - **First-run calibration**, which replaces the calibration done on a cabinet when it is
     first switched on:
     - If that file is missing and the profile has a `calibration` script, the executable re-launches itself headless.
     - It drives TEST MODE → CALIBRATION on its own with scripted inputs (about 6 s).
     - It then saves the NVRAM with steering and pedals calibrated to the same values the
       frontend produces.
+    - At "RELEASE THE STEERING WHEEL" the game waits for the wheel to come back to the centre,
+      as the force-feedback motor does on a deluxe cabinet. On a real cabinet without the motor
+      this step fails unless the wheel is brought back by hand; the script sets the steering to
+      0 at that point, so it passes ("MOTOR TYPE: NOT INSTALLED" is shown either way).
   - FPU rounding: `FPSCR[RN]` is applied to the host FPU (`fesetround`), including across fiber
     switches. The generated code is compiled with `-frounding-math`.
 
@@ -279,9 +334,21 @@ Performance (Apple Silicon, M-series): 100 s of gameplay run in about 14.5 s of 
 7× real time) with 4 render threads. About 80 % of host time goes to the Voodoo rasteriser and
 about 10 % to the recompiled code.
 
+GTI Club: Corso Italiano **ver JAB** (`gticlub2`), tested headless with scripted inputs: boot,
+attract mode, coin-up, selection (including the MT/AT choice), races, and the automatic
+calibration including the motor test and the handbrake.
+
+Driving Party / GTI Club 2 **ver EAA** (`gticlub2ea`), tested headless with scripted inputs:
+- boot, attract mode (demo races, title, TOP 10), coin-up, car/course selection and races;
+- TEST MODE and the automatic calibration;
+- audio (music in attract mode).
+90 s of emulated time run in about 10 s.
+
 Open:
-- **other versions and GTI Club 2**: profiles and `roms/` folders are ready, waiting for the
-  files;
+- **other versions**: the other TD2 versions, waiting for the files;
+- **GTI Club 2**: interactive play (steering feel, handbrake); optional force feedback on a
+  gamepad (rumble); the unmapped accesses at
+  `0xFFE50000`/`0xFFE58000`/`0xFFE80000`/`0xFFE90000` during boot;
 - **graphical glitches** seen in-game. We still need to find out which of them are artefacts
   already present in MAME's Voodoo core. References: real hardware and gameplay videos;
 - cabinet settings stored in the starting NVRAM: "SOUND IN ATTRACT MODE: COMPLETE OFF", and
@@ -294,9 +361,11 @@ Open:
 MAME (`brew install mame`) runs the same sets; `roms/` can be passed directly as its rompath,
 and `MAME_SET=<set>` selects the game (default `thrild2`). Its debugger, driven by Lua scripts
 (`-debug -debugger none -autoboot_script`), provides reference values:
-- `tools/mame_bp.sh` + `tools/mame_bp.lua`: breakpoints that print registers and memory
-  (`MAMEBP=addr,… MAMEBP_EXTRA='d@addr'`). The recompiled-side equivalent is `RT_BP=addr,…`
-  (plus `RT_BP_MEM`, `RT_BP_STOP`);
+- `tools/mame_bp.sh` + `tools/mame_bp.lua`: breakpoints that print r0, r3–r8, LR, r1 and one
+  extra expression (`MAMEBP=addr,… MAMEBP_EXTRA='d@addr'` or a register, e.g. `r31`). The
+  recompiled-side equivalent is `RT_BP=addr,…` (plus `RT_BP_MEM`, `RT_BP_STOP`). It fires at
+  function entries; for other instructions, recompile with `RECOMP_PROBES=addr,…` and build with
+  `EXTRA=-DRT_TRACE`;
 - `tools/mame_dumpram.lua`: dumps RAM at a given time;
 - watchpoints (`wpset`) and video snapshots via Lua, to compare memory accesses and screens.
 
@@ -314,9 +383,10 @@ Notes:
 
 ## 7. Next steps
 
-1. Other TD2 versions and GTI Club 2: extract, recompile and boot them.
-   - Check that TD2's `gl` hints still apply.
-   - Adapt the inputs (K-type wheel, handbrake) and write the calibration scripts.
+1. Other TD2 versions: extract, recompile and boot them.
+   - Check the `gl` dispatcher addresses (`python3 recomp/coverage.py <id> gl` lists the
+     unresolved `bctr`s) and set the hints.
+   - Check that TD2's calibration script works.
 2. Graphical glitches: catalogue them, then compare with MAME and with real references
    (gameplay videos or real hardware). Fix the Voodoo core where it is wrong.
 3. Further rasteriser optimisation (SIMD, less contention); eventually a GPU backend.

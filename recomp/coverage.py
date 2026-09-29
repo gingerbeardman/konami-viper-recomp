@@ -5,7 +5,7 @@ usage: coverage.py <game id> [module]
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
-from recomp import load_modules, game
+from recomp import load_modules, apply_hints, game
 from analyze import discover
 
 def main(gid, only=None, show=20):
@@ -13,11 +13,13 @@ def main(gid, only=None, show=20):
     for m in load_modules(game.work_dir(g), g['modules']):
         if only and m.name != only:
             continue
-        funcs, entries = discover(m)
+        funcs, entries = discover(m, apply_hints(m, g.get('hints', {}).get(m.name, {})))
         cov = set()
         unres = []
         for f in funcs.values():
             cov |= set(f.insns)
+            if f.entry in m.local_indirect:     # bctr/blr become a switch on the hinted targets
+                continue
             for a, i in f.insns.items():
                 if i is not None and i.name == 'bcctr' and not i.lk and i.unconditional and a not in f.jumptables:
                     unres.append(a)

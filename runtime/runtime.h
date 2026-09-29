@@ -48,6 +48,7 @@ typedef struct HwConfig {
 } HwConfig;
 
 void hw_init(const HwConfig *cfg);
+uint32_t hw_boot_param(void);    /* r31 at kernel entry, as the BIOS builds it */
 void hw_shutdown(void);
 void nvram_save(void);
 void rt_pace_vblank(void);

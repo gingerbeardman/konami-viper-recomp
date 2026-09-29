@@ -10,8 +10,8 @@ emu.register_frame_done(function()
   if not started then
     started = true
     for a in string.gmatch(bps, "[^,]+") do
-      local fmt = 'BPHIT ' .. a .. ' r3=%08x r4=%08x r5=%08x r6=%08x r7=%08x r8=%08x lr=%08x r1=%08x'
-      local args = 'r3,r4,r5,r6,r7,r8,lr,r1'
+      local fmt = 'BPHIT ' .. a .. ' r0=%08x r3=%08x r4=%08x r5=%08x r6=%08x r7=%08x r8=%08x lr=%08x r1=%08x'
+      local args = 'r0,r3,r4,r5,r6,r7,r8,lr,r1'
       if extra ~= "" then fmt = fmt .. ' m=%08x'; args = args .. ',' .. extra end
       d:command(string.format('bpset %s,1,{printf "%s",%s; g}', a, fmt, args))
     end
