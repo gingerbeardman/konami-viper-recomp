@@ -615,6 +615,7 @@ brew install rom-tools sdl2     # chdman (Linux: mame-tools), SDL2
 pip3 install --user capstone    # only for tools/ppcdis.py
 make games                      # list the game profiles
 make check   GAME=thrild2       # verify roms/ against the expected SHA1s
+make -j8 game GAME=thrild2      # extract + recomp + build in one step
 make extract GAME=thrild2       # roms/thrild2/ -> work/thrild2/
 make recomp  GAME=thrild2       # work/thrild2/ -> generated/thrild2/*.c + game_config.h
 make -j      GAME=thrild2       # ./td2   (GAME defaults to thrild2)

@@ -4,6 +4,7 @@
 #   make extract   GAME=<id>   : roms/ -> work/<id>/  (CF image, kernel, game modules; needs chdman)
 #   make recomp    GAME=<id>   : work/<id>/ -> generated/<id>/*.c
 #   make           GAME=<id>   : build the executable (./td2 for thrild2)
+#   make game      GAME=<id>   : all three steps above (extract, recomp, build)
 #   make distclean GAME=<id>   : remove everything derived from that game's data
 # GAME defaults to thrild2.
 
@@ -71,10 +72,16 @@ extract:
 recomp:
 	python3 recomp/recomp.py $(GAME)
 
+# the build step is a separate make, so that it sees the sources.mk that recomp generates
+game:
+	$(MAKE) extract GAME=$(GAME)
+	$(MAKE) recomp GAME=$(GAME)
+	$(MAKE) GAME=$(GAME)
+
 clean:
 	rm -rf $(BUILD) $(BIN)
 
 distclean: clean
 	rm -rf work/$(GAME) $(GEN) $(BIN)_nvram.bin
 
-.PHONY: games check extract recomp clean distclean
+.PHONY: games check extract recomp game clean distclean

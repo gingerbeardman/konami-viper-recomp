@@ -1,89 +1,154 @@
 # Konami Viper — static recompilation
 
-Native ports of Konami arcade games for the **Viper** hardware, built by _statically
-recompiling_ the original PowerPC code into C. The game's own code runs on your machine as
-native code; the board hardware (Voodoo3 graphics, interrupt controller, CF card, sound, I/O,
-timekeeper) is reimplemented by a small runtime shared by every game.
+Native PC ports of Konami's **Viper** arcade games: **Thrill Drive 2** and **GTI Club 2**
+(_GTI Club: Corso Italiano_ / _Driving Party: Racing in Italy_).
 
-This is not an emulator: no PowerPC instruction is interpreted at runtime. The recompiler
-translates the game at build time, from files you supply yourself.
+The original PowerPC code is **statically recompiled** into C, so the game runs as native code
+on your machine. A small shared runtime reimplements the arcade board: Voodoo3 graphics, sound,
+I/O, CF card and timekeeper. This is not an emulator.
 
-**This repository contains no game code or data.** You must provide your own dumps of the game
-and of the board BIOS (see [Required files](#required-files)). The build extracts and
-recompiles them locally. The resulting files (`work/`, `generated/`, the executables) are derived
-from copyrighted material and must not be redistributed.
+> **No game files are included.** You build the ports from your own dumps of the game and of
+> the board BIOS (see [Required files](#required-files)).
+
+<p align="center">
+  <img src="docs/images/classic-thrilldrive2.png" width="49%" alt="Thrill Drive 2 racing across a bridge in London">
+  <img src="docs/images/classic-gticlub2.png" width="49%" alt="GTI Club 2 attract mode in an Italian coastal town">
+</p>
+
+## Two ways to play
+
+Every game can run in two modes, from the same executable.
+
+### Classic: the arcade cabinet
+
+```sh
+./td2
+```
+
+The faithful arcade experience. The game behaves as on the original cabinet:
+
+- insert coins and press START;
+- attract mode, rankings and TEST MODE are all the original ones;
+- the game runs at its original 30 fps, with the original sound.
+
+On first launch, the program calibrates the steering wheel and pedals for
+you, as an operator would.
+
+### Enhanced: like a PC game
+
+```sh
+./td2 --enhanced
+```
+
+The same game, set up like a PC game: menus, options and pause instead of coins and operator
+menus.
+
+<p align="center">
+  <img src="docs/images/enhanced-menu.png" width="32%" alt="Enhanced mode: attract menu with START GAME, OPTIONS, CREDITS, QUIT">
+  <img src="docs/images/enhanced-options.png" width="32%" alt="Enhanced mode: DISPLAY options with window mode, 2X resolution and fps counter">
+  <img src="docs/images/enhanced-pause.png" width="32%" alt="Enhanced mode: pause menu during a race">
+</p>
+
+|                     | Classic                   | Enhanced                                                                                   |
+| ------------------- | ------------------------- | ------------------------------------------------------------------------------------------ |
+| **Starting a game** | Insert coins, press START | START GAME from the menu                                                                   |
+| **Main screen**     | Attract mode              | Menu: START GAME, OPTIONS, CREDITS, QUIT over the attract mode                             |
+| **Options**         | None                      | OPTIONS: course difficulty, language, sound, window or fullscreen, resolution, fps counter |
+| **Pause**           | None                      | Esc: RESUME or MAIN MENU                                                                   |
+| **Resolution**      | 512×384, as the original  | 512×384 or 1024×768 (1X or 2X)                                                             |
+| **TEST MODE**       | F2                        | None                                                                                       |
+| **Save file**       | `td2_nvram.bin`           | `td2_enhanced_nvram.bin`, separate from the classic one                                    |
+
+More about the enhanced mode in [Enhanced mode in detail](#enhanced-mode-in-detail).
 
 ## Games
 
-| Game | Version | `GAME=` | Executable | Status |
-| --- | --- | --- | --- | --- |
-| **Thrill Drive 2** (2001) | EBB (Europe) | `thrild2` | `./td2` | Playable |
-| **Thrill Drive 2** | JAA (Japan) | `thrild2j` | `./td2j` | Boots and races; not yet played interactively |
-| **Thrill Drive 2** | AAA (Asia) | `thrild2a` | `./td2a` | Boots and races; not yet played interactively |
-| **GTI Club: Corso Italiano** (2000), also known as _GTI Club 2_ and _Driving Party: Racing in Italy_ | JAB (Japan) | `gticlub2` | `./gticlub2` | Playable |
-| **Driving Party: Racing in Italy** (2000), also known as _GTI Club 2_ and _GTI Club: Corso Italiano_ | EAA (Europe) | `gticlub2ea` | `./gticlub2ea` | Boots and races; not yet played interactively |
+| Game                                      | Version      | `GAME=`      | Executable     | Status          |
+| ----------------------------------------- | ------------ | ------------ | -------------- | --------------- |
+| **Thrill Drive 2** (2001)                 | EBB (Europe) | `thrild2`    | `./td2`        | Playable        |
+| Thrill Drive 2                            | JAA (Japan)  | `thrild2j`   | `./td2j`       | Boots and races |
+| Thrill Drive 2                            | AAA (Asia)   | `thrild2a`   | `./td2a`       | Boots and races |
+| **GTI Club: Corso Italiano** (2000)       | JAB (Japan)  | `gticlub2`   | `./gticlub2`   | Playable        |
+| **Driving Party: Racing in Italy** (2000) | EAA (Europe) | `gticlub2ea` | `./gticlub2ea` | Boots and races |
 
-The `GAME=` value is the name of the game's MAME set.
-- **Profiles:** each version is described by a profile in `games/<id>/game.json`, which lists
-  the expected files, the modules to recompile, the input defaults and the calibration.
-- **Shared settings:** versions of the same game inherit the main profile and override only
-  what differs.
-- **Listing:** `make games` lists the profiles.
+"Boots and races" means tested with scripted inputs but not yet played by hand. Every version
+supports both modes. The `GAME=` value is the game's MAME set name. Per-version notes are in
+[Game notes](#game-notes).
 
-**Thrill Drive 2**
-- Boots like the original board; attract mode, coin-up, menus and test mode work.
-- Fully playable at the original 30 fps, with correct sound.
-- Steering and pedals are calibrated automatically on first launch.
-- Graphics: the texture corruption that MAME's Voodoo core also shows (noise on walls,
-  street lights, headlights, fog, lens flare) has been fixed. Checked on the attract mode of
-  Thrill Drive 2 and GTI Club 2.
+## Build and run
 
-**Other Thrill Drive 2 versions:** JAA (Japanese, prices in yen) and AAA (English, prices in
-Hong Kong dollars) boot like the
-original board, run the full attract mode and race. Tested headless with scripted inputs; not
-yet played interactively.
-- JAA and AAA share the same CF card; the region comes from the NVRAM. The game code is the
-  same as EBB's.
-- Their cabinet is the GTI Club 2 JAB one: a handbrake and a force-feedback steering wheel
-  ("MOTOR TYPE: K-TYPE"). The automatic calibration uses the GTI Club 2 JAB script, handbrake
-  included.
-- The first-run calibration also sets JAA's currency to Japanese yen: its starting NVRAM has
-  U.S. dollars, and its TEST MODE cannot change it.
-- The enhanced mode works on both.
-- Ver EAA (MAME `thrild2c`) is not supported: MAME marks its only known CF dump as bad.
+Tested on macOS (Apple Silicon). Linux should work with the same steps but is untested.
+Windows is not supported yet.
 
-**GTI Club 2**
-- **EAA (`gticlub2ea`):** boots like the original board, runs the full attract mode, and
-  coin-up, car/course selection, races and TEST MODE all work. The automatic calibration is the
-  same as Thrill Drive 2 and works. So far it has only been tested with scripted inputs, not
-  played by hand.
-  - MAME notes that this version needs DIP switch SW:3 on, otherwise it shows "GAME MODE
-    LOCKED! PLEASE SET THE PASSWORD". The profile sets it.
-  - The EAA cabinet has no handbrake: the version code in its NVRAM selects a cabinet
-    configuration without one, so there is no handbrake in CALIBRATION or I/O CHECK.
-- **JAB (`gticlub2`):** playable, including the handbrake.
-  Its cabinet has a handbrake and a force-feedback steering wheel ("MOTOR TYPE: K-TYPE").
-  - The automatic calibration covers the handbrake too.
-  - On a cabinet with the motor, the game calibrates the steering by turning the wheel with the
-    motor, and the step fails if the wheel does not move. During the first-run calibration the
-    runtime simulates a motorised wheel, so the step passes. In play the motor is ignored and
-    the wheel follows your keyboard or gamepad.
-  - The first-run calibration takes longer than for the other games (about 150 emulated
-    seconds), because the motor test alone lasts about 50 seconds.
-  - The race runs as "PLAYER 2": the dumped NVRAM comes from a linked cabinet.
+**1. Install the tools.** You need a C/C++ compiler, `make`, Python 3, SDL2 and `chdman` (from
+MAME's tools).
 
-**Platforms:** tested on macOS (Apple Silicon). The code targets x86-64 and arm64. Linux should
-build with the same Makefile but has not been tested yet. Windows is not supported yet.
+On **macOS**, with [Homebrew](https://brew.sh) (the compiler and `make` come with Xcode's
+command-line tools, `xcode-select --install`):
 
-Technical details (boot chain, file formats, recompiler and runtime design) are in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-The changes between versions are listed in [CHANGELOG.md](CHANGELOG.md).
+```sh
+brew install sdl2 rom-tools
+```
+
+On **Linux** (Debian/Ubuntu, untested):
+
+```sh
+sudo apt install build-essential python3 libsdl2-dev mame-tools
+```
+
+**2. Add your game files.** Copy your dumps into `roms/`: the BIOS set into `roms/kviper/`, and
+each game into the folder named after its MAME set, for example `roms/thrild2/`. Each folder has
+a `README.txt` that lists the files it expects. Then check them:
+
+```sh
+make check GAME=thrild2
+```
+
+**3. Build.** One command extracts the game, recompiles it and builds the executable:
+
+```sh
+make -j8 game GAME=thrild2
+```
+
+This takes about a minute. It creates `./td2` (the executable for each game is in the
+[Games](#games) table).
+
+**4. Play.**
+
+```sh
+./td2              # classic
+./td2 --enhanced   # enhanced
+```
+
+You can also start the game by double-clicking the executable, it will start in classic mode.
+
+**On first launch** the game calibrates its controls automatically, before the
+window opens. This takes a few seconds; for GTI Club 2 JAB and Thrill Drive 2 JAA and AAA it
+takes a little longer, because of the force-feedback wheel test.
+
+### Controls
+
+| Action                                                 | Keyboard                                      | Gamepad              |
+| ------------------------------------------------------ | --------------------------------------------- | -------------------- |
+| Steer                                                  | ← / →                                         | Left stick           |
+| Accelerator                                            | ↑                                             | R2 (or A)            |
+| Brake                                                  | ↓                                             | L2 (or B)            |
+| Handbrake (GTI Club 2 JAB, Thrill Drive 2 JAA and AAA) | Space                                         | X                    |
+| Shift up / down                                        | A / Z                                         | R1 / L1              |
+| Insert coin (classic)                                  | 5                                             | Back                 |
+| Start                                                  | 1                                             | Start                |
+| Test / Service (classic)                               | F2 / 9                                        | —                    |
+| Menus (enhanced)                                       | Arrows, Enter or 1, Backspace                 | D-pad, A or Start, B |
+| Pause (enhanced)                                       | Esc                                           | Guide                |
+| Fullscreen                                             | F11                                           | —                    |
+| Quit                                                   | Esc (enhanced: Esc in the main menu, or QUIT) | —                    |
+
+---
 
 ## Required files
 
-Put your files in `roms/`, which has the same layout as a MAME rompath. You only need
-`kviper/` plus the folder of the game you want to build. Each folder contains a `README.txt`
-listing the files it expects:
+The layout of `roms/` is the same as a MAME rompath. You only need `kviper/` plus the folders of
+the games you want to build.
 
 ```
 roms/
@@ -95,19 +160,19 @@ roms/
 └── gticlub2ea/    941a02.chd, 941eaa_nvram.u39      Driving Party: Racing in Italy (ver EAA)
 ```
 
-| File | What it is | SHA1 |
-| --- | --- | --- |
-| `kviper/941b01.u25` | Viper board BIOS (GM941B01) | `66ff268d5bf78fbfa48cdc3e1b08f8956cfd6cfb` |
-| `kviper/ds2430.u3` | DS2430A 1-Wire EEPROM | `ed7cd9b2763b3e377df9663943160f9871f65105` |
-| `thrild2/a41b02.chd` | Thrill Drive 2 (EBB) CF card | `0426f4bb9001cf457f44e2c22e3d7575b8049aa3` |
-| `thrild2/a41ebb_nvram.u39` | Thrill Drive 2 (EBB) NVRAM (M48T58) | `e14ea2ba95b72edf0a3331ab82c192760bfdbce3` |
+| File                                    | What it is                                                   | SHA1                                       |
+| --------------------------------------- | ------------------------------------------------------------ | ------------------------------------------ |
+| `kviper/941b01.u25`                     | Viper board BIOS (GM941B01)                                  | `66ff268d5bf78fbfa48cdc3e1b08f8956cfd6cfb` |
+| `kviper/ds2430.u3`                      | DS2430A 1-Wire EEPROM                                        | `ed7cd9b2763b3e377df9663943160f9871f65105` |
+| `thrild2/a41b02.chd`                    | Thrill Drive 2 (EBB) CF card                                 | `0426f4bb9001cf457f44e2c22e3d7575b8049aa3` |
+| `thrild2/a41ebb_nvram.u39`              | Thrill Drive 2 (EBB) NVRAM (M48T58)                          | `e14ea2ba95b72edf0a3331ab82c192760bfdbce3` |
 | `thrild2j/` or `thrild2a/` `a41a02.chd` | Thrill Drive 2 (JAA/AAA) CF card, shared: one copy is enough | `bbb71e23bddfa07dfa30b6565a35befd82b055b8` |
-| `thrild2j/a41jaa_nvram.u39` | Thrill Drive 2 (JAA) NVRAM | `085f40816befde993069f56fdd5f8bd6ccfcf301` |
-| `thrild2a/a41aaa_nvram.u39` | Thrill Drive 2 (AAA) NVRAM | `768bcd46a6ad20948f60f5e0ecd2f7b9c2901061` |
-| `gticlub2/941b02.chd` | GTI Club 2 (JAB) CF card | `943bc9b1ea7273a8382b94c8a75010dfe296df14` |
-| `gticlub2/941jab_nvram.u39` | GTI Club 2 (JAB) NVRAM | `2753dda42cdd81af22dc6780678f1ddeb3c62013` |
-| `gticlub2ea/941a02.chd` | GTI Club 2 (EAA) CF card | `dd180ad92dd344b38f160e31833077e342cee38d` |
-| `gticlub2ea/941eaa_nvram.u39` | GTI Club 2 (EAA) NVRAM | `92e0ce01049308f459985d466fbfcfac82f34a47` |
+| `thrild2j/a41jaa_nvram.u39`             | Thrill Drive 2 (JAA) NVRAM                                   | `085f40816befde993069f56fdd5f8bd6ccfcf301` |
+| `thrild2a/a41aaa_nvram.u39`             | Thrill Drive 2 (AAA) NVRAM                                   | `768bcd46a6ad20948f60f5e0ecd2f7b9c2901061` |
+| `gticlub2/941b02.chd`                   | GTI Club 2 (JAB) CF card                                     | `943bc9b1ea7273a8382b94c8a75010dfe296df14` |
+| `gticlub2/941jab_nvram.u39`             | GTI Club 2 (JAB) NVRAM                                       | `2753dda42cdd81af22dc6780678f1ddeb3c62013` |
+| `gticlub2ea/941a02.chd`                 | GTI Club 2 (EAA) CF card                                     | `dd180ad92dd344b38f160e31833077e342cee38d` |
+| `gticlub2ea/941eaa_nvram.u39`           | GTI Club 2 (EAA) NVRAM                                       | `92e0ce01049308f459985d466fbfcfac82f34a47` |
 
 - **CHD hashes:** for a CHD, the hash is the CHD's internal SHA1, as shown by `chdman info`.
 - **Checking your files:** `make check GAME=<id>` compares your files with this table. It also
@@ -116,26 +181,9 @@ roms/
 - **"Needs redump" is fine:** MAME flags `ds2430.u3` and the GTI Club 2 NVRAM dumps as "needs
   redump". This is expected.
 
-## Prerequisites
+## Build in detail
 
-- A C11 / C++20 compiler (Clang or GCC) and `make`
-- Python 3 (standard library only)
-- SDL2 (the `sdl2-config` script must be on your `PATH`)
-- `chdman`, from MAME's tools
-
-On macOS (Homebrew):
-
-```sh
-brew install sdl2 rom-tools
-```
-
-On Debian/Ubuntu (untested):
-
-```sh
-sudo apt install build-essential python3 libsdl2-dev mame-tools
-```
-
-## Build
+`make game` runs three steps, which you can also run one at a time:
 
 ```sh
 make extract GAME=thrild2     # roms/thrild2/ -> work/thrild2/       (CF image, kernel, game modules)
@@ -143,51 +191,25 @@ make recomp  GAME=thrild2     # work/thrild2/ -> generated/thrild2/  (recompiled
 make -j8     GAME=thrild2     # generated/thrild2/ + runtime/ -> ./td2
 ```
 
-Run the three steps in this order: `make` needs the files that `make recomp` produces.
-`GAME` defaults to `thrild2`. Each game builds into its own `work/<id>/`, `generated/<id>/` and
-`build/<id>/`, so you can build several games side by side.
+- **Several games:** each game builds into its own `work/<id>/`, `generated/<id>/` and
+  `build/<id>/`, so you can build several side by side. `GAME` defaults to `thrild2`.
+- **Profiles:** each version is described by `games/<id>/game.json`: the expected files, the
+  modules to recompile, the input defaults and the calibration. Versions of the same game
+  inherit the main profile. `make games` lists them.
+- **Cleaning:** `make clean GAME=<id>` removes the build objects and the executable.
+  `make distclean GAME=<id>` also removes `work/<id>/`, `generated/<id>/` and the saved NVRAM,
+  which contain everything derived from that game's data.
 
-`make clean GAME=<id>` removes the build objects and the executable. `make distclean GAME=<id>`
-also removes `work/<id>/`, `generated/<id>/` and the saved NVRAM, which contain everything
-derived from that game's data.
+## Saves and options
 
-## Run
+**Saves:** the calibration and the game's settings (volume, difficulty and so on) are saved to
+`<executable>_nvram.bin`, next to the executable, for example `td2_nvram.bin`. To redo the
+calibration, delete that file.
 
-```sh
-./td2
-```
-
-The executable finds `work/`, `roms/` and its saved NVRAM in its own folder, so it can also be
-started from another directory or by double-clicking it.
-
-**First launch:** if the game has an automatic calibration (currently every supported
-version), it runs before the window opens.
-- The game's TEST MODE calibration runs in the background and takes a few seconds.
-- The result is saved to `<executable>_nvram.bin` (for example `td2_nvram.bin`).
-- The game then starts with steering and pedals centred. To redo the calibration, delete that
-  file.
-
-The game settings (volume, difficulty and so on) are saved to the same file. They are written
-every 60 seconds and on exit.
-
-### Controls
-
-| Action          | Keyboard | Gamepad    |
-| --------------- | -------- | ---------- |
-| Steer           | ← / →    | Left stick |
-| Accelerator     | ↑        | R2 (or A)  |
-| Brake           | ↓        | L2 (or B)  |
-| Handbrake (GTI Club 2 JAB, Thrill Drive 2 JAA and AAA) | Space    | X          |
-| Shift up / down | A / Z    | R1 / L1    |
-| Insert coin     | 5        | Back       |
-| Start           | 1        | Start      |
-| Test / Service  | F2 / 9   | —          |
-| Fullscreen      | F11      | —          |
-| Quit            | Esc      | —          |
-
-### Options
+**Command-line options:**
 
 ```
+./td2 --enhanced         enhanced mode
 ./td2 --scale 3          window scale (default 2)
 ./td2 --volume 8         audio gain (default 16)
 ./td2 --headless --seconds 30        no window/audio, runs as fast as possible (testing)
@@ -198,53 +220,81 @@ every 60 seconds and on exit.
 The environment variables for debugging are described in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-### Enhanced mode (in development)
+## Enhanced mode in detail
 
-```sh
-./td2 --enhanced
-```
-
-An optional mode that makes the port behave more like a PC game. The default mode stays the
-faithful arcade version.
-- **Free play:** set automatically on first launch, after the calibration. The "FREE PLAY"
-  and "PRESS START BUTTON" captions are hidden, and START begins a game without coins.
-- **No TEST MODE:** the Test and Service keys are ignored.
-- **Separate saves:** the enhanced mode keeps its own NVRAM (`<executable>_enhanced_nvram.bin`),
-  so it never changes the settings of the default mode. Delete that file to set it up again.
-- **Availability:** every supported version (Thrill Drive 2 EBB, JAA and AAA; GTI Club 2 JAB and EAA).
-- **Attract menu:** START GAME, OPTIONS, CREDITS, QUIT, drawn with the game's own font. Use the
-  arrow keys and Enter (or 1) on the keyboard, or the d-pad and A or Start on a gamepad.
+- **Menus:** drawn with each game's own font, in English or Italian. They follow the language
+  chosen in the game; with Japanese they are in English.
 - **Options**, on three pages. Left and right change a value.
   - **Game:** the difficulty of each course, and the language (English or Italian; Thrill
     Drive 2 JAA and AAA also offer Japanese).
   - **Sound:** attract sound, music in game, music and effects volume.
-  - **Display:** window or fullscreen (F11 also switches it), the rendering resolution (1X, the
-    native 512×384, or 2X, 1024×768), and an fps counter. The higher resolution renders the 3D scenes and
-    the HUD at twice the size; it needs about twice the CPU time, so check the fps counter on
-    slower machines.
-- **Saving:** game and sound options are the game's own TEST MODE settings, stored in its NVRAM.
-  The game reads them only at boot, so on leaving OPTIONS it restarts, which takes a few
-  seconds. Display options are saved in `<executable>_settings.ini` (`--settings FILE` to use
-  another file).
-- **Pause:** Esc (or the gamepad's Guide button) during a game pauses it, with RESUME and MAIN
-  MENU. MAIN MENU brings the game back to the attract mode in a few seconds, behind the loading
-  screen. In the attract menu, Esc goes back from a submenu, and quits from the main menu.
-- **Menu language:** the menus follow the language chosen in the game (English when the game is
-  in Japanese).
+  - **Display:** window or fullscreen (F11 also switches it), the rendering resolution, and an
+    fps counter. 2X renders the 3D scenes and the HUD at 1024×768. It needs about twice the CPU
+    time, so be sure to check the fps counter on slower machines.
+- **Saving the options:** game and sound options are the game's own TEST MODE settings, stored
+  in its NVRAM. The game reads them only at boot, so on leaving OPTIONS it restarts, which takes
+  a few seconds. Display options are saved in `<executable>_settings.ini` (`--settings FILE` to
+  use another file).
+- **Pause:** Esc, or the gamepad's Guide button, pauses a game, with RESUME and MAIN MENU. MAIN
+  MENU brings the game back to the attract mode in a few seconds, behind a loading screen. In the
+  attract menu, Esc goes back from a submenu, and quits from the main menu.
+- **Separate saves:** the enhanced mode keeps its own NVRAM, `<executable>_enhanced_nvram.bin`,
+  so it never changes the classic mode's settings. Delete that file to set it up again.
 - **Fast boot:** the game boots at full speed, muted, behind a LOADING screen, until the
   attract mode starts.
 
-## Repository layout
+## Game notes
 
-| Path              | Contents                                                                                                                             |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `games/`          | One profile per game (`game.json`): required files and SHA1s, modules, hints for hand-written code, inputs, calibration              |
-| `roms/`           | Where you put your own dumps (ignored by git)                                                                                        |
-| `tools/`          | Asset pipeline: CHD → FAT16 → game file → Konami LZSS / internal filesystem; game profiles; development tools (MAME debugger scripts, disassembler) |
-| `recomp/`         | Static recompiler: PowerPC 603e decoder, control-flow analysis (including jump tables), C emitter                                    |
-| `runtime/`        | Runtime shared by every game: CPU context and exceptions, kernel task switching, event scheduler, Viper hardware, SDL frontend       |
-| `runtime/voodoo/` | Voodoo3 core from MAME, with a small compatibility layer                                                                             |
-| `docs/`           | Architecture and reverse-engineering notes                                                                                           |
+**Thrill Drive 2 EBB** (`thrild2`)
+
+- Boots like the original board; attract mode, coin-up, menus and TEST MODE work.
+- Fully playable at the original 30 fps, with correct sound.
+
+**Thrill Drive 2 JAA and AAA** (`thrild2j`, `thrild2a`)
+
+- JAA is in Japanese with prices in yen; AAA is in English with prices in Hong Kong dollars.
+- They share the same CF card, and the region comes from the NVRAM. The game code is the same
+  as EBB's.
+- Their cabinet is the GTI Club 2 JAB one: a handbrake and a force-feedback steering wheel
+  ("MOTOR TYPE: K-TYPE"). The automatic calibration uses the GTI Club 2 JAB script, handbrake
+  included.
+- The first-run calibration also sets JAA's currency to Japanese yen: its starting NVRAM has
+  U.S. dollars, and its TEST MODE cannot change it.
+- Ver EAA (MAME `thrild2c`) is not supported: MAME marks its only known CF dump as bad.
+
+**GTI Club 2 JAB** (`gticlub2`)
+
+- Playable, including the handbrake.
+- Its cabinet has a force-feedback steering wheel ("MOTOR TYPE: K-TYPE"). The game calibrates
+  the steering by turning the wheel with the motor, and the step fails if the wheel does not
+  move. During the first-run calibration the runtime simulates a motorised wheel, so the step
+  passes. In play the motor is ignored and the wheel follows your keyboard or gamepad.
+- The first-run calibration takes a few seconds, because of the motor test.
+
+**GTI Club 2 EAA** (`gticlub2ea`)
+
+- Boots like the original board; attract mode, coin-up, car and course selection, races and
+  TEST MODE work.
+- MAME notes that this version needs DIP switch SW:3 on, otherwise it shows "GAME MODE LOCKED!
+  PLEASE SET THE PASSWORD". The profile sets it.
+- The EAA cabinet has no handbrake: the version code in its NVRAM selects a cabinet
+  configuration without one.
+
+## Documentation and repository layout
+
+Technical details (boot chain, file formats, recompiler and runtime design, reverse-engineering
+notes) are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The changes between versions are
+listed in [CHANGELOG.md](CHANGELOG.md).
+
+| Path              | Contents                                                                                                                                              |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `games/`          | One profile per game (`game.json`): required files and SHA1s, modules, hints for hand-written code, inputs, calibration, enhanced-mode data           |
+| `roms/`           | Where you put your own dumps (ignored by git)                                                                                                         |
+| `tools/`          | Asset pipeline (CHD → FAT16 → game files → Konami LZSS / internal filesystem), game profiles, development tools (MAME debugger scripts, disassembler) |
+| `recomp/`         | Static recompiler: PowerPC 603e decoder, control-flow analysis (including jump tables), C emitter                                                     |
+| `runtime/`        | Runtime shared by every game: CPU context and exceptions, kernel task switching, event scheduler, Viper hardware, SDL frontend, enhanced mode         |
+| `runtime/voodoo/` | Voodoo3 core from MAME, with a small compatibility layer                                                                                              |
+| `docs/`           | Architecture and reverse-engineering notes, README screenshots                                                                                        |
 
 ## Legal
 
@@ -253,13 +303,13 @@ faithful arcade version.
 - "Konami", "Thrill Drive", "GTI Club" and "Driving Party" are trademarks of Konami Group
   Corporation. All other trademarks belong to their owners.
 - This repository contains **no copyrighted game code, ROM, BIOS, CHD or NVRAM data**. The build
-  extracts the game from files you supply and translates it locally.
+  extracts the game from files you supply (that must be dumped from your own hardware) and translates it locally. The screenshots in
+  `docs/images/` were captured from the ports and are included only to illustrate the project.
 - You may use this project only with dumps you are legally entitled to use, for example dumps
   of hardware you own. Do not ask for game files in this project's issues or discussions, and
   do not link to them.
 - Do not redistribute anything the build produces from the game data: `work/`, `generated/`,
-  the executables (`td2`, `td2j`, `gticlub2`, …) and the `*_nvram.bin` files. These will contain
-  Konami's copyrighted code and data.
+  the executables (`td2`, `td2j`, `gticlub2`, …) and the `*_nvram.bin` files.
 - **License:** the original code in this repository is released under the
   [BSD-3-Clause license](LICENSE). The license covers only this project's code. It grants no
   rights to the games.

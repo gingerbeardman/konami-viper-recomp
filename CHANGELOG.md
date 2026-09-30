@@ -5,6 +5,16 @@ All notable changes to this project are listed here. The format follows
 [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a new minor
 version can change the build, the profiles or the command-line options.
 
+## [Unreleased]
+
+### Added
+- `make game GAME=<id>` extracts, recompiles and builds a game in one step.
+
+### Changed
+- **README:** reorganised around the two modes, classic (the arcade cabinet) and enhanced (like
+  a PC game), with screenshots in `docs/images/` and step-by-step build instructions. The
+  reference material follows below.
+
 ## [0.5.0] - 2026-09-30
 
 ### Added
@@ -108,7 +118,8 @@ version can change the build, the profiles or the command-line options.
   (ver EBB) is playable at 30 fps with sound, and steering and pedals are calibrated
   automatically.
 
-[0.5.0]: https://github.com/spita90/konami-viper-recomp/compare/aaa8758...HEAD
+[Unreleased]: https://github.com/spita90/konami-viper-recomp/compare/bd64498...HEAD
+[0.5.0]: https://github.com/spita90/konami-viper-recomp/compare/aaa8758...bd64498
 [0.4.0]: https://github.com/spita90/konami-viper-recomp/compare/cf5280a...aaa8758
 [0.3.0]: https://github.com/spita90/konami-viper-recomp/compare/b10d12a...cf5280a
 [0.2.1]: https://github.com/spita90/konami-viper-recomp/compare/298d2e4...b10d12a
