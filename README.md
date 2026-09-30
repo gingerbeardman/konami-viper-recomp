@@ -18,9 +18,8 @@ from copyrighted material and must not be redistributed.
 | Game | Version | `GAME=` | Executable | Status |
 | --- | --- | --- | --- | --- |
 | **Thrill Drive 2** (2001) | EBB (Europe) | `thrild2` | `./td2` | Playable |
-| **Thrill Drive 2** | JAA (Japan) | `thrild2j` | `./td2j` | Not yet verified |
-| **Thrill Drive 2** | AAA (Asia) | `thrild2a` | `./td2a` | Not yet verified |
-| **Thrill Drive 2** | EAA (Europe, older) | `thrild2c` | `./td2c` | Not yet verified; the only known CF dump is bad |
+| **Thrill Drive 2** | JAA (Japan) | `thrild2j` | `./td2j` | Boots and races; not yet played interactively |
+| **Thrill Drive 2** | AAA (Asia) | `thrild2a` | `./td2a` | Boots and races; not yet played interactively |
 | **GTI Club: Corso Italiano** (2000), also known as _GTI Club 2_ and _Driving Party: Racing in Italy_ | JAB (Japan) | `gticlub2` | `./gticlub2` | Playable |
 | **Driving Party: Racing in Italy** (2000), also known as _GTI Club 2_ and _GTI Club: Corso Italiano_ | EAA (Europe) | `gticlub2ea` | `./gticlub2ea` | Boots and races; not yet played interactively |
 
@@ -39,12 +38,19 @@ The `GAME=` value is the name of the game's MAME set.
   street lights, headlights, fog, lens flare) has been fixed. Checked on the attract mode of
   Thrill Drive 2 and GTI Club 2.
 
-**Other Thrill Drive 2 versions**: same game engine, so they are expected to work like EBB.
-They still have to be verified, and their automatic calibration is disabled until then.
-- JAA and AAA share the same CF card; the region comes from the NVRAM.
-- MAME uses the GTI Club 2 control layout (K-type wheel) for JAA and AAA.
-- For EAA, MAME marks the only known CF dump as bad (blue screens), and its NVRAM has never
-  been dumped: that version starts from an empty NVRAM.
+**Other Thrill Drive 2 versions:** JAA (Japanese, prices in yen) and AAA (English, prices in
+Hong Kong dollars) boot like the
+original board, run the full attract mode and race. Tested headless with scripted inputs; not
+yet played interactively.
+- JAA and AAA share the same CF card; the region comes from the NVRAM. The game code is the
+  same as EBB's.
+- Their cabinet is the GTI Club 2 JAB one: a handbrake and a force-feedback steering wheel
+  ("MOTOR TYPE: K-TYPE"). The automatic calibration uses the GTI Club 2 JAB script, handbrake
+  included.
+- The first-run calibration also sets JAA's currency to Japanese yen: its starting NVRAM has
+  U.S. dollars, and its TEST MODE cannot change it.
+- The enhanced mode works on both.
+- Ver EAA (MAME `thrild2c`) is not supported: MAME marks its only known CF dump as bad.
 
 **GTI Club 2**
 - **EAA (`gticlub2ea`):** boots like the original board, runs the full attract mode, and
@@ -85,7 +91,6 @@ roms/
 ├── thrild2/       a41b02.chd, a41ebb_nvram.u39      Thrill Drive 2 (ver EBB)
 ├── thrild2j/      a41a02.chd, a41jaa_nvram.u39      Thrill Drive 2 (ver JAA)
 ├── thrild2a/      a41a02.chd, a41aaa_nvram.u39      Thrill Drive 2 (ver AAA)
-├── thrild2c/      a41c02.chd                        Thrill Drive 2 (ver EAA)
 ├── gticlub2/      941b02.chd, 941jab_nvram.u39      GTI Club: Corso Italiano (ver JAB)
 └── gticlub2ea/    941a02.chd, 941eaa_nvram.u39      Driving Party: Racing in Italy (ver EAA)
 ```
@@ -99,8 +104,6 @@ roms/
 | `thrild2j/` or `thrild2a/` `a41a02.chd` | Thrill Drive 2 (JAA/AAA) CF card, shared: one copy is enough | `bbb71e23bddfa07dfa30b6565a35befd82b055b8` |
 | `thrild2j/a41jaa_nvram.u39` | Thrill Drive 2 (JAA) NVRAM | `085f40816befde993069f56fdd5f8bd6ccfcf301` |
 | `thrild2a/a41aaa_nvram.u39` | Thrill Drive 2 (AAA) NVRAM | `768bcd46a6ad20948f60f5e0ecd2f7b9c2901061` |
-| `thrild2c/a41c02.chd` | Thrill Drive 2 (EAA) CF card (bad dump) | `ab3020e8709768c0fd2467573e92b679a05944e5` |
-| `thrild2c/941eaa_nvram.u39` | Thrill Drive 2 (EAA) NVRAM: never dumped, optional | — |
 | `gticlub2/941b02.chd` | GTI Club 2 (JAB) CF card | `943bc9b1ea7273a8382b94c8a75010dfe296df14` |
 | `gticlub2/941jab_nvram.u39` | GTI Club 2 (JAB) NVRAM | `2753dda42cdd81af22dc6780678f1ddeb3c62013` |
 | `gticlub2ea/941a02.chd` | GTI Club 2 (EAA) CF card | `dd180ad92dd344b38f160e31833077e342cee38d` |
@@ -157,8 +160,8 @@ derived from that game's data.
 The executable finds `work/`, `roms/` and its saved NVRAM in its own folder, so it can also be
 started from another directory or by double-clicking it.
 
-**First launch:** if the game has an automatic calibration (currently Thrill Drive 2 EBB and
-GTI Club 2 JAB and EAA), it runs before the window opens.
+**First launch:** if the game has an automatic calibration (currently every supported
+version), it runs before the window opens.
 - The game's TEST MODE calibration runs in the background and takes a few seconds.
 - The result is saved to `<executable>_nvram.bin` (for example `td2_nvram.bin`).
 - The game then starts with steering and pedals centred. To redo the calibration, delete that
@@ -174,7 +177,7 @@ every 60 seconds and on exit.
 | Steer           | ← / →    | Left stick |
 | Accelerator     | ↑        | R2 (or A)  |
 | Brake           | ↓        | L2 (or B)  |
-| Handbrake (GTI Club 2 JAB; EAA has none) | Space    | X          |
+| Handbrake (GTI Club 2 JAB, Thrill Drive 2 JAA and AAA) | Space    | X          |
 | Shift up / down | A / Z    | R1 / L1    |
 | Insert coin     | 5        | Back       |
 | Start           | 1        | Start      |
@@ -208,11 +211,12 @@ faithful arcade version.
 - **No TEST MODE:** the Test and Service keys are ignored.
 - **Separate saves:** the enhanced mode keeps its own NVRAM (`<executable>_enhanced_nvram.bin`),
   so it never changes the settings of the default mode. Delete that file to set it up again.
-- **Availability:** Thrill Drive 2 EBB and GTI Club 2 JAB and EAA.
+- **Availability:** every supported version (Thrill Drive 2 EBB, JAA and AAA; GTI Club 2 JAB and EAA).
 - **Attract menu:** START GAME, OPTIONS, CREDITS, QUIT, drawn with the game's own font. Use the
   arrow keys and Enter (or 1) on the keyboard, or the d-pad and A or Start on a gamepad.
 - **Options**, on three pages. Left and right change a value.
-  - **Game:** the difficulty of each course, and the language (English or Italian).
+  - **Game:** the difficulty of each course, and the language (English or Italian; Thrill
+    Drive 2 JAA and AAA also offer Japanese).
   - **Sound:** attract sound, music in game, music and effects volume.
   - **Display:** window or fullscreen (F11 also switches it), the rendering resolution (1X, the
     native 512×384, or 2X, 1024×768), and an fps counter. The higher resolution renders the 3D scenes and
@@ -225,7 +229,8 @@ faithful arcade version.
 - **Pause:** Esc (or the gamepad's Guide button) during a game pauses it, with RESUME and MAIN
   MENU. MAIN MENU brings the game back to the attract mode in a few seconds, behind the loading
   screen. In the attract menu, Esc goes back from a submenu, and quits from the main menu.
-- **Menu language:** the menus follow the language chosen in the game.
+- **Menu language:** the menus follow the language chosen in the game (English when the game is
+  in Japanese).
 - **Fast boot:** the game boots at full speed, muted, behind a LOADING screen, until the
   attract mode starts.
 

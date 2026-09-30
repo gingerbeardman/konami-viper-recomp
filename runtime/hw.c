@@ -668,6 +668,17 @@ static void rtc_init(void) {
 /* the NVRAM image, for the enhanced mode's settings (guest thread only) */
 uint8_t *hw_nvram(void) { return g_nvram; }
 
+/* The TEST MODE options are a block of the NVRAM: the big-endian 16-bit words from
+ * GAME_NVRAM_OPT_START up to the checksum word GAME_NVRAM_OPT_CSUM (included) sum to 0xffff. */
+void hw_nvram_options_fix(uint8_t *nv) {
+    if (!GAME_NVRAM_OPT_CSUM) return;
+    uint32_t sum = 0;
+    for (int o = GAME_NVRAM_OPT_START; o < GAME_NVRAM_OPT_CSUM; o += 2) sum += (uint32_t)(nv[o] << 8 | nv[o + 1]);
+    uint16_t cs = (uint16_t)(0xffff - sum);
+    nv[GAME_NVRAM_OPT_CSUM] = (uint8_t)(cs >> 8);
+    nv[GAME_NVRAM_OPT_CSUM + 1] = (uint8_t)cs;
+}
+
 static uint8_t nvram_read(uint32_t off) {
     uint8_t r = g_nvram[off];
     if (off == RTC_DATE) r &= ~DATE_BL;

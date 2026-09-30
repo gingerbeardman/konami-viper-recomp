@@ -67,18 +67,6 @@ static void blank(const BlankString *b) {
     if (memcmp(g_ram + b->addr, b->text, n) == 0) g_ram[b->addr] = 0;
 }
 
-/* ================================================================== game settings (NVRAM) */
-/* The TEST MODE options are a block of the NVRAM: the big-endian 16-bit words from
- * GAME_ENH_OPT_START up to the checksum word GAME_ENH_OPT_CSUM (included) sum to 0xffff. */
-static void options_checksum_fix(uint8_t *nv) {
-    if (!GAME_ENH_OPT_CSUM) return;
-    uint32_t sum = 0;
-    for (int o = GAME_ENH_OPT_START; o < GAME_ENH_OPT_CSUM; o += 2) sum += (uint32_t)(nv[o] << 8 | nv[o + 1]);
-    uint16_t cs = (uint16_t)(0xffff - sum);
-    nv[GAME_ENH_OPT_CSUM] = (uint8_t)(cs >> 8);
-    nv[GAME_ENH_OPT_CSUM + 1] = (uint8_t)cs;
-}
-
 /* RT_NVRAM_POKE="seconds:addr=value,..." writes NVRAM bytes (and fixes the checksum) at run time */
 static void nvram_poke_tick(void) {
     static const char *next = (const char *)-1;
@@ -89,7 +77,7 @@ static void nvram_poke_tick(void) {
         if (*p != ':' || (double)rt_now() / CPU_HZ < t) return;
         uint32_t addr = (uint32_t)strtoul(p + 1, &p, 16);
         uint32_t val = *p == '=' ? (uint32_t)strtoul(p + 1, &p, 16) : 0;
-        if (addr < 0x1ff0) { hw_nvram()[addr] = (uint8_t)val; options_checksum_fix(hw_nvram()); rt_log("enhanced: NVRAM %04x = %02x\n", addr, val); }
+        if (addr < 0x1ff0) { hw_nvram()[addr] = (uint8_t)val; hw_nvram_options_fix(hw_nvram()); rt_log("enhanced: NVRAM %04x = %02x\n", addr, val); }
         next = *p == ',' ? p + 1 : NULL;
     }
 }
@@ -573,7 +561,7 @@ static void menu_tick(void) {
         /* the game reads its settings only at boot: write them, save, then restart the process */
         uint8_t *nv = hw_nvram();
         for (int i = 0; i < g_n_game_options; i++) field_set(nv, &k_game_options[i], (uint32_t)g_opt_value[i]);
-        options_checksum_fix(nv);
+        hw_nvram_options_fix(nv);
         nvram_save();
         rt_log("enhanced: settings written, restarting\n");
         g_apply = 2;

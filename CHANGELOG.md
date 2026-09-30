@@ -5,6 +5,25 @@ All notable changes to this project are listed here. The format follows
 [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a new minor
 version can change the build, the profiles or the command-line options.
 
+## [0.5.0] - 2026-09-30
+
+### Added
+- **Thrill Drive 2 ver JAA (`thrild2j`) and ver AAA (`thrild2a`):** boot and race, with
+  automatic calibration.
+  - Their cabinet is the GTI Club 2 JAB one (K-type force-feedback wheel and a handbrake), so
+    the profiles use GTI Club 2 JAB's calibration script and handbrake input.
+  - JAA's first-run calibration sets the currency to Japanese yen (the starting NVRAM has U.S.
+    dollars, and TEST MODE cannot change it).
+  - Enhanced mode, with Japanese as a third language.
+- **Profiles:** `calibration.nvram_set` writes NVRAM bytes after the calibration.
+
+### Changed
+- **Profiles:** `nvram_options` moved from `enhanced` to the top level.
+
+### Removed
+- **Thrill Drive 2 ver EAA (`thrild2c`):** profile and ROM folder removed. MAME marks the only
+  known CF dump as bad, and its NVRAM has never been dumped.
+
 ## [0.4.0] - 2026-09-30
 
 ### Added
@@ -89,7 +108,8 @@ version can change the build, the profiles or the command-line options.
   (ver EBB) is playable at 30 fps with sound, and steering and pedals are calibrated
   automatically.
 
-[0.4.0]: https://github.com/spita90/konami-viper-recomp/compare/cf5280a...HEAD
+[0.5.0]: https://github.com/spita90/konami-viper-recomp/compare/aaa8758...HEAD
+[0.4.0]: https://github.com/spita90/konami-viper-recomp/compare/cf5280a...aaa8758
 [0.3.0]: https://github.com/spita90/konami-viper-recomp/compare/b10d12a...cf5280a
 [0.2.1]: https://github.com/spita90/konami-viper-recomp/compare/298d2e4...b10d12a
 [0.2.0]: https://github.com/spita90/konami-viper-recomp/compare/cf317cf...298d2e4

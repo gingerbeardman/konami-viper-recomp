@@ -187,10 +187,27 @@ static int run_scripted_pass(const char *what, const char *script, int seconds, 
     return 0;
 }
 
+/* settings TEST MODE cannot change (e.g. a region-locked currency), written into the calibrated
+ * NVRAM: the profile's calibration.nvram_set */
+static void calibration_nvram_set(const char *nvsave) {
+    static const struct { int addr, val; } k_set[] = GAME_CALIBRATION_NVRAM;
+    if (k_set[0].addr < 0) return;
+    static uint8_t nv[0x2000];
+    FILE *f = fopen(nvsave, "rb");
+    if (!f) return;
+    size_t n = fread(nv, 1, sizeof nv, f);
+    fclose(f);
+    if (n != sizeof nv) return;
+    for (int i = 0; k_set[i].addr >= 0; i++) nv[k_set[i].addr] = (uint8_t)k_set[i].val;
+    hw_nvram_options_fix(nv);
+    if ((f = fopen(nvsave, "wb"))) { fwrite(nv, 1, sizeof nv, f); fclose(f); }
+}
+
 static int run_first_time_calibration(const char *self, const char *work, const char *nvram, const char *nvsave) {
     if (!k_calibration_script) return 0;
     fprintf(stderr, "first run: calibrating steering and pedals in TEST MODE (a few seconds)...\n");
     if (run_scripted_pass("calibration", k_calibration_script, GAME_CALIBRATION_SECONDS, self, work, nvram, nvsave)) return -1;
+    calibration_nvram_set(nvsave);
     fprintf(stderr, "calibration saved to %s\n", nvsave);
     return 0;
 }

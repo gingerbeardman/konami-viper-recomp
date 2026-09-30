@@ -1,6 +1,7 @@
 GTI Club: Corso Italiano (ver JAB), MAME set "gticlub2".
 Also known as: GTI Club 2, Driving Party: Racing in Italy.
-Note: Japanese version.
+Note: Japanese version. The NVRAM declares a cabinet with a handbrake and a K-type force-feedback wheel (MOTOR TYPE: K-TYPE).
+Note: The calibration is TD2's script plus the motor-driven steering test (about 50 s, needs RT_FFB_WHEEL, set automatically by the first-run calibration) and the HAND BRAKE step.
 
 Put these files in this folder:
 

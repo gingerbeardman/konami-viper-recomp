@@ -8,8 +8,8 @@ The reference game is Thrill Drive 2 **ver EBB**: most of this document was reve
 on it. Other games and versions run on the same board with the same BIOS and have profiles in
 `games/`:
 - **Other Thrill Drive 2 versions:** `thrild2j` (ver JAA) and `thrild2a` (ver AAA) share the
-  CF card `a41a02`; `thrild2c` (ver EAA) has a CF dump that MAME marks bad, and an NVRAM that
-  has never been dumped.
+  CF card `a41a02`; both boot and race (see section 6). Ver EAA (`thrild2c`) is not supported:
+  MAME marks its only CF dump bad.
 - **GTI Club 2**, also known as *GTI Club: Corso Italiano* and *Driving Party: Racing in
   Italy*: MAME sets `gticlub2` (ver JAB) and `gticlub2ea` (ver EAA). Both boot and race (see
   section 6).
@@ -52,9 +52,12 @@ The profile fields:
 - **`inputs`:** `defaults` (IN0–IN7, including DIP switches), `analog_rest` (AN0–AN3 at rest)
   and `handbrake`.
 - **`calibration`:** the scripted first-run calibration (`RT_INPUT` syntax) and its length in
-  emulated seconds, or `null`.
+  emulated seconds, or `null`. `nvram_set` (`{"0xADDR": "0xVALUE"}`) lists NVRAM bytes written
+  after it, for settings TEST MODE cannot change; the option block checksum is then fixed.
+- **`nvram_options`:** the TEST MODE option block of the NVRAM, `start` and `checksum` (section
+  5a), used by `calibration.nvram_set` and by the enhanced mode.
 - **`enhanced`:** data for the enhanced mode (section 5a), or `null` where it is not
-  available (the unverified versions):
+  available (every current profile has it):
   - `setup`: a scripted TEST MODE pass run on first launch after the calibration;
   - `blank_strings`: game strings to empty in RAM (`addr`, `text`);
   - `hooks`: `{module: {"0xADDR": name}}`. The recompiler inserts `rt_hook(c, addr)` before the
@@ -65,8 +68,8 @@ The profile fields:
     `[y, characters]`, where a space marks an unused cell.
 
 `recomp.py` turns the profile into `generated/<id>/game_config.h` (`GAME_*` macros). The runtime
-is compiled once per game against it; there is no runtime game switch. The unverified profiles
-inherit TD2's module list and hints, with calibration disabled. The differences MAME documents (K-type 8-bit wheel
+is compiled once per game against it; there is no runtime game switch. The other TD2 versions
+inherit TD2's module list, hints and enhanced mode. The differences MAME documents (K-type 8-bit wheel
 centred at 0x80, handbrake on AN3, DIP SW:3 on for EAA) are already in the profiles.
 
 What GTI Club 2 turned out to need:
@@ -404,7 +407,8 @@ An optional layer on top of the faithful port, in development. Everything is gat
     START steps a value; START held with SHIFT UP or SHIFT DOWN changes a volume.
   - TD2 fields: difficulty `0x8F`/`0x90`/`0x91` (0–7); `0x88` bits 7–6 language (1 English,
     2 Italian: JAPANESE is not offered by EBB), bit 5 speedometer, bit 2 record saving;
-    `0x89` currency; `0x94` bits 6–5 attract sound (0 all the time, 1 once every 4 cycles,
+    `0x89` currency (0 Japanese yen, 1 U.S. dollar, 2 U.K. pound, 3 euro, 4 lire, 5 H.K. dollar;
+    6 and 7 break the boot); `0x94` bits 6–5 attract sound (0 all the time, 1 once every 4 cycles,
     2 complete off) and bits 4–0 music volume (0–30); `0x95` bits 7–3 effects volume;
     `0x97` bit 6 music in game, bit 5 scream, bit 4 siren.
   - GTI Club 2 fields: difficulty `0x8A`–`0x8D` (TOWN, COAST, MOUNTAIN, PROMOTION); `0x84` bit 5
@@ -432,8 +436,8 @@ An optional layer on top of the faithful port, in development. Everything is gat
   overlay every loop over the last game frame, so the pause menu responds while the game is
   frozen.
   - RESUME continues. MAIN MENU returns to the attract mode the way a cabinet does. TEST opens
-    TEST MODE; after 12 s the script moves to GAME MODE (profile `test_menu_game_mode`: TD2 and
-    EAA 13, JAB 12) and presses START; it ends when the attract hook runs again.
+    TEST MODE; after 12 s the script moves to GAME MODE (profile `test_menu_game_mode`: TD2 EBB
+    and GTI Club 2 EAA 13; GTI Club 2 JAB and TD2 JAA and AAA 12) and presses START; it ends when the attract hook runs again.
   - The whole return runs fast-forwarded behind the loading screen: about 25–30 emulated
     seconds, a few real ones. While it runs, the enhanced layer owns IN3 and IN4
     (`enh_inputs_owned()`), and the frontend does not overwrite them.
@@ -537,8 +541,28 @@ Driving Party / GTI Club 2 **ver EAA** (`gticlub2ea`), tested headless with scri
 - audio (music in attract mode).
 90 s of emulated time run in about 10 s.
 
+Thrill Drive 2 **ver JAA** (`thrild2j`) and **ver AAA** (`thrild2a`), tested headless with
+scripted inputs: boot, attract mode, coin-up, car/course selection and races, and the automatic
+calibration.
+- The game code is the same as EBB's: same modules, function count and unresolved `gl`
+  `bctr`s, with the `game` module's text 0x20 bytes longer.
+- The cabinet is the GTI Club 2 JAB one: TEST MODE shows MOTOR TYPE K-TYPE and a HAND BRAKE
+  item, and the steering calibration ends with the motor test. The profiles therefore use GTI
+  Club 2 JAB's calibration script and handbrake input (AN3 at rest at -200).
+- JAA needs 2 coins per credit and AAA 4, with the starting NVRAMs.
+- **Region locks:** TEST MODE shows LANGUAGE DISPLAY and CURRENCY DISPLAY but cannot change
+  them on JAA (Japanese, U.S. dollar) and AAA (English, H.K. dollar); EBB offers English and
+  Italian, and euro, lire and pound. The game honours whatever the NVRAM holds: every language
+  (0 Japanese, 1 English, 2 Italian) and currency works on every version. JAA's calibration
+  therefore writes yen (`0x89` = 0), and its enhanced OPTIONS page offers all three languages.
+- **Enhanced mode:** EBB's profile data applies unchanged (the attract hook `0x7DD40`, the
+  FREE PLAY string `0xB8EE8`, the font file and the NVRAM fields are at the same addresses).
+  The one difference: the TEST MODE main menu has no KONAMI INTERNET CHALLENGE item (EBB has it
+  after BOOKKEEPING), so GAME MODE is item 12. Tested headless: first-launch setup, attract
+  menu, OPTIONS (language applied and restarted), pause and the return to the attract mode.
+
 Open:
-- **other versions**: the other TD2 versions, waiting for the files;
+- **TD2 JAA and AAA**: interactive play;
 - **GTI Club 2**: interactive play (steering feel, handbrake); optional force feedback on a
   gamepad (rumble); the unmapped accesses at
   `0xFFE50000`/`0xFFE58000`/`0xFFE80000`/`0xFFE90000` during boot;
@@ -577,16 +601,12 @@ Notes:
 
 ## 7. Next steps
 
-1. Other TD2 versions: extract, recompile and boot them.
-   - Check the `gl` dispatcher addresses (`python3 recomp/coverage.py <id> gl` lists the
-     unresolved `bctr`s) and set the hints.
-   - Check that TD2's calibration script works.
-2. Graphics: catalogue what is left after the multibase fix, against real
+1. Graphics: catalogue what is left after the multibase fix, against real
    references (gameplay videos or real hardware). MAME's core shares the same bugs, so it is not a
    reference for graphics.
-3. Further rasteriser optimisation (SIMD, less contention); eventually a GPU backend.
-4. CMake builds for Windows and Linux, CI.
-5. Distributable package: the game data stays external and is extracted from the user's CHD.
+2. Further rasteriser optimisation (SIMD, less contention); eventually a GPU backend.
+3. CMake builds for Windows and Linux, CI.
+4. Distributable package: the game data stays external and is extracted from the user's CHD.
 
 ## 8. Usage
 

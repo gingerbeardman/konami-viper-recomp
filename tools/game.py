@@ -158,6 +158,7 @@ def write_config_header(g, out):
     cal = g.get('calibration') or {}
     if 'script' not in cal:
         cal = {}
+    nvo = g.get('nvram_options') or {}
     lines = [
         f"/* generated from games/{g['id']}/game.json */",
         "#pragma once",
@@ -173,6 +174,12 @@ def write_config_header(g, out):
         f"#define GAME_HAS_HANDBRAKE {1 if inp.get('handbrake') else 0}",
         f"#define GAME_CALIBRATION_SCRIPT {c_str(cal['script']) if cal else 'NULL'}",
         f"#define GAME_CALIBRATION_SECONDS {cal.get('seconds', 0)}",
+        # NVRAM bytes written after the calibration (settings TEST MODE cannot change), {-1} ends
+        "#define GAME_CALIBRATION_NVRAM {" + "".join(f"{{0x{int(a, 16):x}, 0x{int(v, 16):02x}}}, "
+                                                     for a, v in (cal.get('nvram_set') or {}).items()) + "{-1, 0}}",
+        # TEST MODE option block of the NVRAM: words from start to the checksum word sum to 0xffff
+        f"#define GAME_NVRAM_OPT_START {int(nvo.get('start', '0'), 16)}",
+        f"#define GAME_NVRAM_OPT_CSUM {int(nvo.get('checksum', '0'), 16)}",
     ]
     # enhanced ("conversion") mode, runtime/enhanced.c: optional, absent for unverified versions
     enh = g.get('enhanced') or {}
@@ -191,8 +198,6 @@ def write_config_header(g, out):
         game_options_config(enh.get('game_options')),
         # TEST MODE main menu index of GAME MODE: the pause menu's "main menu" returns to the attract through it
         f"#define GAME_ENH_TEST_GAME_MODE {enh.get('test_menu_game_mode', -1)}",
-        f"#define GAME_ENH_OPT_START {int((enh.get('nvram_options') or {}).get('start', '0'), 16)}",
-        f"#define GAME_ENH_OPT_CSUM {int((enh.get('nvram_options') or {}).get('checksum', '0'), 16)}",
         "#define GAME_ENH_BLANK_STRINGS {" + "".join(f"{{0x{int(b['addr'], 16):08x}u, {c_str(b['text'])}}}, " for b in blanks)
         + "{0, NULL}}",
     ]

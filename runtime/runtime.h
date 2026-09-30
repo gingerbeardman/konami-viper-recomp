@@ -50,6 +50,7 @@ typedef struct HwConfig {
 void hw_init(const HwConfig *cfg);
 uint32_t hw_boot_param(void);    /* r31 at kernel entry, as the BIOS builds it */
 uint8_t *hw_nvram(void);         /* M48T58 image (0x2000 bytes), guest thread only */
+void hw_nvram_options_fix(uint8_t *nv);   /* recomputes the TEST MODE option block checksum */
 
 /* enhanced (conversion) mode, runtime/enhanced.c */
 extern int g_enhanced;

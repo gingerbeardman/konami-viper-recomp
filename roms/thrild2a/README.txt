@@ -1,6 +1,6 @@
 Thrill Drive 2 (ver AAA), MAME set "thrild2a".
 Note: Asian version; same CF card as ver JAA, the region comes from the NVRAM.
-Note: MAME uses the GTI Club 2 input layout (K-type steering wheel) for this version; the analog mapping and the calibration script still have to be verified.
+Note: Same control layout as GTI Club 2 (MAME: K-type steering wheel with a force-feedback motor, and a handbrake); the calibration uses the GTI Club 2 script, with the motor model (RT_FFB_WHEEL).
 
 Put these files in this folder:
 
