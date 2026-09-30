@@ -214,7 +214,10 @@ faithful arcade version.
 - **Options**, on three pages. Left and right change a value.
   - **Game:** the difficulty of each course, and the language (English or Italian).
   - **Sound:** attract sound, music in game, music and effects volume.
-  - **Display:** window or fullscreen (F11 also switches it), and an fps counter.
+  - **Display:** window or fullscreen (F11 also switches it), the rendering resolution (1X, the
+    native 512×384, or 2X, 1024×768), and an fps counter. The higher resolution renders the 3D scenes and
+    the HUD at twice the size; it needs about twice the CPU time, so check the fps counter on
+    slower machines.
 - **Saving:** game and sound options are the game's own TEST MODE settings, stored in its NVRAM.
   The game reads them only at boot, so on leaving OPTIONS it restarts, which takes a few
   seconds. Display options are saved in `<executable>_settings.ini` (`--settings FILE` to use

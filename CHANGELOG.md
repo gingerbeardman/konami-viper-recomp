@@ -5,6 +5,21 @@ All notable changes to this project are listed here. The format follows
 [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a new minor
 version can change the build, the profiles or the command-line options.
 
+## [0.4.0] - 2026-09-30
+
+### Added
+- **Rendering resolution** (enhanced mode, DISPLAY page): 512×384 or 1024×768 internal.
+  - The displayed colour buffers are rendered at twice the resolution in host memory, with
+    scaled vertices and gradients. Off-screen render targets stay native.
+  - The emulated timing is unchanged.
+  - The default mode is bit-identical to before.
+- **Debugging for the frame rate and resolution study:**
+  - `RECOMP_CYCLE_SCALE=k` recompiles with k cycles per instruction (a k times slower CPU);
+  - `RT_VOODOO_SWAP_INTERVAL=n` forces the Voodoo swap interval, and `RT_VOODOO_TEXLOG` also logs
+    the first swap commands;
+  - `RT_VOODOO_FBSTATS=1` prints how the game uses the framebuffer: CMDFIFO packet types, 2D
+    blits, LFB accesses by MB, colour buffer addresses.
+
 ## [0.3.0] - 2026-09-30
 
 ### Added
@@ -74,7 +89,8 @@ version can change the build, the profiles or the command-line options.
   (ver EBB) is playable at 30 fps with sound, and steering and pedals are calibrated
   automatically.
 
-[0.3.0]: https://github.com/spita90/konami-viper-recomp/compare/b10d12a...HEAD
+[0.4.0]: https://github.com/spita90/konami-viper-recomp/compare/cf5280a...HEAD
+[0.3.0]: https://github.com/spita90/konami-viper-recomp/compare/b10d12a...cf5280a
 [0.2.1]: https://github.com/spita90/konami-viper-recomp/compare/298d2e4...b10d12a
 [0.2.0]: https://github.com/spita90/konami-viper-recomp/compare/cf317cf...298d2e4
 [0.1.0]: https://github.com/spita90/konami-viper-recomp/commit/cf317cf

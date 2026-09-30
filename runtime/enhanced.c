@@ -136,7 +136,8 @@ static Glyph g_glyph[FONT_NSIZES][128];
 /* ================================================================== port settings */
 /* <binary>_settings.ini next to the executable: options of the port itself (not of the game,
  * which keeps its own in the NVRAM). One "key = value" per line. */
-static struct { int fullscreen, show_fps; } g_set;
+static struct { int fullscreen, show_fps, scale; } g_set = { 0, 0, 1 };
+void voodoo_set_scale(int n);
 static char g_settings_path[1024];
 
 static void settings_load(void) {
@@ -148,6 +149,7 @@ static void settings_load(void) {
         if (sscanf(line, " %63[a-z_] = %d", key, &v) == 2) {
             if (!strcmp(key, "fullscreen")) g_set.fullscreen = v != 0;
             else if (!strcmp(key, "show_fps")) g_set.show_fps = v != 0;
+            else if (!strcmp(key, "render_scale")) g_set.scale = v < 1 ? 1 : v > 2 ? 2 : v;
         }
     fclose(f);
 }
@@ -156,7 +158,7 @@ static void settings_save(void) {
     FILE *f = fopen(g_settings_path, "w");
     if (!f) { rt_log("enhanced: cannot write %s\n", g_settings_path); return; }
     fprintf(f, "# " GAME_TITLE ", enhanced mode: port settings\n");
-    fprintf(f, "fullscreen = %d\nshow_fps = %d\n", g_set.fullscreen, g_set.show_fps);
+    fprintf(f, "fullscreen = %d\nshow_fps = %d\nrender_scale = %d\n", g_set.fullscreen, g_set.show_fps, g_set.scale);
     fclose(f);
 }
 
@@ -168,6 +170,7 @@ void enh_init(const char *work, const char *settings) {
     count_game_options();
     snprintf(g_settings_path, sizeof g_settings_path, "%s", settings);
     settings_load();
+    voodoo_set_scale(g_set.scale);       /* the only place the render scale is set */
     const char *file = GAME_ENH_FONT_FILE;
     if (!file) return;
     char path[1024];
@@ -232,29 +235,38 @@ static int glyph_alpha(const Glyph *g, float u, float v) {
     return (int)((a[0] * (1 - fx) + a[1] * fx) * (1 - fy) + (a[2] * (1 - fx) + a[3] * fx) * fy + 0.5f);
 }
 
+/* The overlay is laid out in logical 512x384 coordinates; on a scaled frame (resolution
+ * option) the primitives map them to the real pixels, g_ui real pixels per logical one. */
+static float g_ui = 1.0f;
+static int g_fbw, g_fbh;
+
 static void draw_text(uint32_t *fb, int w, int h, int z, int x, int y, const char *s, uint32_t rgb) {
-    float inv = 1.0f / k_font_sizes[z].scale;
+    (void)w; (void)h;
+    float inv = 1.0f / (k_font_sizes[z].scale * g_ui);
+    float fx = x * g_ui;
+    int py0 = (int)(y * g_ui + 0.5f);
     for (; *s; s++) {
         const Glyph *g = &g_glyph[z][(unsigned char)*s & 127];
-        if (!g->w) { x += glyph_space(z); continue; }
-        int gw = glyph_width(z, g), gh = font_px(z, g->h);
+        if (!g->w) { fx += glyph_space(z) * g_ui; continue; }
+        int gw = (int)(glyph_width(z, g) * g_ui + 0.5f), gh = (int)(font_px(z, g->h) * g_ui + 0.5f);
+        int px0 = (int)(fx + 0.5f), off0 = (int)(2 * g_ui + 0.5f);
         for (int pass = 0; pass < 2; pass++) {      /* drop shadow, then the glyph */
-            int off = pass ? 0 : 2;
+            int off = pass ? 0 : off0;
             uint32_t col = pass ? rgb : 0x000000;
             for (int gy = 0; gy < gh; gy++) {
-                int py = y + gy + off;
-                if (py < 0 || py >= h) continue;
+                int py = py0 + gy + off;
+                if (py < 0 || py >= g_fbh) continue;
                 for (int gx = 0; gx < gw; gx++) {
-                    int px = x + gx + off;
-                    if (px < 0 || px >= w) continue;
+                    int px = px0 + gx + off;
+                    if (px < 0 || px >= g_fbw) continue;
                     int a = inv == 1.0f ? g_font[(g->y + gy) * GAME_ENH_FONT_W + g->x + gx]
                                         : glyph_alpha(g, (gx + 0.5f) * inv - 0.5f, (gy + 0.5f) * inv - 0.5f);
                     if (!pass) a = a * 3 / 5;
-                    if (a) blend(&fb[py * w + px], col, a);
+                    if (a) blend(&fb[py * g_fbw + px], col, a);
                 }
             }
         }
-        x += gw + glyph_gap(z);
+        fx += (glyph_width(z, g) + glyph_gap(z)) * g_ui;
     }
 }
 
@@ -263,8 +275,10 @@ static void draw_centered(uint32_t *fb, int w, int h, int z, int y, const char *
 }
 
 static void dim_rect(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1, int a) {
-    for (int y = y0 < 0 ? 0 : y0; y < y1 && y < h; y++)
-        for (int x = x0 < 0 ? 0 : x0; x < x1 && x < w; x++) blend(&fb[y * w + x], 0x000000, a);
+    (void)w; (void)h;
+    int X0 = (int)(x0 * g_ui), Y0 = (int)(y0 * g_ui), X1 = (int)(x1 * g_ui), Y1 = (int)(y1 * g_ui);
+    for (int y = Y0 < 0 ? 0 : Y0; y < Y1 && y < g_fbh; y++)
+        for (int x = X0 < 0 ? 0 : X0; x < X1 && x < g_fbw; x++) blend(&fb[y * g_fbw + x], 0x000000, a);
 }
 
 /* ================================================================== fps counter */
@@ -346,7 +360,7 @@ static void options_read(void) {
  * letters, so the Italian texts avoid them. */
 enum { T_START, T_OPTIONS, T_CREDITS, T_QUIT, T_GAME, T_SOUND, T_DISPLAY, T_BACK, T_WINDOW, T_FULLSCREEN,
        T_SHOW_FPS, T_OFF, T_ON, T_LOADING, T_APPLYING, T_ORIGINAL_GAME, T_RECOMPILATION, T_VOODOO,
-       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_COUNT };
+       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_RESOLUTION, T_COUNT };
 static const char *const k_text[T_COUNT][2] = {
     { "START GAME", "INIZIA PARTITA" }, { "OPTIONS", "OPZIONI" }, { "CREDITS", "RICONOSCIMENTI" },
     { "QUIT", "ESCI" }, { "GAME", "GIOCO" }, { "SOUND", "AUDIO" }, { "DISPLAY", "SCHERMO" },
@@ -355,7 +369,7 @@ static const char *const k_text[T_COUNT][2] = {
     { "APPLYING SETTINGS", "APPLICAZIONE IMPOSTAZIONI" }, { "ORIGINAL GAME", "GIOCO ORIGINALE" },
     { "STATIC RECOMPILATION", "RICOMPILAZIONE STATICA" }, { "VOODOO GRAPHICS CORE", "GRAFICA VOODOO" },
     { "PRESS START TO GO BACK", "PREMI START PER TORNARE" }, { "PAUSE", "PAUSA" },
-    { "RESUME", "RIPRENDI" }, { "MAIN MENU", "MENU PRINCIPALE" },
+    { "RESUME", "RIPRENDI" }, { "MAIN MENU", "MENU PRINCIPALE" }, { "RESOLUTION", "RISOLUZIONE" },
 };
 
 static int menu_language(void) {
@@ -447,7 +461,7 @@ int enh_quit_requested(void) { return g_quit; }
 /* the rows of an options page: game options of that page, or the port options (DISPLAY) */
 static int page_rows(int page, int *rows) {
     int n = 0;
-    if (page == PAGE_DISPLAY) { rows[n++] = -1; rows[n++] = -2; return n; }
+    if (page == PAGE_DISPLAY) { rows[n++] = -1; rows[n++] = -3; rows[n++] = -2; return n; }
     for (int i = 0; i < g_n_game_options; i++)
         if (k_game_options[i].page == page) rows[n++] = i;
     return n;
@@ -456,6 +470,7 @@ static int page_rows(int page, int *rows) {
 static void page_change(int row, int dir) {
     if (row == -1) { g_set.fullscreen = !g_set.fullscreen; settings_save(); return; }
     if (row == -2) { g_set.show_fps = !g_set.show_fps; settings_save(); return; }
+    if (row == -3) { g_set.scale = g_set.scale == 1 ? 2 : 1; voodoo_set_scale(g_set.scale); settings_save(); return; }
     const GameOption *o = &k_game_options[row];
     int v = g_opt_value[row] + dir, span = o->max - o->min + 1;
     g_opt_value[row] = o->min + ((v - o->min) % span + span) % span;
@@ -570,6 +585,11 @@ static void draw_menu(uint32_t *fb, int w, int h);
 
 void enh_draw_overlay(uint32_t *fb, int w, int h) {
     if (!g_enhanced) return;
+    g_fbw = w;
+    g_fbh = h;
+    g_ui = w >= 1024 ? (float)w / 512.0f : 1.0f;    /* lay out in 512-wide logical units */
+    w = (int)(w / g_ui + 0.5f);
+    h = (int)(h / g_ui + 0.5f);
     if (enh_turbo()) {                               /* booting or applying: cover it all */
         dim_rect(fb, w, h, 0, 0, w, h, 255);
         draw_centered(fb, w, h, FONT_MEDIUM, h / 2 - font_height(FONT_MEDIUM) / 2, T(g_apply == 1 || g_apply == 2 ? T_APPLYING : T_LOADING), 0xffffff);
@@ -627,6 +647,7 @@ static void draw_menu(uint32_t *fb, int w, int h) {
             char buf[64];
             if (rows[i] == -1) { label = T(T_DISPLAY); value = T(g_set.fullscreen ? T_FULLSCREEN : T_WINDOW); }
             else if (rows[i] == -2) { label = T(T_SHOW_FPS); value = T(g_set.show_fps ? T_ON : T_OFF); }
+            else if (rows[i] == -3) { label = T(T_RESOLUTION); value = g_set.scale == 2 ? "2X" : "1X"; }
             else {
                 const GameOption *o = &k_game_options[rows[i]];
                 label = lang ? o->label_it : o->label_en;

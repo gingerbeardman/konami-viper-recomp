@@ -13,6 +13,18 @@
 
 #pragma once
 
+// recomp debug (RT_VOODOO_FBSTATS=1): how the game uses the framebuffer, for the resolution study
+#include <set>
+#include <unordered_map>
+#include <vector>
+struct voodoo_fbstats
+{
+	unsigned long long pkt[8] = {}, p5_space[4] = {}, blit[16] = {}, lfb_read_mb[16] = {}, lfb_write_mb[16] = {};
+	unsigned p5_min[4] = { ~0u, ~0u, ~0u, ~0u }, p5_max[4] = {};
+	std::set<unsigned> colbuf, auxbuf;
+};
+extern voodoo_fbstats g_fbstats;
+
 #include "screen.h"
 
 
@@ -479,6 +491,16 @@ protected:
 	voodoo_1_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, u32 clock, voodoo::voodoo_model model);
 
 public:
+	// recomp: render the displayed colour buffers at N times the resolution (applied at the next
+	// buffer swap); hires_frame() gives the last scaled picture, if the front buffer had one
+	void set_render_scale(int n) { m_hires_pending = n < 1 ? 1 : n > 4 ? 4 : n; }
+	int render_scale() const { return m_hires_scale; }
+	bool hires_frame(u32 const *&pix, int &w, int &h) const
+	{
+		if (!m_hires_out_valid) return false;
+		pix = m_hires_out.data(); w = m_hires_out_w; h = m_hires_out_h;
+		return true;
+	}
 	// recomp debug: raw framebuffer/texture memory (RT_VOODOO_VRAMDUMP)
 	u8 const *debug_fbram() const { return m_fbram; }
 	u32 debug_fbsize() const { return m_fbmask + 1; }
@@ -641,7 +663,17 @@ protected:
 	bool m_flush_flag;                       // true if we are currently flushing FIFOs
 
 	// allocated memory
-	u8 *m_fbram;                             // pointer to aligned framebuffer
+	u8 *m_fbram;
+	// recomp: scaled render targets, keyed by the VRAM byte offset of a displayed colour buffer
+	u16 *hires_target(u16 const *native);
+	void hires_scale_poly(voodoo::poly_data &poly, voodoo::voodoo_renderer::vertex_t *vert);
+	int m_hires_scale = 1, m_hires_pending = 1;
+	std::unordered_map<u32, std::vector<u16>> m_hires;
+	std::set<u32> m_hires_displayed;
+	std::vector<u16> m_hires_aux;
+	std::vector<u32> m_hires_out;
+	int m_hires_out_w = 0, m_hires_out_h = 0;
+	bool m_hires_out_valid = false;                             // pointer to aligned framebuffer
 	u32 m_fbmask;                            // mask to apply to pointers
 	std::unique_ptr<u8[]> m_memory;          // allocated framebuffer/texture memory
 	std::unique_ptr<voodoo::shared_tables> m_shared; // shared tables

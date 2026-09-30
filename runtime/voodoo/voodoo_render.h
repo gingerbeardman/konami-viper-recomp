@@ -416,7 +416,10 @@ struct poly_data
 	u16 clipleft, clipright;    // x clipping
 	u16 cliptop, clipbottom;    // y clipping
 
-	s16 ax, ay;                 // vertex A x,y (12.4)
+	s32 ax, ay;                 // vertex A x,y (12.4); s32 for the scaled coordinates
+	u32 rowpixels;              // destination stride in pixels (recomp: scaled render targets)
+	s32 yorigin;                // Y origin for fbzMode.y_origin (recomp: scaled render targets)
+	s32 bufwidth, bufheight;    // recomp: size of a scaled render target (0: native VRAM)
 	s32 startr, startg, startb, starta; // starting R,G,B,A (12.12)
 	s32 startz;                 // starting Z (20.12)
 	s64 startw;                 // starting W (16.32)

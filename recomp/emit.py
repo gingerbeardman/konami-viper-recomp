@@ -3,6 +3,8 @@ import os
 
 # debug probes: RECOMP_PROBES=addr,addr inserts a TRACE point (breakpoint-capable) before those insns
 PROBES = {int(x, 16) for x in os.environ.get('RECOMP_PROBES', '').split(',') if x}
+# debug: RECOMP_CYCLE_SCALE=k charges k cycles per instruction (a k times slower CPU)
+CYCLE_SCALE = int(os.environ.get('RECOMP_CYCLE_SCALE', '1'))
 
 
 def mask32(mb, me):
@@ -137,7 +139,7 @@ class Emitter:
                 self.out.append(f"  L_{a:08x}:")
                 self.w(f"TRACE(c, {h(a)});")
             if a in blen:
-                self.w(f"c->budget -= {blen[a]};")
+                self.w(f"c->budget -= {blen[a] * CYCLE_SCALE};")
             if i is None:
                 self.w(f"rt_bad_insn(c, {h(a)}, {h(self.mod.word(a))}); return;")
                 continue

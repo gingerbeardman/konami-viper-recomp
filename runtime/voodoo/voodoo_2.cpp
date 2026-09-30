@@ -95,6 +95,7 @@ u32 command_fifo::execute_if_ready()
 
 		// read the next command and handle it based on the low 3 bits
 		u32 command = read_next();
+		g_fbstats.pkt[BIT(command, 0, 3)]++;
 		u32 cycles = (this->*s_packet_handler[BIT(command, 0, 3)])(command);
 
 		// if the number of cycles is non-zero, return
@@ -572,6 +573,12 @@ u32 command_fifo::packet_type_5(u32 command)
 	//    2  31:0  = Data word
 	u32 count = BIT(command, 3, 19);
 	u32 target = read_next() / 4;
+	{
+		unsigned sp = BIT(command, 30, 2);
+		g_fbstats.p5_space[sp]++;
+		g_fbstats.p5_min[sp] = std::min<unsigned>(g_fbstats.p5_min[sp], target * 4);
+		g_fbstats.p5_max[sp] = std::max<unsigned>(g_fbstats.p5_max[sp], (target + count) * 4);
+	}
 
 	// handle LFB writes
 	switch (BIT(command, 30, 2))

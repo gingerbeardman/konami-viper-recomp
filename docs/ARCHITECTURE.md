@@ -449,6 +449,69 @@ An optional layer on top of the faithful port, in development. Everything is gat
     `RT_ENH_MENU="seconds:up|down|ok|back,…"` drives the menu in headless tests, and
     `RT_ENH_LOG=1` logs the attract/game transitions.
 
+## 5b. Research: frame rate and rendering resolution
+
+**Frame rate.**
+- **The game paces itself.** It sends `swapbufferCMD` with vsync off and interval 0, about every
+  34 ms, so its own main loop sets the 30 fps: one frame every two vblanks of the ~57.5 Hz
+  display. The idle part of that loop takes about 64% of the CPU in a race (`0x45E1C` in GTI
+  Club 2 JAB, found with `RT_PROFILE`).
+- **The logic steps per frame.** A build with a CPU three times slower (`RECOMP_CYCLE_SCALE=3`)
+  runs at 14–19 fps, and the race slows down with it: the lap time advanced 5.3 s in 10 emulated
+  seconds. Only the countdown follows real time, because it counts vblanks.
+- **So 60 fps is not realistic.** Running the frame loop every vblank would run the whole game at
+  double speed, unless every per-frame constant of the physics were found and halved. Frame
+  interpolation would need a geometry-level (GPU) backend.
+
+**Rendering resolution** (`RT_VOODOO_FBSTATS=1`, 90 s of attract and race).
+- **No read-back.** Framebuffer reads are only the boot-time VRAM test. The writes through BAR1
+  are the command FIFO (VRAM 0x6xxxxx) and texture uploads.
+- **GTI Club 2** draws only into two colour buffers (`0x6DE000`, `0x73E000`, double buffering)
+  and uses no 2D engine.
+- **Thrill Drive 2** also draws into three off-screen colour buffers (`0x4000`, `0x8000`,
+  `0x15B000`), probably textures it renders itself (the rear-view mirror). It uses the 2D engine:
+  about 80,000 screen-to-screen blits, which MAME's core leaves unimplemented (`TODO`), and about
+  3 million host-to-screen blits.
+- **Triangle setup.** Most triangles come through the setup engine (CMDFIFO packet type 3), which
+  derives the gradients from the vertices. Scaling the vertex coordinates by N therefore renders
+  the same scene at N× resolution.
+- **Approach.** Render the main colour and depth buffers into larger shadow buffers, with scaled
+  vertices, clip rectangles and fast fills, and scan out the shadow buffer. TD2's off-screen
+  targets and blits need care.
+- **Cost.** About N² in the rasteriser, which takes ~80% of the host time. At 2× that is roughly
+  2× real time on Apple Silicon; 3× is borderline.
+
+**Implemented: scaled render targets** (enhanced mode, DISPLAY → RESOLUTION, 1X = 512×384 or
+2X = 1024×768; `render_scale` in the settings file). The Voodoo core supports N = 1–4; the menu offers
+1 and 2.
+- **Which buffers.** A colour buffer that has been displayed (`update_common` records the front
+  buffer) gets a render target N× wider and taller in host memory, with its own depth buffer.
+  TD2's off-screen targets, which it uses as textures (the rear-view mirror), are never displayed
+  and stay in VRAM at the native resolution; they keep working.
+- **Drawing.** Triangles and fast fills aimed at a scaled target (`hires_scale_poly`) get their
+  vertices, start position (`ax`, `ay`, now 32-bit) and clip rectangle scaled by N, and every
+  per-pixel gradient (colour, Z, W, S, T) divided by N.
+  - The start values move by −(N−1)/2N native pixel, so the N sub-pixels are centred on the
+    native sample. Without it, the right edge of HUD sprites sampled past their last texel and
+    wrapped to the other side of the texture (a one-pixel line next to TD2's rev counter).
+  - `poly_data` now carries the stride, the Y origin and the buffer size per polygon. Scaled
+    polygons get a clip rectangle equal to their buffer.
+- **Timing.** The triangle and fast-fill costs returned to the emulated pipeline are divided
+  by N², so the emulated timing is that of the native picture. The first version did not, and
+  GTI Club 2 crashed in the race when the Voodoo looked four times slower.
+- **Display.** The display converts the scaled front buffer (`hires_frame`), and the bridge
+  publishes that picture instead of the native one.
+- **Overlay.** The enhanced-mode overlay is laid out in logical 512×384 units and drawn at the
+  frame's scale (`g_ui`).
+- **Scale changes** take effect at the next buffer swap; the scaled buffers are dropped.
+- **Checked.**
+  - The default mode is bit-identical to the previous build: 91 TD2 and 90 GTI Club 2 frames
+    compared over attract and race.
+  - Speed: 70 emulated seconds take 15.7 s at 2× on GTI Club 2 and 20.6 s on TD2, against
+    about 7 s at 1×.
+  - TD2's 2D host-to-screen blits and the unimplemented screen-to-screen blits still act on VRAM
+    only. No missing element was seen at 2×, but this was not checked in depth.
+
 ## 6. Current status (2026-09-29)
 
 Thrill Drive 2 is working:

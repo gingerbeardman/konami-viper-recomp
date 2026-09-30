@@ -17,6 +17,7 @@ void rt_frame_published(uint64_t count, const uint32_t *pix, int w, int h);
 }
 
 namespace emu_shim { bool g_log_enabled = false; }
+voodoo_fbstats g_fbstats;
 
 // ------------------------------------------------------------------ shim singletons
 static running_machine s_machine;
@@ -138,9 +139,21 @@ void publish_frame()
 		s_bitmap.allocate(vis.max_x + 1, vis.max_y + 1);
 	s_dev->update(s_bitmap, vis);
 	std::lock_guard<std::mutex> lock(s_frame_lock);
-	s_frame.resize(size_t(w) * h);
-	for (int y = 0; y < h; y++)
-		memcpy(&s_frame[size_t(y) * w], &s_bitmap.pix(vis.min_y + y, vis.min_x), size_t(w) * 4);
+	u32 const *hires;
+	int hw, hh;
+	if (s_dev->hires_frame(hires, hw, hh))
+	{
+		// the front buffer was rendered at a higher resolution: publish that picture
+		s_frame.assign(hires, hires + size_t(hw) * hh);
+		w = hw;
+		h = hh;
+	}
+	else
+	{
+		s_frame.resize(size_t(w) * h);
+		for (int y = 0; y < h; y++)
+			memcpy(&s_frame[size_t(y) * w], &s_bitmap.pix(vis.min_y + y, vis.min_x), size_t(w) * 4);
+	}
 	s_frame_w = w;
 	s_frame_h = h;
 	s_frame_count++;
@@ -168,6 +181,7 @@ void publish_frame()
 
 extern "C" {
 
+static int s_scale = 1;          /* kept for voodoo_init when set before the device exists */
 void voodoo_init(void)
 {
 	emu_shim::g_log_enabled = getenv("RT_VOODOO_LOG") != nullptr;
@@ -177,6 +191,7 @@ void voodoo_init(void)
 	s_dev = std::make_unique<viper_voodoo>(clk);
 	s_machine.m_root = s_dev.get();
 	s_dev->set_fbmem(8);              // as MAME viper.cpp (TODO there: should be 16)
+	s_dev->set_render_scale(s_scale);
 	s_dev->set_status_cycles(getenv("RT_VOODOO_STATUS_CYCLES") ? u32(atoi(getenv("RT_VOODOO_STATUS_CYCLES"))) : 1000);
 	s_dev->vblank_callback().set([](int state) {
 		if (state) {
@@ -203,8 +218,11 @@ void voodoo_reg_write(uint32_t off, uint32_t v, uint32_t mask)
 	else if (off >= 0x200000 && off < 0x600000) s_regcount[2][(off >> 2) & 0xff]++;
 	s_dev->write(off >> 2, v, mask);
 }
-uint32_t voodoo_lfb_read(uint32_t off) { s_lfb_reads++; return s_dev->read_lfb(off >> 2); }
-void voodoo_lfb_write(uint32_t off, uint32_t v, uint32_t mask) { s_lfb_writes++; s_dev->write_lfb(off >> 2, v, mask); }
+/* recomp: render the displayed buffers at n times the resolution (1 = native), from the next frame */
+void voodoo_set_scale(int n) { s_scale = n; if (s_dev) s_dev->set_render_scale(n); }
+
+uint32_t voodoo_lfb_read(uint32_t off) { s_lfb_reads++; g_fbstats.lfb_read_mb[(off >> 20) & 15]++; return s_dev->read_lfb(off >> 2); }
+void voodoo_lfb_write(uint32_t off, uint32_t v, uint32_t mask) { s_lfb_writes++; g_fbstats.lfb_write_mb[(off >> 20) & 15]++; s_dev->write_lfb(off >> 2, v, mask); }
 uint32_t voodoo_io_read(uint32_t off) { return s_dev->read_io(off >> 2); }
 void voodoo_io_write(uint32_t off, uint32_t v, uint32_t mask) { s_dev->write_io(off >> 2, v, mask); }
 
@@ -223,6 +241,18 @@ void voodoo_stats(void)
 {
 	rt_log("  voodoo frames published: %llu (last %dx%d)\n", (unsigned long long)s_frame_count, s_frame_w, s_frame_h);
 	rt_log("  voodoo lfb writes=%llu reads=%llu\n", (unsigned long long)s_lfb_writes, (unsigned long long)s_lfb_reads);
+	if (getenv("RT_VOODOO_FBSTATS"))
+	{
+		auto &f = g_fbstats;
+		rt_log("  fbstats cmdfifo packets: t0=%llu t1=%llu t2=%llu t3=%llu t4=%llu t5=%llu\n", f.pkt[0], f.pkt[1], f.pkt[2], f.pkt[3], f.pkt[4], f.pkt[5]);
+		for (int k = 0; k < 4; k++)
+			if (f.p5_space[k]) rt_log("  fbstats packet5 space %d: %llu, %08x-%08x\n", k, f.p5_space[k], f.p5_min[k], f.p5_max[k]);
+		for (int k = 0; k < 16; k++)
+			if (f.blit[k]) rt_log("  fbstats 2D blit cmd %d: %llu\n", k, f.blit[k]);
+		for (int k = 0; k < 16; k++)
+			if (f.lfb_read_mb[k] || f.lfb_write_mb[k]) rt_log("  fbstats LFB MB %x: reads %llu writes %llu\n", k, f.lfb_read_mb[k], f.lfb_write_mb[k]);
+		for (unsigned a : f.colbuf) rt_log("  fbstats colBufferAddr %08x\n", a);
+	}
 	for (int i = 0; i < 64; i++)
 		if (s_wcount[i]) rt_log("  voodoo BAR0 region %07x: %llu writes\n", i << 19, (unsigned long long)s_wcount[i]);
 	static const char *const nm[3] = {"cmd", "2d", "3d"};

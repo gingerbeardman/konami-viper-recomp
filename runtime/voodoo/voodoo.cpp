@@ -2321,9 +2321,16 @@ u32 voodoo_1_device::reg_fastfill_w(u32 chipmask, u32 regnum, u32 data)
 	poly.clipbottom = m_reg.clip_bottom();
 	poly.color1 = m_reg.color1().argb();
 	poly.zacolor = m_reg.za_color();
+	poly.rowpixels = m_renderer->rowpixels();
+	poly.yorigin = m_renderer->yorigin();
+	poly.bufwidth = poly.bufheight = 0;
+	hires_scale_poly(poly, nullptr);
 
-	// 2 pixels per clock
-	return m_renderer->enqueue_fastfill(poly) / 2;
+	// 2 pixels per clock (native pixels: a scaled target keeps the native timing)
+	u32 pixels = m_renderer->enqueue_fastfill(poly);
+	if (poly.bufwidth)
+		pixels /= m_hires_scale * m_hires_scale;
+	return pixels / 2;
 }
 
 
@@ -2337,6 +2344,12 @@ u32 voodoo_1_device::reg_swapbuffer_w(u32 chipmask, u32 regnum, u32 data)
 	m_vblank_swap_pending = true;
 	m_vblank_swap = BIT(data, 1, 8);
 	m_vblank_dont_swap = BIT(data, 9);
+	{	// recomp debug: RT_VOODOO_SWAP_INTERVAL=n forces the swap interval (vblanks per swap)
+		static int forced = -2, logged;
+		if (forced == -2) { const char *e = getenv("RT_VOODOO_SWAP_INTERVAL"); forced = e ? atoi(e) : -1; }
+		if (logged < 8 && getenv("RT_VOODOO_TEXLOG")) { logged++; rt_log("swapbufferCMD data=%08x (interval %u, vsync %u)\n", data, m_vblank_swap, BIT(data, 0)); }
+		if (forced >= 0) m_vblank_swap = forced;
+	}
 
 	// if we're not syncing to the retrace, process the command immediately
 	if (!BIT(data, 0))
@@ -2609,6 +2622,8 @@ void voodoo_1_device::vblank_stop(s32 param)
 //  cases this comes at VBLANK time
 //-------------------------------------------------
 
+extern "C" void rt_log(const char *fmt, ...);
+
 // recomp: count of buffer swaps, i.e. frames the game actually drew (fps counter)
 unsigned long long g_voodoo_swaps;
 extern "C" unsigned long long voodoo_swap_count(void) { return g_voodoo_swaps; }
@@ -2616,6 +2631,15 @@ extern "C" unsigned long long voodoo_swap_count(void) { return g_voodoo_swaps; }
 void voodoo_1_device::swap_buffers()
 {
 	g_voodoo_swaps++;
+	if (m_hires_pending != m_hires_scale)
+	{
+		// a new render scale starts with the next frame; the old buffers are dropped
+		m_renderer->wait("render scale");
+		m_hires_scale = m_hires_pending;
+		m_hires.clear();
+		m_hires_aux.clear();
+		m_hires_out_valid = false;
+	}
 	if (LOG_VBLANK_SWAP)
 		logerror("--- swap_buffers @ %d\n", screen().vpos());
 
@@ -2713,6 +2737,34 @@ int voodoo_1_device::update_common(bitmap_rgb32 &bitmap, const rectangle &clipre
 	// copy from the current front buffer
 	u32 rowpixels = m_renderer->rowpixels();
 	u16 *buffer_base = draw_buffer(drawbuf);
+
+	// recomp: remember which colour buffers are displayed (those get scaled render targets),
+	// and if the front one has been rendered scaled, convert that picture as well
+	{
+		u32 off = u32((u8 *)buffer_base - m_fbram);
+		if (m_hires_displayed.size() < 8) m_hires_displayed.insert(off);
+		auto it = m_hires_scale > 1 ? m_hires.find(off) : m_hires.end();
+		m_hires_out_valid = false;
+		if (it != m_hires.end())
+		{
+			s32 const n = m_hires_scale, hrow = s32(rowpixels) * n;
+			s32 const w = (cliprect.max_x - cliprect.min_x + 1) * n, h = (cliprect.max_y - cliprect.min_y + 1) * n;
+			s32 const rows = s32(it->second.size() / hrow);
+			m_hires_out.resize(size_t(w) * h);
+			for (s32 y = 0; y < h; y++)
+			{
+				s32 const sy = cliprect.min_y * n + y - m_yoffs * n;
+				u32 *dst = &m_hires_out[size_t(y) * w];
+				if (sy < 0 || sy >= rows) { std::fill(dst, dst + w, 0); continue; }
+				u16 const *src = &it->second[size_t(sy) * hrow + cliprect.min_x * n - m_xoffs * n];
+				for (s32 x = 0; x < w; x++)
+					dst[x] = pens[src[x]];
+			}
+			m_hires_out_w = w;
+			m_hires_out_h = h;
+			m_hires_out_valid = true;
+		}
+	}
 	if (LOG_VBLANK_SWAP) logerror("--- update_common %d-%d @ %d from %08X\n", cliprect.min_y, cliprect.max_y, screen().vpos(), u32((u8 *)buffer_base - m_fbram));
 	for (s32 y = cliprect.min_y; y <= cliprect.max_y; y++)
 	{
@@ -2890,6 +2942,81 @@ void voodoo_1_device::recompute_video_memory_common(u32 config, u32 rowpixels)
 //  triangle - execute the 'triangle' command
 //-------------------------------------------------
 
+//-------------------------------------------------
+//  recomp: scaled render targets
+//
+//  A colour buffer that has been displayed gets a render target N times wider and taller,
+//  with its own depth buffer; triangles and fast fills aimed at it are drawn there with the
+//  coordinates, start position and clip rectangle scaled by N and the per-pixel gradients
+//  divided by N, and the display scans it out. Buffers the game never displays (off-screen
+//  targets it uses as textures) stay in VRAM at the native resolution.
+//-------------------------------------------------
+
+static constexpr u32 HIRES_NATIVE_ROWS = 512;   // native rows covered (the display uses 384)
+
+u16 *voodoo_1_device::hires_target(u16 const *native)
+{
+	if (m_hires_scale <= 1)
+		return nullptr;
+	u32 const off = u32((u8 const *)native - m_fbram);
+	if (!m_hires_displayed.count(off))
+		return nullptr;
+	size_t const size = size_t(m_renderer->rowpixels()) * m_hires_scale * HIRES_NATIVE_ROWS * m_hires_scale;
+	auto &buf = m_hires[off];
+	if (buf.size() != size || m_hires_aux.size() != size)
+	{
+		m_renderer->wait("hires alloc");
+		if (buf.size() != size) buf.assign(size, 0);
+		if (m_hires_aux.size() != size) m_hires_aux.assign(size, 0xffff);
+	}
+	return buf.data();
+}
+
+void voodoo_1_device::hires_scale_poly(voodoo::poly_data &poly, voodoo::voodoo_renderer::vertex_t *vert)
+{
+	u16 *target = hires_target(poly.destbase);
+	if (target == nullptr)
+		return;
+	s32 const n = m_hires_scale;
+	poly.destbase = target;
+	poly.depthbase = m_hires_aux.data();
+	poly.rowpixels = m_renderer->rowpixels() * n;
+	poly.yorigin = (m_renderer->yorigin() + 1) * n - 1;
+	poly.bufwidth = s32(poly.rowpixels);
+	poly.bufheight = s32(HIRES_NATIVE_ROWS) * n;
+	poly.clipleft = u16(std::min<s32>(poly.clipleft * n, poly.bufwidth));
+	poly.clipright = u16(std::min<s32>(poly.clipright * n, poly.bufwidth));
+	poly.cliptop = u16(std::min<s32>(poly.cliptop * n, poly.bufheight));
+	poly.clipbottom = u16(std::min<s32>(poly.clipbottom * n, poly.bufheight));
+	if (vert == nullptr)
+		return;                                 // fast fill: only the area changes
+
+	// same triangle, N times larger: positions scale up, gradients per pixel scale down
+	poly.ax *= n;
+	poly.ay *= n;
+	for (int i = 0; i < 3; i++)
+	{
+		vert[i].x *= float(n);
+		vert[i].y *= float(n);
+	}
+	// The Voodoo samples at the top-left corner of a pixel; the N scaled pixels of a native one
+	// would sample up to (N-1)/N of a pixel further. Centre them on the native sample instead
+	// (a shift of -(N-1)/2N native pixel in X and Y), so a sprite edge does not reach past its
+	// last texel into the wrapped-around one.
+	auto centre = [n](auto &start, auto ddx, auto ddy) { start -= (ddx + ddy) * (n - 1) / (2 * n); };
+	centre(poly.startr, poly.drdx, poly.drdy); centre(poly.startg, poly.dgdx, poly.dgdy);
+	centre(poly.startb, poly.dbdx, poly.dbdy); centre(poly.starta, poly.dadx, poly.dady);
+	centre(poly.startz, poly.dzdx, poly.dzdy); centre(poly.startw, poly.dwdx, poly.dwdy);
+	centre(poly.starts0, poly.ds0dx, poly.ds0dy); centre(poly.startt0, poly.dt0dx, poly.dt0dy);
+	centre(poly.startw0, poly.dw0dx, poly.dw0dy); centre(poly.starts1, poly.ds1dx, poly.ds1dy);
+	centre(poly.startt1, poly.dt1dx, poly.dt1dy); centre(poly.startw1, poly.dw1dx, poly.dw1dy);
+	poly.drdx /= n; poly.dgdx /= n; poly.dbdx /= n; poly.dadx /= n; poly.dzdx /= n; poly.dwdx /= n;
+	poly.drdy /= n; poly.dgdy /= n; poly.dbdy /= n; poly.dady /= n; poly.dzdy /= n; poly.dwdy /= n;
+	poly.ds0dx /= n; poly.dt0dx /= n; poly.dw0dx /= n; poly.ds0dy /= n; poly.dt0dy /= n; poly.dw0dy /= n;
+	poly.ds1dx /= n; poly.dt1dx /= n; poly.dw1dx /= n; poly.ds1dy /= n; poly.dt1dy /= n; poly.dw1dy /= n;
+}
+
+
 s32 voodoo_1_device::triangle()
 {
 	auto profile = g_profiler.start(PROFILER_USER2);
@@ -2906,6 +3033,9 @@ s32 voodoo_1_device::triangle()
 	poly.clipright = m_reg.clip_right();
 	poly.cliptop = m_reg.clip_top();
 	poly.clipbottom = m_reg.clip_bottom();
+	poly.rowpixels = m_renderer->rowpixels();
+	poly.yorigin = m_renderer->yorigin();
+	poly.bufwidth = poly.bufheight = 0;
 
 	// fill in triangle parameters
 	poly.ax = m_reg.ax();
@@ -3016,8 +3146,14 @@ s32 voodoo_1_device::triangle()
 	vert[2].x = float(m_reg.cx()) * (1.0f / 16.0f);
 	vert[2].y = float(m_reg.cy()) * (1.0f / 16.0f);
 
-	// enqueue a triangle
+	// recomp: a displayed colour buffer may be rendered at a higher resolution
+	hires_scale_poly(poly, vert);
+
+	// enqueue a triangle; a scaled target draws N^2 more pixels, but the emulated timing must
+	// stay that of the native triangle
 	s32 pixels = m_renderer->enqueue_triangle(poly, vert);
+	if (poly.bufwidth)
+		pixels /= m_hires_scale * m_hires_scale;
 
 	// update stats
 	m_reg.add(voodoo_regs::reg_fbiTrianglesOut, 1);

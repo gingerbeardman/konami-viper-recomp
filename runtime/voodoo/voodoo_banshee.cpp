@@ -1370,6 +1370,7 @@ u32 voodoo_banshee_device::reg_colbufbase_w(u32 chipmask, u32 regnum, u32 data)
 	{
 		m_reg.write(regnum, data);
 		m_rgboffs[1] = data & m_fbmask & ~0x0f;
+		if (g_fbstats.colbuf.size() < 64) g_fbstats.colbuf.insert(m_rgboffs[1]);
 	}
 	return 0;
 }
@@ -1561,6 +1562,7 @@ u32 voodoo_banshee_device::cmdfifo_2d_w(u32 offset, u32 data)
 
 void voodoo_banshee_device::execute_blit(u32 data)
 {
+	g_fbstats.blit[m_blt_cmd & 15]++;
 	switch (m_blt_cmd)
 	{
 		case 0:         // NOP - wait for idle
