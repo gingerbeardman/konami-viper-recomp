@@ -71,6 +71,7 @@ build with the same Makefile but has not been tested yet. Windows is not support
 
 Technical details (boot chain, file formats, recompiler and runtime design) are in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The changes between versions are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Required files
 
@@ -193,6 +194,37 @@ every 60 seconds and on exit.
 
 The environment variables for debugging are described in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+### Enhanced mode (in development)
+
+```sh
+./td2 --enhanced
+```
+
+An optional mode that makes the port behave more like a PC game. The default mode stays the
+faithful arcade version.
+- **Free play:** set automatically on first launch, after the calibration. The "FREE PLAY"
+  and "PRESS START BUTTON" captions are hidden, and START begins a game without coins.
+- **No TEST MODE:** the Test and Service keys are ignored.
+- **Separate saves:** the enhanced mode keeps its own NVRAM (`<executable>_enhanced_nvram.bin`),
+  so it never changes the settings of the default mode. Delete that file to set it up again.
+- **Availability:** Thrill Drive 2 EBB and GTI Club 2 JAB and EAA.
+- **Attract menu:** START GAME, OPTIONS, CREDITS, QUIT, drawn with the game's own font. Use the
+  arrow keys and Enter (or 1) on the keyboard, or the d-pad and A or Start on a gamepad.
+- **Options**, on three pages. Left and right change a value.
+  - **Game:** the difficulty of each course, and the language (English or Italian).
+  - **Sound:** attract sound, music in game, music and effects volume.
+  - **Display:** window or fullscreen (F11 also switches it), and an fps counter.
+- **Saving:** game and sound options are the game's own TEST MODE settings, stored in its NVRAM.
+  The game reads them only at boot, so on leaving OPTIONS it restarts, which takes a few
+  seconds. Display options are saved in `<executable>_settings.ini` (`--settings FILE` to use
+  another file).
+- **Pause:** Esc (or the gamepad's Guide button) during a game pauses it, with RESUME and MAIN
+  MENU. MAIN MENU brings the game back to the attract mode in a few seconds, behind the loading
+  screen. In the attract menu, Esc goes back from a submenu, and quits from the main menu.
+- **Menu language:** the menus follow the language chosen in the game.
+- **Fast boot:** the game boots at full speed, muted, behind a LOADING screen, until the
+  attract mode starts.
 
 ## Repository layout
 

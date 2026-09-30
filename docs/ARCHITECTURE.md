@@ -53,6 +53,16 @@ The profile fields:
   and `handbrake`.
 - **`calibration`:** the scripted first-run calibration (`RT_INPUT` syntax) and its length in
   emulated seconds, or `null`.
+- **`enhanced`:** data for the enhanced mode (section 5a), or `null` where it is not
+  available (the unverified versions):
+  - `setup`: a scripted TEST MODE pass run on first launch after the calibration;
+  - `blank_strings`: game strings to empty in RAM (`addr`, `text`);
+  - `hooks`: `{module: {"0xADDR": name}}`. The recompiler inserts `rt_hook(c, addr)` before the
+    instruction at each address; `GAME_ENH_HOOK_<NAME>` gives the runtime the address;
+  - `font`: the game font for the menus. `file` is in `work/<id>/fs/`. `pages` lists the offsets
+    of A8 textures in that file (`width` × `page_height`), stacked vertically into one atlas.
+    `sizes.large|medium|small` each give a `cell` grid, a `scale` and `rows` as
+    `[y, characters]`, where a space marks an unused cell.
 
 `recomp.py` turns the profile into `generated/<id>/game_config.h` (`GAME_*` macros). The runtime
 is compiled once per game against it; there is no runtime game switch. The unverified profiles
@@ -334,6 +344,111 @@ FFE00000 UART, FFE10000 I/O, FFE30000 NVRAM, FFE70000 DS2430, FFE98000 LANC
 FFF00000-FFF3FFFF  BIOS
 ```
 
+## 5a. Enhanced mode (`--enhanced`, `runtime/enhanced.c`)
+
+An optional layer on top of the faithful port, in development. Everything is gated on
+`g_enhanced`, and the default mode is unchanged.
+- **NVRAM:** the mode keeps its own NVRAM, `<binary>_enhanced_nvram.bin`.
+- **First launch:** when that file is missing, the calibration pass runs, followed by the
+  profile's `setup` pass. `run_scripted_pass()` chains the passes: each one loads the NVRAM
+  saved by the previous one.
+  - The setup of Thrill Drive 2 and GTI Club 2 is the same script: TEST MODE → COIN OPTIONS →
+    START on FREE PLAY, which toggles it directly (the menu then shrinks to FREE PLAY / FACTORY
+    SETTINGS / SAVE AND EXIT / EXIT) → two SHIFT UP → START on SAVE AND EXIT.
+  - Pressing START on FACTORY SETTINGS resets the coin options, so the cursor must skip it.
+- **Hidden captions:** `enh_on_frame()` runs at every published frame, on the guest thread. For
+  each `blank_strings` entry, if the RAM still holds the original text, it writes a NUL at the
+  first byte, so the game draws an empty string. The check repeats every frame, which also
+  covers a reload of the module.
+  - Thrill Drive 2: `0xB8EE8` "FREE PLAY".
+  - GTI Club 2 JAB: `0xBAEA0` "FREE PLAY", `0xC1B30` " PRESS START BUTTON".
+  - GTI Club 2 EAA: `0xBAEC0` "FREE PLAY", `0xC1B50` " PRESS START BUTTON".
+  - Only these exact strings are blanked. The TEST MODE strings ("PRESS START BUTTON =
+    CONTINUE", the FREE PLAY option name) and "PRESS START BUTTON TO DECIDE" are separate.
+  - `RT_ENH_BLANK="addr:text,…"` blanks extra strings at run time, to find new ones.
+- **TEST MODE locked:** the frontend does not pass Test and Service to the game. Scripted inputs
+  (`RT_INPUT`) still reach every port, so the setup passes and the tests keep working.
+- **Attract detection:** the hook `attract` sits on the free-play branch of the credit display.
+  That routine is shared by the games (TD2 `0x7DD40`, GTI Club 2 JAB `0x61B4C`, EAA `0x61B70`),
+  and the game calls it only while no game is in progress. It does not run during the Konami
+  logo (about 4 s), so the menu allows a 300-frame gap. A RAM diff between attract and play gave
+  no clean mode variable, which is why the hook is used instead.
+- **Attract menu** (Thrill Drive 2, GTI Club 2): START GAME, OPTIONS (GAME, SOUND, DISPLAY),
+  CREDITS, QUIT, in a compact panel at the lower left.
+  - The frontend draws it over the frame (`enh_draw_overlay`) with the game's own font, and
+    sends the actions (`enh_menu_action`). While the menu is on screen the game gets no input.
+  - START GAME holds START for 12 frames. This is done on the guest thread (`menu_tick`), so it
+    also works headless. The menu stays hidden until the game has started; if START is ignored,
+    it comes back after 4 s.
+  - The font is the A8 texture of the attract captions ("PRESS START BUTTON"). It sits in VRAM at
+    `0x6E400` and comes from `_unk/21ae0c7d.bin` at `0x6A0C0` (identical in JAB and EAA). It has
+    three sizes on fixed grids (24×40, 16×32, 12×24) with proportional glyphs, and holds only
+    uppercase letters and punctuation. `enh_init` measures the ink width of each glyph.
+  - Thrill Drive 2 uses its stencil font: two A8 textures (VRAM `0x6C000` and `0x7C000`), from
+    `_unk/76278279.bin` at `0x14` and `0x10024`. It is one size on a 32×48 grid, with digits,
+    A–Z, a few symbols and kanji, drawn at scales 0.85, 0.6 and 0.45 with bilinear sampling.
+  - Found by logging the textures used on the WARNING screen (`RT_VOODOO_TEXLOG=1`, which now
+    prints timestamps) and dumping the VRAM (`RT_VOODOO_VRAMDUMP=path:frame`).
+  - GTI Club 2's letters texture has no digits. The digits in the same style (the SELECT A CAR
+    countdown) are a second texture of the same file (VRAM `0x5E400`, file offset `0x5A0B4`), with
+    rows matching the three letter sizes; the profile loads it as a second page.
+- **Port settings:** `<binary>_settings.ini` next to the executable (`--settings FILE` to
+  override), with `fullscreen` and `show_fps`. These are options of the port, not of the game;
+  the game's settings stay in its NVRAM. The OPTIONS page edits them (left and right, or OK), and
+  the frontend applies the display mode. F11 also updates the setting.
+- **Game settings (NVRAM):** the TEST MODE options are a block of the NVRAM with a checksum.
+  The big-endian 16-bit words from `nvram_options.start` up to the checksum word, included, sum
+  to `0xFFFF`. The block is TD2 `0x88`–`0x125` and GTI Club 2 `0x84`–`0x121` (JAB and EAA); the
+  rule also holds on the dumped NVRAMs.
+  - The fields were found by changing one TEST MODE item at a time and diffing the saved NVRAM.
+    START steps a value; START held with SHIFT UP or SHIFT DOWN changes a volume.
+  - TD2 fields: difficulty `0x8F`/`0x90`/`0x91` (0–7); `0x88` bits 7–6 language (1 English,
+    2 Italian: JAPANESE is not offered by EBB), bit 5 speedometer, bit 2 record saving;
+    `0x89` currency; `0x94` bits 6–5 attract sound (0 all the time, 1 once every 4 cycles,
+    2 complete off) and bits 4–0 music volume (0–30); `0x95` bits 7–3 effects volume;
+    `0x97` bit 6 music in game, bit 5 scream, bit 4 siren.
+  - GTI Club 2 fields: difficulty `0x8A`–`0x8D` (TOWN, COAST, MOUNTAIN, PROMOTION); `0x84` bit 5
+    speedometer, bits 4–3 motor power, bit 2 record saving; `0x85` bit 7 promotion mode, bit 6
+    Internet ranking, bits 5–4 bonus credit; `0x90` bits 6–5 attract sound and bits 4–0 music
+    volume; `0x91` bits 7–3 effects volume; word `0x92` bits 8–7 voice language (1 English,
+    2 Italian); `0x93` bit 6 music in game.
+  - The profile's `game_options` lists what the OPTIONS pages show: `page` (game or sound),
+    English and Italian `label`, `addr`, `size` (1 byte or 2 for a big-endian word), `shift`,
+    `bits`, `min`, `max`, English|Italian `values` (or a named set, or none for numbers), and
+    `language` on the field the menus follow.
+- **Applying:** the game reads its settings only at boot. Changing them live does nothing: a
+  language poked into the NVRAM during the attract mode shows no effect, and neither does
+  leaving TEST MODE through GAME MODE. So on leaving OPTIONS with changes, the guest thread
+  writes the staged fields, fixes the checksum, saves the NVRAM file and asks for a restart. The
+  frontend then leaves its loop, and `main` re-executes the program with the same arguments.
+  Headless runs stop instead (`RT_NVRAM_POKE="seconds:addr=value"` pokes bytes for tests).
+- **Fast boot:** until the attract hook first runs (60 emulated seconds at most) and while
+  applying settings, `enh_turbo()` makes the frontend skip real-time pacing and drop the audio,
+  and the overlay covers the screen with LOADING or APPLYING SETTINGS. The boot to the attract
+  mode takes 2–3 s instead of 10–20.
+- **Pause** (Esc, or the gamepad's Guide button, during a game; `enh_escape()`):
+  `rt_pace_vblank` holds the guest thread at the next vblank while paused, so virtual time,
+  timers and the RTC stop with it. The audio callback outputs silence. The frontend redraws the
+  overlay every loop over the last game frame, so the pause menu responds while the game is
+  frozen.
+  - RESUME continues. MAIN MENU returns to the attract mode the way a cabinet does. TEST opens
+    TEST MODE; after 12 s the script moves to GAME MODE (profile `test_menu_game_mode`: TD2 and
+    EAA 13, JAB 12) and presses START; it ends when the attract hook runs again.
+  - The whole return runs fast-forwarded behind the loading screen: about 25–30 emulated
+    seconds, a few real ones. While it runs, the enhanced layer owns IN3 and IN4
+    (`enh_inputs_owned()`), and the frontend does not overwrite them.
+  - If the attract mode is not back within 60 s, the program restarts instead.
+- **Texts:** English and Italian (`k_text`), chosen by the profile's `language` field. The menus
+  switch as soon as the option changes. The fonts have no accented letters, so the Italian texts
+  avoid them. A value too wide for its row falls back to the small font.
+- **Fps counter:** the frames the game drew per emulated second, counted from the Voodoo buffer
+  swaps (`voodoo_swap_count()`). It reads 28–29 (the ~57.5 Hz display halved). Counting distinct
+  pictures would undercount static screens and fades. It is drawn with the small game font, on
+  top of everything, also in play.
+  - Frames dumped with `--frames` in enhanced mode include the overlay.
+    `RT_ENH_MENU="seconds:up|down|ok|back,…"` drives the menu in headless tests, and
+    `RT_ENH_LOG=1` logs the attract/game transitions.
+
 ## 6. Current status (2026-09-29)
 
 Thrill Drive 2 is working:
@@ -431,4 +546,5 @@ RT_MMIO_LOG=10000 RT_MMIO_RANGE=fe000000-feffffff ./td2   # log MMIO accesses
 RT_SC_LOG=1 ./td2                     # log kernel syscalls
 RT_VOODOO_LOG=1 ./td2                 # messages from MAME's Voodoo core
 RT_VOODOO_TEXLOG=1 ./td2              # log each new texture setup (format, LODs, base registers)
+RT_VOODOO_VRAMDUMP=vram.bin:1300 ./td2 --headless ...   # dump the whole VRAM at frame 1300
 ```

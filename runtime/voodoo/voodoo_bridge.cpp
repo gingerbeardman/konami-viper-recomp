@@ -144,6 +144,23 @@ void publish_frame()
 	s_frame_w = w;
 	s_frame_h = h;
 	s_frame_count++;
+	{	// debug: RT_VOODOO_VRAMDUMP=path:frame writes the whole VRAM at that frame
+		static const char *dump = getenv("RT_VOODOO_VRAMDUMP");
+		if (dump)
+		{
+			const char *colon = strrchr(dump, ':');
+			if (colon && s_frame_count == strtoull(colon + 1, nullptr, 10))
+			{
+				std::string path(dump, colon - dump);
+				if (FILE *f = fopen(path.c_str(), "wb"))
+				{
+					fwrite(s_dev->debug_fbram(), 1, s_dev->debug_fbsize(), f);
+					fclose(f);
+					rt_log("voodoo: VRAM dumped to %s\n", path.c_str());
+				}
+			}
+		}
+	}
 	rt_frame_published(s_frame_count, s_frame.data(), w, h);
 }
 

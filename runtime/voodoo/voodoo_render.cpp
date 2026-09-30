@@ -14,6 +14,7 @@
 #include "endianness.h"
 
 #include <bit>
+extern "C" void rt_log(const char *fmt, ...);
 #include <set>
 #include <array>
 #include <cstdlib>
@@ -846,7 +847,7 @@ void rasterizer_texture::recompute(voodoo_regs const &regs, u8 *ram, u32 mask, r
 				regs.texture_baseaddr(), texlod.tmultibaseaddr() ? regs.texture_baseaddr_1() : 0,
 				texlod.tmultibaseaddr() ? regs.texture_baseaddr_2() : 0 };
 			if (seen.size() < 4000 && seen.insert(key).second)
-				fprintf(stderr, "TEXLOG fmt=%2u lod=%u-%u flags=%03x base=%06x b1=%06x b2=%06x b38=%06x shift=%u\n", key[0], key[1] >> 2, key[2] >> 2, key[3],
+				rt_log("TEXLOG fmt=%2u lod=%u-%u flags=%03x base=%06x b1=%06x b2=%06x b38=%06x shift=%u\n", key[0], key[1] >> 2, key[2] >> 2, key[3],
 					key[4], key[5], key[6], texlod.tmultibaseaddr() ? regs.texture_baseaddr_3_8() : 0, addrshift);
 		}
 	}

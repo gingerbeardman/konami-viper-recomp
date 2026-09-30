@@ -479,6 +479,9 @@ protected:
 	voodoo_1_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, u32 clock, voodoo::voodoo_model model);
 
 public:
+	// recomp debug: raw framebuffer/texture memory (RT_VOODOO_VRAMDUMP)
+	u8 const *debug_fbram() const { return m_fbram; }
+	u32 debug_fbsize() const { return m_fbmask + 1; }
 	// nominal clock values
 	static constexpr u32 NOMINAL_CLOCK = 50'000'000;
 

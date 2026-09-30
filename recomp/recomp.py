@@ -82,10 +82,12 @@ def main(gid):
         raise SystemExit(f"{os.path.relpath(work, game.ROOT)}/ not found: run 'make extract GAME={gid}' first")
     os.makedirs(out, exist_ok=True)
     hints = g.get('hints', {})
+    hooks = ((g.get('enhanced') or {}).get('hooks') or {})   # {module: {"0xADDR": name}}
     mods = load_modules(work, g['modules'])
     all_funcs = {}
     for m in mods:
         t0 = time.time()
+        m.hooks = {int(a, 16) for a in hooks.get(m.name, {})}
         funcs, entries = discover(m, apply_hints(m, hints.get(m.name, {})))
         all_funcs[m.name] = (m, funcs, entries)
         ninsn = sum(len(f.insns) for f in funcs.values())

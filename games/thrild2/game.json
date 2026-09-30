@@ -100,5 +100,288 @@
   "calibration": {
     "script": "12:3=fd,12.5:3=ff,20.00:4=fe,20.30:4=ff,20.80:4=fe,21.10:4=ff,21.60:4=fe,21.90:4=ff,22.40:4=fe,22.70:4=ff,23.20:4=fe,23.50:4=ff,24.00:4=fe,24.30:4=ff,24.80:4=fe,25.10:4=ff,25.60:4=fe,25.90:4=ff,26.40:4=fe,26.70:4=ff,27.70:3=ef,28.00:3=ff,32:3=ef,32.3:3=ff,35:3=ef,35.3:3=ff,36:10=ff38,38:3=ef,38.3:3=ff,39:10=00c8,41:3=ef,41.3:3=ff,42:10=0,45:3=ef,45.3:3=ff,47:4=fe,47.3:4=ff,48.5:3=ef,48.8:3=ff,52:11=00c8,54:3=ef,54.3:3=ff,55:11=ff38,59:3=ef,59.3:3=ff,61:4=fe,61.3:4=ff,62.5:3=ef,62.8:3=ff,66:12=00c8,68:3=ef,68.3:3=ff,69:12=ff38,73:3=ef,73.3:3=ff,75:4=fe,75.3:4=ff,76.5:4=fe,76.8:4=ff,78:3=ef,78.3:3=ff",
     "seconds": 82
+  },
+  "enhanced": {
+    "setup": {
+      "script": "12:3=fd,12.5:3=ff,22.0:4=fe,22.3:4=ff,22.8:4=fe,23.1:4=ff,23.6:4=fe,23.9:4=ff,24.4:4=fe,24.7:4=ff,25.2:4=fe,25.5:4=ff,26.0:4=fe,26.3:4=ff,26.8:4=fe,27.1:4=ff,28.5:3=ef,28.8:3=ff,30.5:3=ef,30.8:3=ff,31.5:4=fe,31.8:4=ff,32.3:4=fe,32.6:4=ff,33.5:3=ef,33.8:3=ff",
+      "seconds": 36,
+      "note": "TEST MODE -> COIN OPTIONS -> FREE PLAY on -> SAVE AND EXIT"
+    },
+    "blank_strings": [
+      {
+        "addr": "0xb8ee8",
+        "text": "FREE PLAY"
+      }
+    ],
+    "hooks": {
+      "game": {
+        "0x7dd40": "attract"
+      }
+    },
+    "font": {
+      "note": "A8 textures of the game's stencil font (INSERT COIN[S], rankings), loaded to VRAM 0x6c000 and 0x7c000; one size, drawn scaled",
+      "file": "_unk/76278279.bin",
+      "pages": [
+        "0x14",
+        "0x10024"
+      ],
+      "width": 256,
+      "page_height": 256,
+      "sizes": {
+        "large": {
+          "cell": [
+            32,
+            48
+          ],
+          "scale": 0.85,
+          "rows": [
+            [
+              0,
+              " \"  -,'["
+            ],
+            [
+              48,
+              "] .!"
+            ],
+            [
+              96,
+              "01234567"
+            ],
+            [
+              144,
+              "89 ABCDE"
+            ],
+            [
+              192,
+              "FGHIJKLM"
+            ],
+            [
+              256,
+              "NOPQRSTU"
+            ],
+            [
+              304,
+              "VWXYZ"
+            ]
+          ]
+        },
+        "medium": {
+          "cell": [
+            32,
+            48
+          ],
+          "scale": 0.6,
+          "rows": [
+            [
+              0,
+              " \"  -,'["
+            ],
+            [
+              48,
+              "] .!"
+            ],
+            [
+              96,
+              "01234567"
+            ],
+            [
+              144,
+              "89 ABCDE"
+            ],
+            [
+              192,
+              "FGHIJKLM"
+            ],
+            [
+              256,
+              "NOPQRSTU"
+            ],
+            [
+              304,
+              "VWXYZ"
+            ]
+          ]
+        },
+        "small": {
+          "cell": [
+            32,
+            48
+          ],
+          "scale": 0.45,
+          "rows": [
+            [
+              0,
+              " \"  -,'["
+            ],
+            [
+              48,
+              "] .!"
+            ],
+            [
+              96,
+              "01234567"
+            ],
+            [
+              144,
+              "89 ABCDE"
+            ],
+            [
+              192,
+              "FGHIJKLM"
+            ],
+            [
+              256,
+              "NOPQRSTU"
+            ],
+            [
+              304,
+              "VWXYZ"
+            ]
+          ]
+        }
+      }
+    },
+    "nvram_options": {
+      "start": "0x88",
+      "checksum": "0x124",
+      "note": "TEST MODE option block: big-endian 16-bit words from start to the checksum word (included) sum to 0xffff"
+    },
+    "game_options": [
+      {
+        "page": "game",
+        "label": [
+          "JAPAN",
+          "GIAPPONE"
+        ],
+        "addr": "0x8f",
+        "size": 1,
+        "shift": 0,
+        "bits": 8,
+        "min": 0,
+        "max": 7,
+        "values": "difficulty"
+      },
+      {
+        "page": "game",
+        "label": [
+          "USA",
+          "USA"
+        ],
+        "addr": "0x90",
+        "size": 1,
+        "shift": 0,
+        "bits": 8,
+        "min": 0,
+        "max": 7,
+        "values": "difficulty"
+      },
+      {
+        "page": "game",
+        "label": [
+          "EUROPE",
+          "EUROPA"
+        ],
+        "addr": "0x91",
+        "size": 1,
+        "shift": 0,
+        "bits": 8,
+        "min": 0,
+        "max": 7,
+        "values": "difficulty"
+      },
+      {
+        "page": "game",
+        "label": [
+          "LANGUAGE",
+          "LINGUA"
+        ],
+        "addr": "0x88",
+        "size": 1,
+        "shift": 6,
+        "bits": 2,
+        "min": 1,
+        "max": 2,
+        "values": [
+          [
+            "ENGLISH",
+            "INGLESE"
+          ],
+          [
+            "ITALIAN",
+            "ITALIANO"
+          ]
+        ],
+        "language": true
+      },
+      {
+        "page": "sound",
+        "label": [
+          "ATTRACT SOUND",
+          "SUONO IN DEMO"
+        ],
+        "addr": "0x94",
+        "size": 1,
+        "shift": 5,
+        "bits": 2,
+        "min": 0,
+        "max": 2,
+        "values": [
+          [
+            "ALWAYS",
+            "SEMPRE"
+          ],
+          [
+            "ONE IN FOUR",
+            "UNA SU QUATTRO"
+          ],
+          [
+            "OFF",
+            "MAI"
+          ]
+        ],
+        "note": "TEST MODE: ALL THE TIME / ONCE EVERY 4 CYCLES / COMPLETE OFF"
+      },
+      {
+        "page": "sound",
+        "label": [
+          "MUSIC IN GAME",
+          "MUSICA IN GARA"
+        ],
+        "addr": "0x97",
+        "size": 1,
+        "shift": 6,
+        "bits": 1,
+        "min": 0,
+        "max": 1,
+        "values": "offon"
+      },
+      {
+        "page": "sound",
+        "label": [
+          "MUSIC VOLUME",
+          "VOLUME MUSICA"
+        ],
+        "addr": "0x94",
+        "size": 1,
+        "shift": 0,
+        "bits": 5,
+        "min": 0,
+        "max": 30
+      },
+      {
+        "page": "sound",
+        "label": [
+          "EFFECTS VOLUME",
+          "VOLUME EFFETTI"
+        ],
+        "addr": "0x95",
+        "size": 1,
+        "shift": 3,
+        "bits": 5,
+        "min": 0,
+        "max": 30
+      }
+    ],
+    "test_menu_game_mode": 13
   }
 }

@@ -8,6 +8,7 @@
  * Controls (driving-game inputs as in MAME's viper.cpp "thrild2" / "gticlub2"):
  *   Left/Right  steering      Up  gas      Down  brake      Space  handbrake (GTI Club 2)
  *   A  shift up   Z  shift down   5  coin   1  start   F2  test   9  service
+ *   (enhanced mode: test and service are not passed to the game, so TEST MODE cannot be opened)
  *   Gamepad: left stick = steering, R2/L2 = gas/brake, R1/L1 = shift up/down,
  *            X = handbrake, Start = start, Back = coin
  *   F11 fullscreen, Esc quit
@@ -17,6 +18,7 @@
 #include <SDL.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <string.h>
 
 extern uint8_t g_in[8];
 extern int16_t g_analog[4];
@@ -33,7 +35,7 @@ static int16_t sat16(int64_t v) { return (int16_t)(v > 32767 ? 32767 : v < -3276
 static int g_frontend_active;
 
 void audio_frontend_push(const uint8_t *blk) {
-    if (!g_audio) return;
+    if (!g_audio || enh_turbo()) return;       /* muted while the enhanced mode fast-forwards */
     unsigned w = atomic_load_explicit(&g_ring_w, memory_order_relaxed);
     unsigned r = atomic_load_explicit(&g_ring_r, memory_order_acquire);
     for (int i = 0; i < 256; i++) {
@@ -55,6 +57,7 @@ static void audio_cb(void *ud, Uint8 *stream, int len) {
     unsigned r = atomic_load_explicit(&g_ring_r, memory_order_relaxed);
     unsigned w = atomic_load_explicit(&g_ring_w, memory_order_acquire);
     static int16_t last[2];
+    if (enh_paused()) { memset(stream, 0, (size_t)len); return; }
     for (int i = 0; i < frames; i++) {
         if (r != w) {
             last[0] = g_ring[r % AUDIO_RING][0];
@@ -76,6 +79,15 @@ static double g_pace_freq;
 void rt_pace_vblank(void) {
     if (!g_frontend_active) return;
     double virt = (double)rt_now() / CPU_HZ;
+    if (enh_turbo()) {                  /* enhanced mode boot/apply: as fast as possible */
+        g_pace_t0 = SDL_GetPerformanceCounter() - (uint64_t)(virt * g_pace_freq);
+        return;
+    }
+    if (enh_paused()) {                 /* enhanced mode pause: the game waits here */
+        while (enh_paused() && g_frontend_active) SDL_Delay(5);
+        g_pace_t0 = SDL_GetPerformanceCounter() - (uint64_t)(virt * g_pace_freq);
+        return;
+    }
     for (;;) {
         double real = (double)(SDL_GetPerformanceCounter() - g_pace_t0) / g_pace_freq;
         double ahead = virt - real;
@@ -116,14 +128,45 @@ static void apply_inputs(double dt) {
     g_analog[2] = (int16_t)(-ANALOG_RANGE + brake * 2 * ANALOG_RANGE / 255);
     if (GAME_HAS_HANDBRAKE) g_analog[3] = (int16_t)(ctl.handbrake ? ANALOG_RANGE : -ANALOG_RANGE);
     uint8_t in3 = 0xff, in4 = 0xff;
-    if (ctl.service) in3 &= ~0x01;
-    if (ctl.test) in3 &= ~0x02;
+    if (ctl.service && !g_enhanced) in3 &= ~0x01;
+    if (ctl.test && !g_enhanced) in3 &= ~0x02;
     if (ctl.coin) in3 &= ~0x04;
-    if (ctl.start) in3 &= ~0x10;
+    if (ctl.start || enh_start_held()) in3 &= ~0x10;
     if (ctl.shift_down) in3 &= ~0x40;
     if (ctl.shift_up) in4 &= ~0x01;
+    if (enh_inputs_owned()) return;     /* the enhanced layer is driving TEST MODE */
+    if (enh_menu_active()) {            /* the menu owns the controls: the attract gets nothing */
+        in3 = enh_start_held() ? 0xef : 0xff;
+        in4 = 0xff;
+        g_analog[1] = g_analog[2] = (int16_t)-ANALOG_RANGE;
+    }
     g_in[3] = in3;
     g_in[4] = in4;
+}
+
+/* enhanced mode: keys and buttons that drive the attract menu while it is on screen */
+static int menu_key(SDL_Keycode k) {
+    switch (k) {
+    case SDLK_UP: return ENH_UP;
+    case SDLK_DOWN: return ENH_DOWN;
+    case SDLK_LEFT: return ENH_LEFT;
+    case SDLK_RIGHT: return ENH_RIGHT;
+    case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_1: return ENH_OK;
+    case SDLK_BACKSPACE: return ENH_BACK;
+    default: return -1;
+    }
+}
+
+static int menu_button(int b) {
+    switch (b) {
+    case SDL_CONTROLLER_BUTTON_DPAD_UP: return ENH_UP;
+    case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return ENH_DOWN;
+    case SDL_CONTROLLER_BUTTON_DPAD_LEFT: return ENH_LEFT;
+    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return ENH_RIGHT;
+    case SDL_CONTROLLER_BUTTON_A: case SDL_CONTROLLER_BUTTON_START: return ENH_OK;
+    case SDL_CONTROLLER_BUTTON_B: return ENH_BACK;
+    default: return -1;
+    }
 }
 
 static void key(SDL_Keycode k, int down) {
@@ -165,7 +208,7 @@ int frontend_run(int scale) {
         return -1;
     }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
-    SDL_Window *win = SDL_CreateWindow(GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+    SDL_Window *win = SDL_CreateWindow(g_enhanced ? GAME_TITLE " - enhanced" : GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                        512 * scale, 384 * scale, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     SDL_RenderSetLogicalSize(ren, 512, 384);
@@ -192,19 +235,29 @@ int frontend_run(int scale) {
     g_pace_t0 = SDL_GetPerformanceCounter() - (uint64_t)((double)rt_now() / CPU_HZ * g_pace_freq);
     g_frontend_active = 1;
 
-    static uint32_t frame[2048 * 2048];
+    static uint32_t frame[2048 * 2048], raw[2048 * 2048];
     uint64_t last_frame = 0, last_tick = SDL_GetPerformanceCounter(), last_save = last_tick;
-    int running = 1;
+    int running = 1, fs_applied = 0, restart = 0;
     while (running) {
+        if (enh_want_fullscreen() != fs_applied) {      /* enhanced mode: DISPLAY option */
+            fs_applied = enh_want_fullscreen();
+            SDL_SetWindowFullscreen(win, fs_applied ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+        }
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             switch (ev.type) {
             case SDL_QUIT: running = 0; break;
             case SDL_KEYDOWN:
-                if (ev.key.keysym.sym == SDLK_ESCAPE) running = 0;
+                if ((enh_menu_active() || enh_paused()) && menu_key(ev.key.keysym.sym) >= 0) {
+                    if (!ev.key.repeat) enh_menu_action(menu_key(ev.key.keysym.sym));
+                } else if (ev.key.keysym.sym == SDLK_ESCAPE) {
+                    if (!ev.key.repeat && !enh_escape()) running = 0;   /* enhanced: pause / back */
+                }
                 else if (ev.key.keysym.sym == SDLK_F11) {
                     Uint32 fs = SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP;
                     SDL_SetWindowFullscreen(win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+                    enh_set_fullscreen(!fs);    /* enhanced mode: remembered in the settings */
+                    fs_applied = !fs;
                 } else key(ev.key.keysym.sym, 1);
                 break;
             case SDL_KEYUP: key(ev.key.keysym.sym, 0); break;
@@ -216,7 +269,11 @@ int frontend_run(int scale) {
                 else if (ev.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) ctl.pad_gas = ev.caxis.value;
                 else if (ev.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) ctl.pad_brake = ev.caxis.value;
                 break;
-            case SDL_CONTROLLERBUTTONDOWN: pad_button(ev.cbutton.button, 1); break;
+            case SDL_CONTROLLERBUTTONDOWN:
+                if ((enh_menu_active() || enh_paused()) && menu_button(ev.cbutton.button) >= 0) enh_menu_action(menu_button(ev.cbutton.button));
+                else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) enh_escape();
+                else pad_button(ev.cbutton.button, 1);
+                break;
             case SDL_CONTROLLERBUTTONUP: pad_button(ev.cbutton.button, 0); break;
             default: break;
             }
@@ -225,19 +282,28 @@ int frontend_run(int scale) {
         apply_inputs((double)(now - last_tick) / g_pace_freq);
         last_tick = now;
         if ((double)(now - last_save) / g_pace_freq > 60.0) { nvram_save(); last_save = now; }
+        if (enh_quit_requested()) running = 0;
+        if (enh_restart_requested()) { running = 0; restart = 1; }
 
         int w, h;
         uint64_t cnt = voodoo_get_frame(NULL, 0, &w, &h);
-        if (cnt != last_frame && w > 0 && h > 0) {
+        int fresh = cnt != last_frame && w > 0 && h > 0;
+        if (fresh) {
             last_frame = cnt;
-            voodoo_get_frame(frame, 2048 * 2048, &w, &h);
+            voodoo_get_frame(raw, 2048 * 2048, &w, &h);
             if (w != tw || h != th) {
                 SDL_DestroyTexture(tex);
                 tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
                 SDL_RenderSetLogicalSize(ren, w, h);
                 tw = w; th = h;
             }
-            SDL_UpdateTexture(tex, NULL, frame, w * 4);
+        }
+        /* the overlay is redrawn over the last game frame every loop, so the enhanced menus
+         * respond while the game is paused */
+        if (fresh || (g_enhanced && last_frame)) {
+            memcpy(frame, raw, (size_t)tw * th * 4);
+            enh_draw_overlay(frame, tw, th);
+            SDL_UpdateTexture(tex, NULL, frame, tw * 4);
         }
         SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
         SDL_RenderClear(ren);
@@ -247,5 +313,5 @@ int frontend_run(int scale) {
     nvram_save();
     if (g_audio) SDL_CloseAudioDevice(g_audio);
     SDL_Quit();
-    return 0;
+    return restart ? 2 : 0;
 }

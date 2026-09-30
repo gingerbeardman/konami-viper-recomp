@@ -106,6 +106,7 @@ static const char *g_frames_dir;
 static int g_frame_every = 30;
 
 void rt_frame_published(uint64_t cnt, const uint32_t *buf, int w, int h) {
+    enh_on_frame(buf, w, h);
     static int fps_stats = -1;
     static uint64_t last_hash, uniq, last_sec;
     if (fps_stats < 0) fps_stats = getenv("RT_FPS_STATS") != NULL;
@@ -118,6 +119,12 @@ void rt_frame_published(uint64_t cnt, const uint32_t *buf, int w, int h) {
         if (sec != last_sec) { rt_log("fps: %llu distinct frames in second %llu\n", (unsigned long long)uniq, (unsigned long long)last_sec); uniq = 0; last_sec = sec; }
     }
     if (!g_frames_dir || cnt % (uint64_t)g_frame_every) return;
+    static uint32_t shot[2048 * 2048];
+    if (g_enhanced && w * h <= 2048 * 2048) {     /* the dumped frames show the menu too */
+        memcpy(shot, buf, (size_t)w * h * 4);
+        enh_draw_overlay(shot, w, h);
+        buf = shot;
+    }
     char path[1024];
     snprintf(path, sizeof path, "%s/frame_%06llu.ppm", g_frames_dir, (unsigned long long)cnt);
     FILE *f = fopen(path, "wb");
@@ -168,15 +175,33 @@ static const char *k_calibration_script = GAME_CALIBRATION_SCRIPT;
 
 static int file_exists(const char *p) { FILE *f = fopen(p, "rb"); if (f) fclose(f); return f != NULL; }
 
+/* Runs this executable headless with a scripted input sequence (TEST MODE automation) that ends
+ * by saving the NVRAM to nvsave; an existing nvsave is loaded first, so passes can be chained. */
+static int run_scripted_pass(const char *what, const char *script, int seconds, const char *self,
+                             const char *work, const char *nvram, const char *nvsave) {
+    char cmd[8192];
+    snprintf(cmd, sizeof cmd, "RT_FFB_WHEEL=1 RT_INPUT='%s' '%s' --headless --work '%s' --nvram '%s' --nvram-save '%s' --seconds %d >/dev/null 2>&1",
+             script, self, work, nvram, nvsave, seconds);
+    int rc = system(cmd);
+    if (rc != 0 || !file_exists(nvsave)) { fprintf(stderr, "%s failed (rc=%d)\n", what, rc); return -1; }
+    return 0;
+}
+
 static int run_first_time_calibration(const char *self, const char *work, const char *nvram, const char *nvsave) {
     if (!k_calibration_script) return 0;
     fprintf(stderr, "first run: calibrating steering and pedals in TEST MODE (a few seconds)...\n");
-    char cmd[4096];
-    snprintf(cmd, sizeof cmd, "RT_FFB_WHEEL=1 RT_INPUT='%s' '%s' --headless --work '%s' --nvram '%s' --nvram-save '%s' --seconds %d >/dev/null 2>&1",
-             k_calibration_script, self, work, nvram, nvsave, GAME_CALIBRATION_SECONDS);
-    int rc = system(cmd);
-    if (rc != 0 || !file_exists(nvsave)) { fprintf(stderr, "calibration failed (rc=%d)\n", rc); return -1; }
+    if (run_scripted_pass("calibration", k_calibration_script, GAME_CALIBRATION_SECONDS, self, work, nvram, nvsave)) return -1;
     fprintf(stderr, "calibration saved to %s\n", nvsave);
+    return 0;
+}
+
+/* enhanced mode, first launch: after the calibration, the profile's setup pass (free play) */
+static int run_enhanced_setup(const char *self, const char *work, const char *nvram, const char *nvsave) {
+    static const char *k_setup = GAME_ENH_SETUP_SCRIPT;
+    if (!k_setup) return 0;
+    fprintf(stderr, "first run (enhanced mode): setting up the game options in TEST MODE...\n");
+    if (run_scripted_pass("enhanced setup", k_setup, GAME_ENH_SETUP_SECONDS, self, work, nvram, nvsave)) return -1;
+    fprintf(stderr, "enhanced settings saved to %s\n", nvsave);
     return 0;
 }
 
@@ -230,6 +255,8 @@ static void usage(void) {
             "  --scale N       window scale (default 2)\n"
             "  --volume N      audio gain (default 16)\n"
             "  --nvram-save F  persistent NVRAM file (default " GAME_NVRAM_SAVE ")\n"
+            "  --enhanced      enhanced mode (free play, no TEST MODE; own NVRAM " GAME_ENH_NVRAM_SAVE ")\n"
+            "  --settings F    enhanced-mode port settings (default " GAME_ENH_SETTINGS ")\n"
             "  --frames DIR    dump every Nth video frame as PPM into DIR (headless)\n"
             "  --frame-every N (default 30)\n"
             "  -v              verbose\n", g_argv0);
@@ -239,6 +266,7 @@ static void usage(void) {
 int main(int argc, char **argv) {
     g_argv0 = argv[0];
     find_executable(argv[0]);
+    const char *settings = beside_exe(GAME_ENH_SETTINGS);
     const char *work = beside_exe(GAME_DEFAULT_WORK), *cf = NULL, *nvram = beside_exe(GAME_DEFAULT_NVRAM),
                *ds = beside_exe(GAME_DEFAULT_DS2430), *bios = beside_exe(GAME_DEFAULT_BIOS), *wav = NULL,
                *nvsave = beside_exe(GAME_NVRAM_SAVE);
@@ -261,9 +289,20 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--frames") && v) { g_frames_dir = v; i++; }
         else if (!strcmp(a, "--frame-every") && v) { g_frame_every = atoi(v); i++; }
         else if (!strcmp(a, "-v")) g_verbose = 1;
+        else if (!strcmp(a, "--enhanced")) g_enhanced = 1;
+        else if (!strcmp(a, "--settings") && v) { settings = v; i++; }
         else usage();
     }
-    if (!headless && !file_exists(nvsave)) run_first_time_calibration(g_exe, work, nvram, nvsave);
+    if (g_enhanced) {
+        if (!GAME_HAS_ENHANCED) { fprintf(stderr, "the enhanced mode is not available for " GAME_TITLE " yet\n"); return 2; }
+        if (!nvsave_explicit) nvsave = beside_exe(GAME_ENH_NVRAM_SAVE);
+    }
+    enh_set_headless(headless);
+    enh_init(work, settings);
+    if (!headless && !file_exists(nvsave)) {
+        run_first_time_calibration(g_exe, work, nvram, nvsave);
+        if (g_enhanced) run_enhanced_setup(g_exe, work, nvram, nvsave);
+    }
     static char cfbuf[1024], kbuf[1024];
     if (!cf) { snprintf(cfbuf, sizeof cfbuf, "%s/cf.img", work); cf = cfbuf; }
     snprintf(kbuf, sizeof kbuf, "%s/kernel.bin", work);
@@ -306,6 +345,11 @@ int main(int argc, char **argv) {
     rt_check(c, 0x10);          /* arms the first time slice */
     rt_start(0x10);
     if (headless) dump_frames_loop();   /* guest runs on fibers; rt_fatal() exits the process */
-    frontend_run(scale);
+    if (frontend_run(scale) == 2) {      /* enhanced mode: new game settings, reboot the game */
+        hw_shutdown();
+        fflush(NULL);
+        execv(g_exe, argv);
+        fprintf(stderr, "restart failed: %s\n", g_exe);
+    }
     rt_fatal("window closed");
 }

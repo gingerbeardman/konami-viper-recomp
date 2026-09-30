@@ -665,6 +665,9 @@ static void rtc_init(void) {
     rt_sched_at(rt_now() + (uint64_t)CPU_HZ, rtc_tick, NULL);
 }
 
+/* the NVRAM image, for the enhanced mode's settings (guest thread only) */
+uint8_t *hw_nvram(void) { return g_nvram; }
+
 static uint8_t nvram_read(uint32_t off) {
     uint8_t r = g_nvram[off];
     if (off == RTC_DATE) r &= ~DATE_BL;

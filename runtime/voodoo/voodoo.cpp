@@ -2609,8 +2609,13 @@ void voodoo_1_device::vblank_stop(s32 param)
 //  cases this comes at VBLANK time
 //-------------------------------------------------
 
+// recomp: count of buffer swaps, i.e. frames the game actually drew (fps counter)
+unsigned long long g_voodoo_swaps;
+extern "C" unsigned long long voodoo_swap_count(void) { return g_voodoo_swaps; }
+
 void voodoo_1_device::swap_buffers()
 {
+	g_voodoo_swaps++;
 	if (LOG_VBLANK_SWAP)
 		logerror("--- swap_buffers @ %d\n", screen().vpos());
 

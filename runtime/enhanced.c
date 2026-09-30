@@ -1,0 +1,671 @@
+/*
+ * Enhanced ("conversion") mode: optional additions on top of the faithful port, enabled with
+ * --enhanced. The original mode is never affected: everything here is gated on g_enhanced, and
+ * the enhanced mode keeps its own NVRAM (<binary>_enhanced_nvram.bin).
+ *
+ * What the game data needs (addresses, scripts) comes from the "enhanced" section of
+ * games/<id>/game.json, through game_config.h:
+ *   - setup: a scripted TEST MODE pass run on first launch after the calibration (free play);
+ *   - blank_strings: game strings emptied in RAM, e.g. the "FREE PLAY" and "PRESS START BUTTON"
+ *     captions. The game module is loaded by the kernel at runtime, so the strings are checked
+ *     every frame and emptied whenever their original text is found (also after a reload);
+ *   - hooks: addresses where the recompiled code calls rt_hook(). "attract" is the free-play
+ *     branch of the credit display (a Konami library routine shared by the games): the game
+ *     draws it only while no game is in progress, so it tells the attract mode apart.
+ */
+#include "runtime.h"
+#include "game_config.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int g_enhanced;
+
+/* attract detection: the frame at which the "attract" hook last ran */
+#define ATTRACT_GRACE_FRAMES 30
+static uint64_t g_frame, g_attract_frame;
+static int g_attract, g_enh_log = -1;
+
+int enh_in_attract(void) { return g_attract; }
+
+void rt_hook(PPCContext *c, uint32_t pc) {
+    (void)c;
+#ifdef GAME_ENH_HOOK_ATTRACT
+    if (pc == GAME_ENH_HOOK_ATTRACT) g_attract_frame = g_frame ? g_frame : 1;
+#else
+    (void)pc;
+#endif
+}
+
+typedef struct { uint32_t addr; const char *text; } BlankString;
+static const BlankString k_blank[] = GAME_ENH_BLANK_STRINGS;
+
+/* RT_ENH_BLANK="addr:text,addr:text" adds strings at run time (for finding new ones) */
+static BlankString g_extra[16];
+static int g_nextra = -1;
+
+static void parse_extra(void) {
+    g_nextra = 0;
+    const char *e = getenv("RT_ENH_BLANK");
+    while (e && *e && g_nextra < 16) {
+        char *colon;
+        uint32_t addr = (uint32_t)strtoul(e, &colon, 16);
+        if (*colon != ':') break;
+        const char *text = colon + 1, *end = strchr(text, ',');
+        size_t n = end ? (size_t)(end - text) : strlen(text);
+        char *copy = malloc(n + 1);
+        memcpy(copy, text, n);
+        copy[n] = 0;
+        g_extra[g_nextra++] = (BlankString){ addr, copy };
+        e = end ? end + 1 : text + n;
+    }
+}
+
+static void blank(const BlankString *b) {
+    size_t n = strlen(b->text);
+    if (!n || b->addr + n >= RAM_SIZE) return;
+    if (memcmp(g_ram + b->addr, b->text, n) == 0) g_ram[b->addr] = 0;
+}
+
+/* ================================================================== game settings (NVRAM) */
+/* The TEST MODE options are a block of the NVRAM: the big-endian 16-bit words from
+ * GAME_ENH_OPT_START up to the checksum word GAME_ENH_OPT_CSUM (included) sum to 0xffff. */
+static void options_checksum_fix(uint8_t *nv) {
+    if (!GAME_ENH_OPT_CSUM) return;
+    uint32_t sum = 0;
+    for (int o = GAME_ENH_OPT_START; o < GAME_ENH_OPT_CSUM; o += 2) sum += (uint32_t)(nv[o] << 8 | nv[o + 1]);
+    uint16_t cs = (uint16_t)(0xffff - sum);
+    nv[GAME_ENH_OPT_CSUM] = (uint8_t)(cs >> 8);
+    nv[GAME_ENH_OPT_CSUM + 1] = (uint8_t)cs;
+}
+
+/* RT_NVRAM_POKE="seconds:addr=value,..." writes NVRAM bytes (and fixes the checksum) at run time */
+static void nvram_poke_tick(void) {
+    static const char *next = (const char *)-1;
+    if (next == (const char *)-1) next = getenv("RT_NVRAM_POKE");
+    while (next && *next) {
+        char *p;
+        double t = strtod(next, &p);
+        if (*p != ':' || (double)rt_now() / CPU_HZ < t) return;
+        uint32_t addr = (uint32_t)strtoul(p + 1, &p, 16);
+        uint32_t val = *p == '=' ? (uint32_t)strtoul(p + 1, &p, 16) : 0;
+        if (addr < 0x1ff0) { hw_nvram()[addr] = (uint8_t)val; options_checksum_fix(hw_nvram()); rt_log("enhanced: NVRAM %04x = %02x\n", addr, val); }
+        next = *p == ',' ? p + 1 : NULL;
+    }
+}
+
+static void menu_tick(void);
+static void scripted_menu(void);
+static void fps_tick(const uint32_t *buf, int w, int h);
+static int count_game_options(void);
+
+/* called at every published frame, on the guest thread */
+void enh_on_frame(const uint32_t *buf, int w, int h) {
+    if (!g_enhanced) return;
+    g_frame++;
+    fps_tick(buf, w, h);
+    if (g_enh_log < 0) g_enh_log = getenv("RT_ENH_LOG") != NULL;
+    int attract = g_attract_frame && g_frame - g_attract_frame <= ATTRACT_GRACE_FRAMES;
+    if (attract != g_attract && g_enh_log) rt_log("enhanced: %s\n", attract ? "attract mode" : "game in progress");
+    g_attract = attract;
+    menu_tick();
+    scripted_menu();
+    nvram_poke_tick();
+    if (g_nextra < 0) parse_extra();
+    for (const BlankString *b = k_blank; b->text; b++) blank(b);
+    for (int i = 0; i < g_nextra; i++) blank(&g_extra[i]);
+}
+
+/* ================================================================== game font (A8 texture) */
+/* The pages (A8 textures of one game file) are stacked into one atlas. Each size is a grid of
+ * fixed cells with one entry per row of characters (a space marks an unused cell); the glyphs
+ * themselves are proportional, so each one gets its ink width. Sizes are drawn at their scale,
+ * sampling the atlas bilinearly (Thrill Drive 2 has a single size, drawn at three scales). */
+typedef struct { int cw, ch; float scale; } FontSize;
+typedef struct { int size, y; const char *chars; } FontRow;
+static const FontSize k_font_sizes[] = GAME_ENH_FONT_SIZES;
+static const FontRow k_font_rows[] = GAME_ENH_FONT_ROWS;
+static const uint32_t k_font_pages[] = GAME_ENH_FONT_PAGES;
+enum { FONT_LARGE, FONT_MEDIUM, FONT_SMALL, FONT_NSIZES };
+
+typedef struct { int16_t x, y, w, h; } Glyph;      /* ink bounds in the atlas; w = 0: missing */
+static uint8_t *g_font;                             /* GAME_ENH_FONT_W x (pages * PAGE_H) alpha */
+static int g_font_h;
+static Glyph g_glyph[FONT_NSIZES][128];
+
+/* ================================================================== port settings */
+/* <binary>_settings.ini next to the executable: options of the port itself (not of the game,
+ * which keeps its own in the NVRAM). One "key = value" per line. */
+static struct { int fullscreen, show_fps; } g_set;
+static char g_settings_path[1024];
+
+static void settings_load(void) {
+    FILE *f = fopen(g_settings_path, "r");
+    if (!f) return;
+    char line[256], key[64];
+    int v;
+    while (fgets(line, sizeof line, f))
+        if (sscanf(line, " %63[a-z_] = %d", key, &v) == 2) {
+            if (!strcmp(key, "fullscreen")) g_set.fullscreen = v != 0;
+            else if (!strcmp(key, "show_fps")) g_set.show_fps = v != 0;
+        }
+    fclose(f);
+}
+
+static void settings_save(void) {
+    FILE *f = fopen(g_settings_path, "w");
+    if (!f) { rt_log("enhanced: cannot write %s\n", g_settings_path); return; }
+    fprintf(f, "# " GAME_TITLE ", enhanced mode: port settings\n");
+    fprintf(f, "fullscreen = %d\nshow_fps = %d\n", g_set.fullscreen, g_set.show_fps);
+    fclose(f);
+}
+
+int enh_want_fullscreen(void) { return g_enhanced && g_set.fullscreen; }
+void enh_set_fullscreen(int on) { if (g_enhanced && g_set.fullscreen != !!on) { g_set.fullscreen = !!on; settings_save(); } }
+
+void enh_init(const char *work, const char *settings) {
+    if (!g_enhanced) return;
+    count_game_options();
+    snprintf(g_settings_path, sizeof g_settings_path, "%s", settings);
+    settings_load();
+    const char *file = GAME_ENH_FONT_FILE;
+    if (!file) return;
+    char path[1024];
+    snprintf(path, sizeof path, "%s/fs/%s", work, file);
+    int npages = (int)(sizeof k_font_pages / sizeof k_font_pages[0]);
+    size_t page = (size_t)GAME_ENH_FONT_W * GAME_ENH_FONT_PAGE_H;
+    uint8_t *atlas = malloc(page * npages);
+    FILE *f = fopen(path, "rb");
+    int ok = f != NULL;
+    for (int i = 0; ok && i < npages; i++)
+        ok = !fseek(f, (long)k_font_pages[i], SEEK_SET) && fread(atlas + page * i, 1, page, f) == page;
+    if (f) fclose(f);
+    if (!ok) { rt_log("enhanced: cannot read the menu font from %s\n", path); free(atlas); return; }
+    g_font_h = GAME_ENH_FONT_PAGE_H * npages;
+    for (const FontRow *r = k_font_rows; r->size >= 0; r++) {
+        const FontSize *fs = &k_font_sizes[r->size];
+        int col = 0;
+        for (const char *p = r->chars; *p; p++, col++) {
+            if (*p == ' ' || (unsigned char)*p >= 128) continue;
+            int cx = col * fs->cw, lo = fs->cw, hi = -1;
+            for (int x = 0; x < fs->cw && cx + x < GAME_ENH_FONT_W; x++)
+                for (int y = 0; y < fs->ch && r->y + y < g_font_h; y++)
+                    if (atlas[(r->y + y) * GAME_ENH_FONT_W + cx + x] > 40) { if (x < lo) lo = x; if (x > hi) hi = x; break; }
+            if (hi >= lo) g_glyph[r->size][(unsigned char)*p] = (Glyph){ (int16_t)(cx + lo), (int16_t)r->y, (int16_t)(hi - lo + 1), (int16_t)fs->ch };
+        }
+    }
+    g_font = atlas;
+}
+
+static int font_px(int z, int v) { return (int)(v * k_font_sizes[z].scale + 0.5f); }
+static int font_height(int z) { return font_px(z, k_font_sizes[z].ch); }
+static int glyph_space(int z) { return font_px(z, k_font_sizes[z].cw / 2); }
+static int glyph_gap(int z) { return font_px(z, k_font_sizes[z].cw / 8 + 1); }
+static int glyph_width(int z, const Glyph *g) { return font_px(z, g->w); }
+
+static int text_width(int z, const char *s) {
+    int w = 0;
+    for (; *s; s++) {
+        const Glyph *g = &g_glyph[z][(unsigned char)*s & 127];
+        w += g->w ? glyph_width(z, g) + glyph_gap(z) : glyph_space(z);
+    }
+    return w;
+}
+
+static void blend(uint32_t *px, uint32_t rgb, int a) {
+    uint32_t d = *px;
+    int r = (((rgb >> 16) & 255) * a + ((d >> 16) & 255) * (255 - a)) / 255;
+    int g = (((rgb >> 8) & 255) * a + ((d >> 8) & 255) * (255 - a)) / 255;
+    int b = ((rgb & 255) * a + (d & 255) * (255 - a)) / 255;
+    *px = 0xff000000u | (uint32_t)(r << 16) | (uint32_t)(g << 8) | (uint32_t)b;
+}
+
+/* alpha of glyph g at (u, v) in glyph pixels, bilinear */
+static int glyph_alpha(const Glyph *g, float u, float v) {
+    int x0 = (int)u, y0 = (int)v;
+    float fx = u - x0, fy = v - y0;
+    int a[4];
+    for (int k = 0; k < 4; k++) {
+        int x = x0 + (k & 1), y = y0 + (k >> 1);
+        a[k] = (x < 0 || y < 0 || x >= g->w || y >= g->h) ? 0 : g_font[(g->y + y) * GAME_ENH_FONT_W + g->x + x];
+    }
+    return (int)((a[0] * (1 - fx) + a[1] * fx) * (1 - fy) + (a[2] * (1 - fx) + a[3] * fx) * fy + 0.5f);
+}
+
+static void draw_text(uint32_t *fb, int w, int h, int z, int x, int y, const char *s, uint32_t rgb) {
+    float inv = 1.0f / k_font_sizes[z].scale;
+    for (; *s; s++) {
+        const Glyph *g = &g_glyph[z][(unsigned char)*s & 127];
+        if (!g->w) { x += glyph_space(z); continue; }
+        int gw = glyph_width(z, g), gh = font_px(z, g->h);
+        for (int pass = 0; pass < 2; pass++) {      /* drop shadow, then the glyph */
+            int off = pass ? 0 : 2;
+            uint32_t col = pass ? rgb : 0x000000;
+            for (int gy = 0; gy < gh; gy++) {
+                int py = y + gy + off;
+                if (py < 0 || py >= h) continue;
+                for (int gx = 0; gx < gw; gx++) {
+                    int px = x + gx + off;
+                    if (px < 0 || px >= w) continue;
+                    int a = inv == 1.0f ? g_font[(g->y + gy) * GAME_ENH_FONT_W + g->x + gx]
+                                        : glyph_alpha(g, (gx + 0.5f) * inv - 0.5f, (gy + 0.5f) * inv - 0.5f);
+                    if (!pass) a = a * 3 / 5;
+                    if (a) blend(&fb[py * w + px], col, a);
+                }
+            }
+        }
+        x += gw + glyph_gap(z);
+    }
+}
+
+static void draw_centered(uint32_t *fb, int w, int h, int z, int y, const char *s, uint32_t rgb) {
+    draw_text(fb, w, h, z, (w - text_width(z, s)) / 2, y, s, rgb);
+}
+
+static void dim_rect(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1, int a) {
+    for (int y = y0 < 0 ? 0 : y0; y < y1 && y < h; y++)
+        for (int x = x0 < 0 ? 0 : x0; x < x1 && x < w; x++) blend(&fb[y * w + x], 0x000000, a);
+}
+
+/* ================================================================== fps counter */
+/* frames the game drew (Voodoo buffer swaps) per emulated second: 30 on these games. Distinct
+ * pictures would undercount static screens and slow fades. */
+static volatile int g_fps;
+unsigned long long voodoo_swap_count(void);
+
+static void fps_tick(const uint32_t *buf, int w, int h) {
+    (void)buf; (void)w; (void)h;
+    static unsigned long long last_swaps;
+    static uint64_t last_sec;
+    uint64_t sec = rt_now() / (uint64_t)CPU_HZ;
+    if (sec != last_sec) {
+        unsigned long long n = voodoo_swap_count();
+        g_fps = (int)(n - last_swaps);
+        last_swaps = n;
+        last_sec = sec;
+    }
+}
+
+/* ================================================================== game options (NVRAM fields) */
+/* The TEST MODE settings the OPTIONS pages edit: a field of `bits` at `shift` in the byte (size 1)
+ * or big-endian word (size 2) at `addr` of the option block. Values run from min to max; `values`
+ * holds "english|italian" labels, one per line (NULL: shown as numbers). */
+typedef struct {
+    int page; const char *label_en, *label_it; uint32_t addr; int size, shift, bits, min, max, language;
+    const char *values;
+} GameOption;
+static const GameOption k_game_options[] = GAME_ENH_GAME_OPTIONS;
+#define MAX_GAME_OPTIONS 16
+static int g_n_game_options;
+static volatile int g_opt_value[MAX_GAME_OPTIONS];   /* staged values, edited by the menu */
+static volatile int g_opt_dirty;
+
+static int count_game_options(void) {
+    while (g_n_game_options < MAX_GAME_OPTIONS && k_game_options[g_n_game_options].page >= 0) g_n_game_options++;
+    return g_n_game_options;
+}
+
+static uint32_t field_get(const uint8_t *nv, const GameOption *o) {
+    uint32_t v = o->size == 2 ? (uint32_t)(nv[o->addr] << 8 | nv[o->addr + 1]) : nv[o->addr];
+    return (v >> o->shift) & ((1u << o->bits) - 1);
+}
+
+static void field_set(uint8_t *nv, const GameOption *o, uint32_t val) {
+    uint32_t mask = ((1u << o->bits) - 1) << o->shift;
+    uint32_t v = o->size == 2 ? (uint32_t)(nv[o->addr] << 8 | nv[o->addr + 1]) : nv[o->addr];
+    v = (v & ~mask) | ((val << o->shift) & mask);
+    if (o->size == 2) { nv[o->addr] = (uint8_t)(v >> 8); nv[o->addr + 1] = (uint8_t)v; }
+    else nv[o->addr] = (uint8_t)v;
+}
+
+/* the label of value v in language lang (0 English, 1 Italian) */
+static const char *option_value_text(const GameOption *o, int v, int lang, char *buf, size_t n) {
+    if (!o->values) { snprintf(buf, n, "%d", v); return buf; }
+    const char *p = o->values;
+    for (int i = o->min; i < v && p; i++) { p = strchr(p, '\n'); if (p) p++; }
+    if (!p) { snprintf(buf, n, "%d", v); return buf; }
+    const char *bar = strchr(p, '|'), *end = strchr(p, '\n');
+    if (!end) end = p + strlen(p);
+    const char *s0 = lang && bar && bar < end ? bar + 1 : p, *s1 = lang || !bar || bar > end ? end : bar;
+    snprintf(buf, n, "%.*s", (int)(s1 - s0), s0);
+    return buf;
+}
+
+static void options_read(void) {
+    const uint8_t *nv = hw_nvram();
+    for (int i = 0; i < g_n_game_options; i++) {
+        int v = (int)field_get(nv, &k_game_options[i]);
+        if (v < k_game_options[i].min || v > k_game_options[i].max) v = k_game_options[i].min;
+        g_opt_value[i] = v;
+    }
+    g_opt_dirty = 0;
+}
+
+/* ================================================================== texts (English / Italian) */
+/* The menus follow the game's language option (value 2 = Italian). The fonts have no accented
+ * letters, so the Italian texts avoid them. */
+enum { T_START, T_OPTIONS, T_CREDITS, T_QUIT, T_GAME, T_SOUND, T_DISPLAY, T_BACK, T_WINDOW, T_FULLSCREEN,
+       T_SHOW_FPS, T_OFF, T_ON, T_LOADING, T_APPLYING, T_ORIGINAL_GAME, T_RECOMPILATION, T_VOODOO,
+       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_COUNT };
+static const char *const k_text[T_COUNT][2] = {
+    { "START GAME", "INIZIA PARTITA" }, { "OPTIONS", "OPZIONI" }, { "CREDITS", "RICONOSCIMENTI" },
+    { "QUIT", "ESCI" }, { "GAME", "GIOCO" }, { "SOUND", "AUDIO" }, { "DISPLAY", "SCHERMO" },
+    { "BACK", "INDIETRO" }, { "WINDOW", "FINESTRA" }, { "FULLSCREEN", "SCHERMO INTERO" },
+    { "SHOW FPS", "MOSTRA FPS" }, { "OFF", "NO" }, { "ON", "SI" }, { "LOADING", "CARICAMENTO" },
+    { "APPLYING SETTINGS", "APPLICAZIONE IMPOSTAZIONI" }, { "ORIGINAL GAME", "GIOCO ORIGINALE" },
+    { "STATIC RECOMPILATION", "RICOMPILAZIONE STATICA" }, { "VOODOO GRAPHICS CORE", "GRAFICA VOODOO" },
+    { "PRESS START TO GO BACK", "PREMI START PER TORNARE" }, { "PAUSE", "PAUSA" },
+    { "RESUME", "RIPRENDI" }, { "MAIN MENU", "MENU PRINCIPALE" },
+};
+
+static int menu_language(void) {
+    for (int i = 0; i < g_n_game_options; i++)
+        if (k_game_options[i].language) return g_opt_value[i] == 2;
+    return 0;
+}
+#define T(id) k_text[id][menu_language()]
+
+/* ================================================================== attract menu */
+/* Shown over the attract mode. The frontend (host main thread) sends the actions and draws
+ * the overlay; the guest thread updates the attract state. Plain ints are enough: each field
+ * has a single writer. */
+enum { SCREEN_MAIN, SCREEN_OPTIONS, SCREEN_PAGE, SCREEN_CREDITS };
+enum { PAGE_GAME, PAGE_SOUND, PAGE_DISPLAY, N_PAGES };
+static const int k_main_items[] = { T_START, T_OPTIONS, T_CREDITS, T_QUIT };
+#define N_MAIN_ITEMS 4
+#define MENU_GRACE_FRAMES 300      /* the Konami logo gap in the attract loop lasts about 4 s */
+#define START_HOLD_FRAMES 12
+
+static volatile int g_screen, g_cursor, g_quit;
+static volatile int g_opt_cursor, g_page, g_page_cursor;
+static volatile int g_start_hold;          /* frames START is still held for the game */
+static volatile int g_starting;            /* START GAME chosen, waiting for the game to begin */
+static volatile uint64_t g_starting_frame;
+static volatile int g_apply;               /* 1: write the staged options, 2: written, restart */
+static volatile int g_paused, g_pause_cursor;
+static volatile int g_returning;           /* MAIN MENU from the pause: back to the attract */
+static uint64_t g_return_t0;
+static volatile int g_booted;              /* the attract hook has run once since the start */
+static int g_headless;
+
+void enh_set_headless(int on) { g_headless = on; }
+
+/* until the game reaches the attract mode, and while applying settings, the frontend runs the
+ * emulation unpaced and muted behind a LOADING screen */
+#define BOOT_TURBO_LIMIT 60          /* emulated seconds: never keep a LOADING screen forever */
+int enh_turbo(void) {
+#ifdef GAME_ENH_HOOK_ATTRACT
+    if (!g_enhanced || !g_font) return 0;
+    if (g_apply || g_returning) return 1;
+    return !g_booted && rt_now() < (uint64_t)BOOT_TURBO_LIMIT * CPU_HZ;
+#else
+    return 0;
+#endif
+}
+int enh_restart_requested(void) { return g_apply == 2; }
+
+/* ------------------------------------------------------------------ pause (Esc in play) */
+int enh_paused(void) { return g_paused; }
+int enh_inputs_owned(void) { return g_returning; }   /* the return script drives IN3/IN4 */
+
+/* Esc from the frontend: 1 if the enhanced mode handled it (pause, or back in a submenu) */
+int enh_escape(void) {
+    if (!g_enhanced || !g_font || g_apply || g_returning || !g_booted) return 0;
+    if (g_paused) { g_paused = 0; return 1; }
+    if (enh_menu_active()) {
+        if (g_screen == SCREEN_MAIN) return 0;      /* the main menu: Esc quits, as before */
+        enh_menu_action(ENH_BACK);
+        return 1;
+    }
+    if (enh_turbo() || g_starting) return 1;
+    g_paused = 1;
+    g_pause_cursor = 0;
+    return 1;
+}
+
+static void pause_action(int action) {
+    switch (action) {
+    case ENH_UP: case ENH_DOWN: g_pause_cursor ^= 1; break;
+    case ENH_BACK: g_paused = 0; break;
+    case ENH_OK:
+        if (g_pause_cursor == 0) g_paused = 0;
+        else if (GAME_ENH_TEST_GAME_MODE >= 0) { g_returning = 1; g_return_t0 = 0; g_paused = 0; }
+        else { g_apply = 2; g_paused = 0; }            /* no known route: reboot the game */
+        break;
+    default: break;
+    }
+}
+
+int enh_menu_active(void) {
+    if (!g_enhanced || !g_font || g_starting || g_apply || g_returning || g_paused) return 0;
+    return g_attract_frame && g_frame - g_attract_frame <= MENU_GRACE_FRAMES;
+}
+
+int enh_start_held(void) { return g_start_hold > 0; }
+int enh_quit_requested(void) { return g_quit; }
+
+/* the rows of an options page: game options of that page, or the port options (DISPLAY) */
+static int page_rows(int page, int *rows) {
+    int n = 0;
+    if (page == PAGE_DISPLAY) { rows[n++] = -1; rows[n++] = -2; return n; }
+    for (int i = 0; i < g_n_game_options; i++)
+        if (k_game_options[i].page == page) rows[n++] = i;
+    return n;
+}
+
+static void page_change(int row, int dir) {
+    if (row == -1) { g_set.fullscreen = !g_set.fullscreen; settings_save(); return; }
+    if (row == -2) { g_set.show_fps = !g_set.show_fps; settings_save(); return; }
+    const GameOption *o = &k_game_options[row];
+    int v = g_opt_value[row] + dir, span = o->max - o->min + 1;
+    g_opt_value[row] = o->min + ((v - o->min) % span + span) % span;
+    g_opt_dirty = 1;
+}
+
+static void leave_options(void) {
+    g_screen = SCREEN_MAIN;
+    if (g_opt_dirty) g_apply = 1;            /* the guest thread writes them and restarts */
+}
+
+void enh_menu_action(int action) {
+    if (g_paused) { pause_action(action); return; }
+    if (!enh_menu_active()) return;
+    if (g_screen == SCREEN_PAGE) {
+        int rows[MAX_GAME_OPTIONS + 2], n = page_rows(g_page, rows);
+        switch (action) {
+        case ENH_UP: g_page_cursor = (g_page_cursor + n) % (n + 1); break;
+        case ENH_DOWN: g_page_cursor = (g_page_cursor + 1) % (n + 1); break;
+        case ENH_BACK: g_screen = SCREEN_OPTIONS; break;
+        case ENH_LEFT: case ENH_RIGHT: case ENH_OK:
+            if (g_page_cursor == n) { if (action == ENH_OK) g_screen = SCREEN_OPTIONS; }
+            else page_change(rows[g_page_cursor], action == ENH_LEFT ? -1 : 1);
+            break;
+        default: break;
+        }
+        return;
+    }
+    if (g_screen == SCREEN_OPTIONS) {
+        switch (action) {
+        case ENH_UP: g_opt_cursor = (g_opt_cursor + N_PAGES) % (N_PAGES + 1); break;
+        case ENH_DOWN: g_opt_cursor = (g_opt_cursor + 1) % (N_PAGES + 1); break;
+        case ENH_BACK: leave_options(); break;
+        case ENH_OK:
+            if (g_opt_cursor == N_PAGES) leave_options();
+            else { g_page = g_opt_cursor; g_page_cursor = 0; g_screen = SCREEN_PAGE; }
+            break;
+        default: break;
+        }
+        return;
+    }
+    if (g_screen == SCREEN_CREDITS) {
+        if (action == ENH_OK || action == ENH_BACK) g_screen = SCREEN_MAIN;
+        return;
+    }
+    switch (action) {
+    case ENH_UP: g_cursor = (g_cursor + N_MAIN_ITEMS - 1) % N_MAIN_ITEMS; break;
+    case ENH_DOWN: g_cursor = (g_cursor + 1) % N_MAIN_ITEMS; break;
+    case ENH_OK:
+        if (g_cursor == 0) { g_starting = 1; g_starting_frame = g_frame; g_start_hold = START_HOLD_FRAMES; }
+        else if (g_cursor == 1) { g_screen = SCREEN_OPTIONS; g_opt_cursor = 0; options_read(); }
+        else if (g_cursor == 2) g_screen = SCREEN_CREDITS;
+        else g_quit = 1;
+        break;
+    default: break;
+    }
+}
+
+/* per-frame menu bookkeeping, on the guest thread (called from enh_on_frame) */
+extern uint8_t g_in[8];
+void nvram_save(void);
+
+static void menu_tick(void) {
+    if (g_attract_frame && !g_booted) { g_booted = 1; options_read(); }
+    /* START GAME presses START for a few frames (IN3 bit 4, active low); the SDL frontend
+     * rewrites IN3 every loop and also honours enh_start_held(), headless runs rely on this */
+    if (g_start_hold > 0) {
+        g_in[3] &= (uint8_t)~0x10;
+        if (--g_start_hold == 0) g_in[3] |= 0x10;
+    }
+    if (g_starting) {
+        /* the game has begun once the attract hook stops; if it keeps running (START ignored,
+         * e.g. during the boot screens), give the menu back after a few seconds */
+        if (g_frame - g_attract_frame > 60) { g_starting = 0; g_screen = SCREEN_MAIN; g_cursor = 0; g_attract_frame = 0; }
+        else if (g_frame - g_starting_frame > 240) g_starting = 0;
+    }
+    if (g_returning) {
+        /* as on a cabinet: TEST opens TEST MODE, GAME MODE leaves it for the attract. All of it
+         * runs fast-forwarded behind the loading screen; a reboot is the fallback. */
+        uint64_t now = rt_now();
+        if (!g_return_t0) { g_return_t0 = now; g_attract_frame = 0; }
+        double t = (double)(now - g_return_t0) / CPU_HZ, t_start = 12.0 + GAME_ENH_TEST_GAME_MODE * 0.8 + 1.0;
+        uint8_t in3 = 0xff, in4 = 0xff;
+        if (t < 0.4) in3 &= (uint8_t)~0x02;                                   /* TEST */
+        for (int k = 0; k < GAME_ENH_TEST_GAME_MODE; k++)
+            if (t >= 12.0 + k * 0.8 && t < 12.3 + k * 0.8) in4 &= (uint8_t)~0x01;   /* SHIFT UP */
+        if (t >= t_start && t < t_start + 0.3) in3 &= (uint8_t)~0x10;          /* START on GAME MODE */
+        g_in[3] = in3;
+        g_in[4] = in4;
+        if (t > t_start + 0.5 && g_attract_frame) {
+            g_returning = 0; g_screen = SCREEN_MAIN; g_cursor = 0;
+            rt_log("enhanced: back to the attract mode\n");
+        } else if (t > 60.0) {
+            g_returning = 0; g_apply = 2;
+            rt_log("enhanced: the attract mode did not come back, restarting\n");
+            if (g_headless) rt_fatal("restart");
+        }
+    }
+    if (g_apply == 1) {
+        /* the game reads its settings only at boot: write them, save, then restart the process */
+        uint8_t *nv = hw_nvram();
+        for (int i = 0; i < g_n_game_options; i++) field_set(nv, &k_game_options[i], (uint32_t)g_opt_value[i]);
+        options_checksum_fix(nv);
+        nvram_save();
+        rt_log("enhanced: settings written, restarting\n");
+        g_apply = 2;
+        if (g_headless) rt_fatal("restart for the new settings");
+    }
+}
+
+static void draw_menu(uint32_t *fb, int w, int h);
+
+void enh_draw_overlay(uint32_t *fb, int w, int h) {
+    if (!g_enhanced) return;
+    if (enh_turbo()) {                               /* booting or applying: cover it all */
+        dim_rect(fb, w, h, 0, 0, w, h, 255);
+        draw_centered(fb, w, h, FONT_MEDIUM, h / 2 - font_height(FONT_MEDIUM) / 2, T(g_apply == 1 || g_apply == 2 ? T_APPLYING : T_LOADING), 0xffffff);
+        return;
+    }
+    if (g_paused) {
+        const int z = FONT_MEDIUM, step = font_height(z) + 8;
+        static const int items[2] = { T_RESUME, T_MAIN_MENU };
+        dim_rect(fb, w, h, 0, 0, w, h, 160);
+        draw_centered(fb, w, h, FONT_LARGE, h / 2 - 90, T(T_PAUSE), 0xffd800);
+        for (int i = 0; i < 2; i++)
+            draw_centered(fb, w, h, z, h / 2 - 10 + i * step, T(items[i]), i == g_pause_cursor ? 0xffd800 : 0xffffff);
+    }
+    if (enh_menu_active()) draw_menu(fb, w, h);
+    if (g_set.show_fps && g_font) {                 /* on top of everything, also in play */
+        char buf[16];
+        snprintf(buf, sizeof buf, "%d FPS", g_fps);
+        draw_text(fb, w, h, FONT_SMALL, w - text_width(FONT_SMALL, buf) - 8, 6, buf, 0x40ff40);
+    }
+}
+
+static void draw_menu(uint32_t *fb, int w, int h) {
+    const uint32_t white = 0xffffff, yellow = 0xffd800, grey = 0xc0c0c0;
+    int lang = menu_language();
+    if (g_screen == SCREEN_MAIN) {
+        /* a compact panel on the left, so the attract stays visible */
+        const int z = FONT_MEDIUM, step = font_height(z) * 7 / 8, pad = 12, left = 24;
+        int tw = 0;
+        for (int i = 0; i < N_MAIN_ITEMS; i++) {
+            int iw = text_width(z, T(k_main_items[i]));
+            if (iw > tw) tw = iw;
+        }
+        int ph = N_MAIN_ITEMS * step + 2 * pad - (step - font_height(z));
+        int y0 = h - ph - 40;          /* lower left */
+        dim_rect(fb, w, h, left, y0, left + tw + 2 * pad, y0 + ph, 150);
+        for (int i = 0; i < N_MAIN_ITEMS; i++)
+            draw_text(fb, w, h, z, left + pad, y0 + pad + i * step, T(k_main_items[i]), i == g_cursor ? yellow : white);
+    } else if (g_screen == SCREEN_OPTIONS) {
+        static const int items[N_PAGES + 1] = { T_GAME, T_SOUND, T_DISPLAY, T_BACK };
+        const int z = FONT_MEDIUM, step = font_height(z) + 8;
+        dim_rect(fb, w, h, 0, 0, w, h, 190);
+        draw_centered(fb, w, h, FONT_LARGE, 36, T(T_OPTIONS), yellow);
+        for (int i = 0; i <= N_PAGES; i++)
+            draw_centered(fb, w, h, z, 120 + i * step + (i == N_PAGES ? step / 2 : 0), T(items[i]), i == g_opt_cursor ? yellow : white);
+    } else if (g_screen == SCREEN_PAGE) {
+        static const int titles[N_PAGES] = { T_GAME, T_SOUND, T_DISPLAY };
+        const int z = FONT_MEDIUM, step = font_height(z) + 4, left = 40, right = w - 40;
+        int rows[MAX_GAME_OPTIONS + 2], n = page_rows(g_page, rows);
+        dim_rect(fb, w, h, 0, 0, w, h, 190);
+        draw_centered(fb, w, h, FONT_LARGE, 24, T(titles[g_page]), yellow);
+        int y = 90;
+        for (int i = 0; i < n; i++, y += step) {
+            uint32_t col = i == g_page_cursor ? yellow : white;
+            const char *label, *value;
+            char buf[64];
+            if (rows[i] == -1) { label = T(T_DISPLAY); value = T(g_set.fullscreen ? T_FULLSCREEN : T_WINDOW); }
+            else if (rows[i] == -2) { label = T(T_SHOW_FPS); value = T(g_set.show_fps ? T_ON : T_OFF); }
+            else {
+                const GameOption *o = &k_game_options[rows[i]];
+                label = lang ? o->label_it : o->label_en;
+                value = option_value_text(o, g_opt_value[rows[i]], lang, buf, sizeof buf);
+            }
+            /* a value that does not fit next to its label falls back to the small font */
+            int zv = text_width(z, label) + text_width(z, value) + 16 > right - left ? FONT_SMALL : z;
+            draw_text(fb, w, h, z, left, y, label, col);
+            draw_text(fb, w, h, zv, right - text_width(zv, value), y + (font_height(z) - font_height(zv)), value, col);
+        }
+        draw_text(fb, w, h, z, left, y + step / 2, T(T_BACK), g_page_cursor == n ? yellow : white);
+    } else {
+        static const int heads[] = { T_ORIGINAL_GAME, T_RECOMPILATION, T_VOODOO };
+        static const char *const names[] = { "KONAMI", "KONAMI VIPER RECOMP", "MAME" };
+        dim_rect(fb, w, h, 0, 0, w, h, 190);
+        draw_centered(fb, w, h, FONT_LARGE, 24, T(T_CREDITS), yellow);
+        for (int i = 0, y = 90; i < 3; i++, y += 78) {
+            draw_centered(fb, w, h, FONT_SMALL, y, T(heads[i]), grey);
+            draw_centered(fb, w, h, FONT_MEDIUM, y + 26, names[i], white);
+        }
+        draw_centered(fb, w, h, FONT_SMALL, 340, T(T_PRESS_START_BACK), grey);
+    }
+}
+
+/* RT_ENH_MENU="seconds:action,..." (up/down/left/right/ok/back) drives the menu in headless tests */
+static void scripted_menu(void) {
+    static const char *next = (const char *)-1;
+    if (next == (const char *)-1) next = getenv("RT_ENH_MENU");
+    while (next && *next) {
+        char *colon;
+        double t = strtod(next, &colon);
+        if (*colon != ':' || (double)rt_now() / CPU_HZ < t) return;
+        const char *a = colon + 1;
+        if (!strncmp(a, "esc", 3)) { enh_escape(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
+        int action = !strncmp(a, "up", 2) ? ENH_UP : !strncmp(a, "down", 4) ? ENH_DOWN :
+                     !strncmp(a, "left", 4) ? ENH_LEFT : !strncmp(a, "right", 5) ? ENH_RIGHT :
+                     !strncmp(a, "ok", 2) ? ENH_OK : ENH_BACK;
+        enh_menu_action(action);
+        const char *comma = strchr(a, ',');
+        next = comma ? comma + 1 : NULL;
+    }
+}

@@ -105,7 +105,50 @@ def check(g, keys=None):
 
 
 def c_str(s):
-    return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
+    return '"' + s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n') + '"'
+
+
+def font_config(font):
+    """GAME_ENH_FONT_*: the game font used by the enhanced-mode menus (runtime/enhanced.c).
+    The pages (textures of one file) are stacked vertically into one atlas; each size is a grid
+    of fixed cells, one row of characters per entry, drawn at the given scale."""
+    if not font:
+        return ["#define GAME_ENH_FONT_FILE NULL", "#define GAME_ENH_FONT_PAGES {0}", "#define GAME_ENH_FONT_W 0",
+                "#define GAME_ENH_FONT_PAGE_H 0", "#define GAME_ENH_FONT_SIZES {{0}}", "#define GAME_ENH_FONT_ROWS {{-1}}"]
+    sizes, rows = [], []
+    for k, name in enumerate(('large', 'medium', 'small')):
+        z = font['sizes'][name]
+        sizes.append(f"{{{z['cell'][0]}, {z['cell'][1]}, {z.get('scale', 1.0)}f}}")
+        rows += [f"{{{k}, {y}, {c_str(chars)}}}" for y, chars in z['rows']]
+    return [f"#define GAME_ENH_FONT_FILE {c_str(font['file'])}",
+            "#define GAME_ENH_FONT_PAGES {" + ", ".join(f"0x{int(o, 16):x}" for o in font['pages']) + "}",
+            f"#define GAME_ENH_FONT_W {font['width']}", f"#define GAME_ENH_FONT_PAGE_H {font['page_height']}",
+            "#define GAME_ENH_FONT_SIZES {" + ", ".join(sizes) + "}  /* large, medium, small: cell w, h, scale */",
+            "#define GAME_ENH_FONT_ROWS {" + ", ".join(rows) + ", {-1}}  /* size, y, characters */"]
+
+
+VALUE_SETS = {
+    'difficulty': [["EASIEST", "FACILISSIMO"], ["VERY EASY", "MOLTO FACILE"], ["EASY", "FACILE"],
+                   ["MEDIUM", "MEDIO"], ["MEDIUM HARD", "MEDIO DIFFICILE"], ["HARD", "DIFFICILE"],
+                   ["VERY HARD", "MOLTO DIFFICILE"], ["HARDEST", "DIFFICILISSIMO"]],
+    'offon': [["OFF", "NO"], ["ON", "SI"]],
+}
+
+
+def game_options_config(opts):
+    """GAME_ENH_GAME_OPTIONS: the TEST MODE settings the enhanced-mode OPTIONS pages edit in the
+    NVRAM. Each field is `bits` wide at `shift` in the byte (size 1) or big-endian word (size 2)
+    at `addr`; values run from min to max, with English|Italian labels (none: shown as numbers)."""
+    rows = []
+    for o in opts or []:
+        vals = o.get('values')
+        if isinstance(vals, str):
+            vals = VALUE_SETS[vals]
+        text = c_str("\n".join(f"{en}|{it}" for en, it in vals)) if vals else 'NULL'
+        page = {'game': 0, 'sound': 1}[o['page']]
+        rows.append(f"{{{page}, {c_str(o['label'][0])}, {c_str(o['label'][1])}, 0x{int(o['addr'], 16):x}, {o.get('size', 1)}, "
+                    f"{o['shift']}, {o['bits']}, {o['min']}, {o['max']}, {1 if o.get('language') else 0}, {text}}}")
+    return "#define GAME_ENH_GAME_OPTIONS {" + ", ".join(rows + ["{-1}"]) + "}"
 
 
 def write_config_header(g, out):
@@ -130,6 +173,28 @@ def write_config_header(g, out):
         f"#define GAME_HAS_HANDBRAKE {1 if inp.get('handbrake') else 0}",
         f"#define GAME_CALIBRATION_SCRIPT {c_str(cal['script']) if cal else 'NULL'}",
         f"#define GAME_CALIBRATION_SECONDS {cal.get('seconds', 0)}",
+    ]
+    # enhanced ("conversion") mode, runtime/enhanced.c: optional, absent for unverified versions
+    enh = g.get('enhanced') or {}
+    setup = enh.get('setup') or {}
+    blanks = enh.get('blank_strings') or []
+    lines += [
+        f"#define GAME_HAS_ENHANCED {1 if enh else 0}",
+        f"#define GAME_ENH_NVRAM_SAVE {c_str(g['binary'] + '_enhanced_nvram.bin')}",
+        f"#define GAME_ENH_SETTINGS {c_str(g['binary'] + '_settings.ini')}",
+        f"#define GAME_ENH_SETUP_SCRIPT {c_str(setup['script']) if setup.get('script') else 'NULL'}",
+        f"#define GAME_ENH_SETUP_SECONDS {setup.get('seconds', 0)}",
+        # named hooks: GAME_ENH_HOOK_<NAME> = address (the recompiler inserts rt_hook() there)
+        *[f"#define GAME_ENH_HOOK_{name.upper()} 0x{int(a, 16):08x}u"
+          for mod in (enh.get('hooks') or {}).values() for a, name in mod.items()],
+        *font_config(enh.get('font')),
+        game_options_config(enh.get('game_options')),
+        # TEST MODE main menu index of GAME MODE: the pause menu's "main menu" returns to the attract through it
+        f"#define GAME_ENH_TEST_GAME_MODE {enh.get('test_menu_game_mode', -1)}",
+        f"#define GAME_ENH_OPT_START {int((enh.get('nvram_options') or {}).get('start', '0'), 16)}",
+        f"#define GAME_ENH_OPT_CSUM {int((enh.get('nvram_options') or {}).get('checksum', '0'), 16)}",
+        "#define GAME_ENH_BLANK_STRINGS {" + "".join(f"{{0x{int(b['addr'], 16):08x}u, {c_str(b['text'])}}}, " for b in blanks)
+        + "{0, NULL}}",
     ]
     open(os.path.join(out, 'game_config.h'), 'w').write("\n".join(lines) + "\n")
 

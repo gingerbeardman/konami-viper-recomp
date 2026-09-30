@@ -49,6 +49,27 @@ typedef struct HwConfig {
 
 void hw_init(const HwConfig *cfg);
 uint32_t hw_boot_param(void);    /* r31 at kernel entry, as the BIOS builds it */
+uint8_t *hw_nvram(void);         /* M48T58 image (0x2000 bytes), guest thread only */
+
+/* enhanced (conversion) mode, runtime/enhanced.c */
+extern int g_enhanced;
+void enh_on_frame(const uint32_t *frame, int w, int h);
+int enh_in_attract(void);
+enum { ENH_UP, ENH_DOWN, ENH_LEFT, ENH_RIGHT, ENH_OK, ENH_BACK };
+void enh_init(const char *work, const char *settings); /* fonts, port settings */
+int enh_want_fullscreen(void);
+void enh_set_fullscreen(int on);
+int enh_menu_active(void);                             /* attract menu on screen */
+void enh_menu_action(int action);
+int enh_start_held(void);                              /* START GAME: hold START for the game */
+int enh_quit_requested(void);
+void enh_draw_overlay(uint32_t *fb, int w, int h);     /* menu over a 0xAARRGGBB frame */
+int enh_turbo(void);                                   /* boot/apply: run unpaced, muted */
+int enh_restart_requested(void);                       /* new settings written: restart */
+void enh_set_headless(int on);
+int enh_escape(void);                                  /* Esc: pause / back; 0 = not handled */
+int enh_paused(void);
+int enh_inputs_owned(void);                            /* the enhanced layer drives IN3/IN4 */
 void hw_shutdown(void);
 void nvram_save(void);
 void rt_pace_vblank(void);

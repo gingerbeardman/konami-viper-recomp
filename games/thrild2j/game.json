@@ -25,5 +25,6 @@
   "notes": [
     "Japanese version.",
     "MAME uses the GTI Club 2 input layout (K-type steering wheel) for this version; the analog mapping and the calibration script still have to be verified."
-  ]
+  ],
+  "enhanced": null
 }

@@ -143,6 +143,8 @@ class Emitter:
                 continue
             if a in PROBES and not (a in fn.labels or a == fn.entry):
                 self.w(f"TRACE(c, {h(a)});")
+            if a in self.mod.hooks:
+                self.w(f"rt_hook(c, {h(a)});")
             self.insn(i)
             # every block either ends in a branch or continues at a+4 (which is in the body)
             if not self.ends_flow(i) and a + 4 not in fn.insns:
