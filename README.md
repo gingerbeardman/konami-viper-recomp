@@ -35,8 +35,9 @@ The `GAME=` value is the name of the game's MAME set.
 - Boots like the original board; attract mode, coin-up, menus and test mode work.
 - Fully playable at the original 30 fps, with correct sound.
 - Steering and pedals are calibrated automatically on first launch.
-- Known issues: some graphical glitches, which are still being investigated. Many of them are
-  also present in MAME's Voodoo core, which this project uses.
+- Graphics: the texture corruption that MAME's Voodoo core also shows (noise on walls,
+  street lights, headlights, fog, lens flare) has been fixed. Checked on the attract mode of
+  Thrill Drive 2 and GTI Club 2.
 
 **Other Thrill Drive 2 versions**: same game engine, so they are expected to work like EBB.
 They still have to be verified, and their automatic calibration is disabled until then.

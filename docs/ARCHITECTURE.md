@@ -254,6 +254,21 @@ The modules use the PowerOpen/AIX ABI: function pointers are descriptors `{code,
   contention makes performance worse.
 - **Voodoo3** (`runtime/voodoo/`): the **MAME core**, almost unchanged (`voodoo.cpp`,
   `voodoo_2.cpp`, `voodoo_banshee.cpp`, `voodoo_render.cpp`, `poly.h`, `rgbutil`; BSD-3).
+  - **Fix: multibase texture addresses** (`rasterizer_texture::recompute`).
+    - With `tmultibaseaddr` set, LOD 1, LOD 2 and LODs 3-8 each take their base from their
+      own register. The hardware still adds the LOD's offset within the mipmap chain (the sizes
+      of the owned LODs before it); Glide's `_grTexCalcBaseAddress` subtracts that offset when
+      it computes the registers. MAME used the registers as absolute addresses.
+    - The Viper games use multibase for every texture. They clamp the LOD to a single level
+      (`lodmin = lodmax = N`), put the real address in level N's register, and set the
+      registers of the other levels (the TMUs run in even/odd split mode) so that, once the
+      hardware adds the offset, they point to address 0. That is why their base addresses look
+      negative, e.g. `0xFF0000` = −64 KB, the size of LOD 0 of a 256×256 8-bit texture.
+    - Without the offset, those levels were read from unrelated VRAM. This is the "noise"
+      texture corruption that MAME also shows, on walls, headlights, fog and lens flares. MAME's
+      TODO in the same function noted that Viper "seems to expect relative offsets".
+  - Debug: `RT_VOODOO_TEXLOG=1` prints each new texture setup (format, LOD range, split and
+    multibase flags, base registers).
   - The `emu.h` shim underneath provides:
     - `attotime` on virtual time;
     - `emu_timer` on the runtime scheduler;
@@ -349,8 +364,9 @@ Open:
 - **GTI Club 2**: interactive play (steering feel, handbrake); optional force feedback on a
   gamepad (rumble); the unmapped accesses at
   `0xFFE50000`/`0xFFE58000`/`0xFFE80000`/`0xFFE90000` during boot;
-- **graphical glitches** seen in-game. We still need to find out which of them are artefacts
-  already present in MAME's Voodoo core. References: real hardware and gameplay videos;
+- **graphics**: the multibase texture fix removed the texture noise in the attract mode of TD2
+  (street lights, trees, embankments) and GTI Club 2. Next, catalogue whatever glitches are
+  left in play;
 - cabinet settings stored in the starting NVRAM: "SOUND IN ATTRACT MODE: COMPLETE OFF", and
   BGM/SE volume at 3. This is why the default audio gain is ×16;
 - Windows/Linux builds. First-run calibration uses `system()`, which needs adapting for
@@ -387,8 +403,9 @@ Notes:
    - Check the `gl` dispatcher addresses (`python3 recomp/coverage.py <id> gl` lists the
      unresolved `bctr`s) and set the hints.
    - Check that TD2's calibration script works.
-2. Graphical glitches: catalogue them, then compare with MAME and with real references
-   (gameplay videos or real hardware). Fix the Voodoo core where it is wrong.
+2. Graphics: catalogue what is left after the multibase fix, against real
+   references (gameplay videos or real hardware). MAME's core shares the same bugs, so it is not a
+   reference for graphics.
 3. Further rasteriser optimisation (SIMD, less contention); eventually a GPU backend.
 4. CMake builds for Windows and Linux, CI.
 5. Distributable package: the game data stays external and is extracted from the user's CHD.
@@ -413,4 +430,5 @@ RT_MMIO_LOG=10000 RT_MMIO_RANGE=fe000000-feffffff ./td2   # log MMIO accesses
 ./td2 --frames DIR --frame-every 60   # dump video frames (PPM)
 RT_SC_LOG=1 ./td2                     # log kernel syscalls
 RT_VOODOO_LOG=1 ./td2                 # messages from MAME's Voodoo core
+RT_VOODOO_TEXLOG=1 ./td2              # log each new texture setup (format, LODs, base registers)
 ```

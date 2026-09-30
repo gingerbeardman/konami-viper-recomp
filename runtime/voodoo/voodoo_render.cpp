@@ -14,6 +14,10 @@
 #include "endianness.h"
 
 #include <bit>
+#include <set>
+#include <array>
+#include <cstdlib>
+#include <cstdio>
 
 
 namespace voodoo {
@@ -831,55 +835,61 @@ void rasterizer_texture::recompute(voodoo_regs const &regs, u8 *ram, u32 mask, r
 	auto const texmode = regs.texture_mode();
 	int bppscale = texmode.format() >> 3;
 
+	{	// DEBUG: RT_VOODOO_TEXLOG=1 logs every new texture setup combination
+		static int texlog = -1;
+		if (texlog < 0) texlog = getenv("RT_VOODOO_TEXLOG") != nullptr;
+		if (texlog)
+		{
+			static std::set<std::array<u32, 7>> seen;
+			std::array<u32, 7> key = { u32(texmode.format()), texlod.lod_min(), texlod.lod_max(),
+				u32((texlod.lod_tsplit() << 3) | (texlod.lod_odd() << 2) | (texlod.lod_s_is_wider() << 1) | texlod.tmultibaseaddr()) | (texlod.lod_aspect() << 4) | (texlod.magic() << 8),
+				regs.texture_baseaddr(), texlod.tmultibaseaddr() ? regs.texture_baseaddr_1() : 0,
+				texlod.tmultibaseaddr() ? regs.texture_baseaddr_2() : 0 };
+			if (seen.size() < 4000 && seen.insert(key).second)
+				fprintf(stderr, "TEXLOG fmt=%2u lod=%u-%u flags=%03x base=%06x b1=%06x b2=%06x b38=%06x shift=%u\n", key[0], key[1] >> 2, key[2] >> 2, key[3],
+					key[4], key[5], key[6], texlod.tmultibaseaddr() ? regs.texture_baseaddr_3_8() : 0, addrshift);
+		}
+	}
+
 	// start with the base of LOD 0
 	u32 base = regs.texture_baseaddr();
 	if (addrshift == 0 && BIT(base, 0) != 0)
 		fatalerror("Unsupported tiled texture in Voodoo device");
-	base = (base & addrmask) << addrshift;
-	m_lodoffset[0] = base & mask;
 
-	// LODs 1-3 are different depending on whether we are in multitex mode
+	// offset of each LOD from the start of the mipmap chain: the sizes of the LODs this TMU
+	// owns that come before it (LODs 4-8 are at least 4 texels)
+	u32 lodstart[9];
+	u32 offset = 0;
+	for (int lod = 0; lod <= 8; lod++)
+	{
+		lodstart[lod] = offset;
+		if (m_lodmask & (1 << lod))
+		{
+			u32 size = ((m_wmask >> lod) + 1) * ((m_hmask >> lod) + 1);
+			if (lod >= 4 && size < 4) size = 4;
+			offset += size << bppscale;
+		}
+	}
+
+	// In multibase mode LODs 1, 2 and 3-8 have their own base register, but the hardware still
+	// adds the LOD's offset within the chain: Glide's _grTexCalcBaseAddress subtracts it when it
+	// computes the base registers. The Viper games (Konami's own library) do the same, which is
+	// why their base addresses look negative (e.g. 0xff0000 = -64 KB, the size of LOD 0 of a
+	// 256x256 8-bit texture).
 	// Several Voodoo 2 games leave the upper bits of TLOD == 0xff, meaning we think
-	// they want multitex mode when they really don't -- disable for now
-	// Enable for Voodoo 3 or Viper breaks - VL.
-	// Add check for upper nibble not equal to zero to fix funkball -- TG
+	// they want multitex mode when they really don't; the magic check keeps them working.
+	u32 lodbase[9];
+	for (int lod = 0; lod <= 8; lod++)
+		lodbase[lod] = base;
 	if (texlod.tmultibaseaddr() && texlod.magic() == 0)
 	{
-		// TODO: konami/viper.cpp still don't work right here
-		// it seems to expect relative offsets in every game,
-		// where the base addresses are actually set with negative numbers
-		// (i.e. 0xff0000, 0xffc000, 0xfff000 ...)
-		base = (regs.texture_baseaddr_1() & addrmask) << addrshift;
-		m_lodoffset[1] = base & mask;
-		base = (regs.texture_baseaddr_2() & addrmask) << addrshift;
-		m_lodoffset[2] = base & mask;
-		base = (regs.texture_baseaddr_3_8() & addrmask) << addrshift;
-		m_lodoffset[3] = base & mask;
+		lodbase[1] = regs.texture_baseaddr_1();
+		lodbase[2] = regs.texture_baseaddr_2();
+		for (int lod = 3; lod <= 8; lod++)
+			lodbase[lod] = regs.texture_baseaddr_3_8();
 	}
-	else
-	{
-		if (m_lodmask & (1 << 0))
-			base += (((m_wmask >> 0) + 1) * ((m_hmask >> 0) + 1)) << bppscale;
-		m_lodoffset[1] = base & mask;
-		if (m_lodmask & (1 << 1))
-			base += (((m_wmask >> 1) + 1) * ((m_hmask >> 1) + 1)) << bppscale;
-		m_lodoffset[2] = base & mask;
-		if (m_lodmask & (1 << 2))
-			base += (((m_wmask >> 2) + 1) * ((m_hmask >> 2) + 1)) << bppscale;
-		m_lodoffset[3] = base & mask;
-	}
-
-	// remaining LODs make sense
-	for (int lod = 4; lod <= 8; lod++)
-	{
-		if (m_lodmask & (1 << (lod - 1)))
-		{
-			u32 size = ((m_wmask >> (lod - 1)) + 1) * ((m_hmask >> (lod - 1)) + 1);
-			if (size < 4) size = 4;
-			base += size << bppscale;
-		}
-		m_lodoffset[lod] = base & mask;
-	}
+	for (int lod = 0; lod <= 8; lod++)
+		m_lodoffset[lod] = (((lodbase[lod] & addrmask) << addrshift) + lodstart[lod]) & mask;
 
 	// compute the detail parameters
 	auto const texdetail = regs.texture_detail();
