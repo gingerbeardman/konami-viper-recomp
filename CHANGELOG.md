@@ -5,6 +5,14 @@ All notable changes to this project are listed here. The format follows
 [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a new minor
 version can change the build, the profiles or the command-line options.
 
+## [0.7.0] - 2026-10-01
+
+### Changed
+- **GTI Club 2:** PROMOTION MODE is on by default, in the classic and the enhanced mode. The
+  first-run calibration sets it (`calibration.nvram_set` `0x85` = `0x80`); ver EAA's starting
+  NVRAM already had it, ver JAB's did not. TEST MODE can still turn it off in the classic mode.
+  An NVRAM saved before this version keeps its setting.
+
 ## [0.6.1] - 2026-10-01
 
 ### Fixed
@@ -149,7 +157,8 @@ version can change the build, the profiles or the command-line options.
   (ver EBB) is playable at 30 fps with sound, and steering and pedals are calibrated
   automatically.
 
-[0.6.1]: https://github.com/spita90/konami-viper-recomp/compare/9b71187...HEAD
+[0.7.0]: https://github.com/spita90/konami-viper-recomp/compare/c041b6b...HEAD
+[0.6.1]: https://github.com/spita90/konami-viper-recomp/compare/9b71187...c041b6b
 [0.6.0]: https://github.com/spita90/konami-viper-recomp/compare/bd64498...9b71187
 [0.5.0]: https://github.com/spita90/konami-viper-recomp/compare/aaa8758...bd64498
 [0.4.0]: https://github.com/spita90/konami-viper-recomp/compare/cf5280a...aaa8758

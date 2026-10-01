@@ -187,8 +187,8 @@ static int run_scripted_pass(const char *what, const char *script, int seconds, 
     return 0;
 }
 
-/* settings TEST MODE cannot change (e.g. a region-locked currency), written into the calibrated
- * NVRAM: the profile's calibration.nvram_set */
+/* settings written into the calibrated NVRAM, the profile's calibration.nvram_set: ones TEST MODE
+ * cannot change (e.g. a region-locked currency) or defaults of the port (GTI Club 2's promotion mode) */
 static void calibration_nvram_set(const char *nvsave) {
     static const struct { int addr, val; } k_set[] = GAME_CALIBRATION_NVRAM;
     if (k_set[0].addr < 0) return;

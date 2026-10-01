@@ -53,7 +53,8 @@ The profile fields:
   and `handbrake`.
 - **`calibration`:** the scripted first-run calibration (`RT_INPUT` syntax) and its length in
   emulated seconds, or `null`. `nvram_set` (`{"0xADDR": "0xVALUE"}`) lists NVRAM bytes written
-  after it, for settings TEST MODE cannot change; the option block checksum is then fixed.
+  after it, for settings TEST MODE cannot change (TD2 JAA's currency) or defaults of the port
+  (GTI Club 2's promotion mode); the option block checksum is then fixed.
 - **`nvram_options`:** the TEST MODE option block of the NVRAM, `start` and `checksum` (section
   5a), used by `calibration.nvram_set` and by the enhanced mode.
 - **`enhanced`:** data for the enhanced mode (section 5a), or `null` where it is not
@@ -412,8 +413,9 @@ An optional layer on top of the faithful port, in development. Everything is gat
     2 complete off) and bits 4–0 music volume (0–30); `0x95` bits 7–3 effects volume;
     `0x97` bit 6 music in game, bit 5 scream, bit 4 siren.
   - GTI Club 2 fields: difficulty `0x8A`–`0x8D` (TOWN, COAST, MOUNTAIN, PROMOTION); `0x84` bit 5
-    speedometer, bits 4–3 motor power, bit 2 record saving; `0x85` bit 7 promotion mode, bit 6
-    Internet ranking, bits 5–4 bonus credit; `0x90` bits 6–5 attract sound and bits 4–0 music
+    speedometer, bits 4–3 motor power, bit 2 record saving; `0x85` bit 7 promotion mode (on by
+    default in both modes: set after the first-run calibration; ver EAA's starting NVRAM already
+    has it), bit 6 Internet ranking, bits 5–4 bonus credit; `0x90` bits 6–5 attract sound and bits 4–0 music
     volume; `0x91` bits 7–3 effects volume; word `0x92` bits 8–7 voice language (1 English,
     2 Italian); `0x93` bit 6 music in game.
   - The profile's `game_options` lists what the OPTIONS pages show: `page` (game or sound),
