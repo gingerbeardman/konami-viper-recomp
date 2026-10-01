@@ -12,6 +12,9 @@
  *   - hooks: addresses where the recompiled code calls rt_hook(). "attract" is the free-play
  *     branch of the credit display (a Konami library routine shared by the games): the game
  *     draws it only while no game is in progress, so it tells the attract mode apart.
+ *     "projection" and "viewport" follow the gl library's writes of its projection slots and
+ *     viewport, for the widescreen option;
+ *   - widescreen: where the gl library keeps that state.
  */
 #include "runtime.h"
 #include "game_config.h"
@@ -28,13 +31,83 @@ static int g_attract, g_enh_log = -1;
 
 int enh_in_attract(void) { return g_attract; }
 
+/* port settings (<binary>_settings.ini, see below) */
+static struct { int fullscreen, show_fps, scale, aspect; } g_set = { 0, 0, 1, 0 };
+
+/* ================================================================== widescreen */
+/* The games draw a 512x384 picture through Konami's gl library, which keeps its state at fixed
+ * addresses: two projection slots (perspective for the 3D, orthographic for the 2D), each with
+ * six matrix terms (row 0 first) and the frustum they come from (left, right, bottom, top, near,
+ * far), and the viewport (x scale, x centre, y scale, y centre). The library culls objects
+ * against that frustum and clips to it.
+ * A picture k times wider (Hor+: same vertical field of view) keeps every pixel where it was:
+ * row 0 of each projection is divided by k and the viewport x scale multiplied by k, which
+ * cancel out on screen, while the frustum is widened k times around its centre. The game then
+ * draws the same picture plus what lies left and right of it, at x from -M to 512 + M; the
+ * Voodoo core renders the displayed buffers with a margin of M pixels on each side
+ * (voodoo_set_wide). The HUD stays where it was, in the 4:3 centre.
+ * The hooks follow every write of that state, so a new value is widened once; a change of the
+ * option rescales what is already there. */
+static const int k_wide_margin[] = { 0, 51, 85, 199 };      /* 4:3, 16:10, 16:9, 21:9 at 384 lines */
+#define N_ASPECTS 4
+void voodoo_set_wide(int margin);
+static double g_wide_k = 1.0;                /* wanted: picture width / 512 */
+static double g_slot_k[2], g_vp_k;           /* applied to each projection slot / the viewport (0: unseen) */
+
+static void widen_slot(int s, double f) {    /* f: new factor / applied factor */
+    uint32_t m = GAME_ENH_WIDE_PROJ_MATRIX + 24 * s, fr = GAME_ENH_WIDE_PROJ_FRUSTUM + 24 * s;
+    double l = LDF32(fr), r = LDF32(fr + 4), mid = (l + r) / 2, half = (r - l) / 2;
+    STF32(m, LDF32(m) / f);
+    STF32(m + 4, LDF32(m + 4) / f);
+    STF32(fr, mid - half * f);
+    STF32(fr + 4, mid + half * f);
+}
+
+static void set_aspect(int a) {              /* the Voodoo margin follows from the next frame */
+    if (GAME_ENH_WIDE_VIEWPORT) voodoo_set_wide(k_wide_margin[a]);
+}
+
+static void wide_tick(int aspect) {         /* guest thread, every frame: follow the option */
+    if (!GAME_ENH_WIDE_VIEWPORT) return;
+    g_wide_k = (512.0 + 2 * k_wide_margin[aspect]) / 512.0;
+    for (int s = 0; s < 2; s++)
+        if (g_slot_k[s] && g_slot_k[s] != g_wide_k) { widen_slot(s, g_wide_k / g_slot_k[s]); g_slot_k[s] = g_wide_k; }
+    if (g_vp_k && g_vp_k != g_wide_k) {
+        STF32(GAME_ENH_WIDE_VIEWPORT, LDF32(GAME_ENH_WIDE_VIEWPORT) * g_wide_k / g_vp_k);
+        g_vp_k = g_wide_k;
+    }
+}
+
+typedef struct { uint32_t addr; const char *name; } Hook;
+static const Hook k_hooks[] = GAME_ENH_HOOKS;
+enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT };
+
+static int hook_kind(uint32_t pc) {
+    for (const Hook *h = k_hooks; h->name; h++)
+        if (h->addr == pc)
+            return !strcmp(h->name, "attract") ? HOOK_ATTRACT : !strcmp(h->name, "projection") ? HOOK_PROJECTION :
+                   !strcmp(h->name, "viewport") ? HOOK_VIEWPORT : HOOK_NONE;
+    return HOOK_NONE;
+}
+
 void rt_hook(PPCContext *c, uint32_t pc) {
     (void)c;
-#ifdef GAME_ENH_HOOK_ATTRACT
-    if (pc == GAME_ENH_HOOK_ATTRACT) g_attract_frame = g_frame ? g_frame : 1;
-#else
-    (void)pc;
-#endif
+    switch (hook_kind(pc)) {
+    case HOOK_ATTRACT: g_attract_frame = g_frame ? g_frame : 1; break;
+    case HOOK_PROJECTION: {                  /* the current slot has just been written */
+        uint32_t s = LD8(GAME_ENH_WIDE_PROJ_SLOT);
+        if (!g_enhanced || s > 1) break;
+        g_slot_k[s] = 1.0;
+        if (g_wide_k != 1.0) { widen_slot((int)s, g_wide_k); g_slot_k[s] = g_wide_k; }
+        break;
+    }
+    case HOOK_VIEWPORT:
+        if (!g_enhanced) break;
+        g_vp_k = g_wide_k;
+        if (g_wide_k != 1.0) STF32(GAME_ENH_WIDE_VIEWPORT, LDF32(GAME_ENH_WIDE_VIEWPORT) * g_wide_k);
+        break;
+    default: break;
+    }
 }
 
 typedef struct { uint32_t addr; const char *text; } BlankString;
@@ -96,6 +169,7 @@ void enh_on_frame(const uint32_t *buf, int w, int h) {
     int attract = g_attract_frame && g_frame - g_attract_frame <= ATTRACT_GRACE_FRAMES;
     if (attract != g_attract && g_enh_log) rt_log("enhanced: %s\n", attract ? "attract mode" : "game in progress");
     g_attract = attract;
+    wide_tick(g_set.aspect);
     menu_tick();
     scripted_menu();
     nvram_poke_tick();
@@ -116,7 +190,8 @@ static const FontRow k_font_rows[] = GAME_ENH_FONT_ROWS;
 static const uint32_t k_font_pages[] = GAME_ENH_FONT_PAGES;
 enum { FONT_LARGE, FONT_MEDIUM, FONT_SMALL, FONT_NSIZES };
 
-typedef struct { int16_t x, y, w, h; } Glyph;      /* ink bounds in the atlas; w = 0: missing */
+typedef struct { int16_t x, y, w, h, twin; } Glyph;  /* ink bounds in the atlas; w = 0: missing;
+                                                       twin: drawn again that many cell rows higher */
 static uint8_t *g_font;                             /* GAME_ENH_FONT_W x (pages * PAGE_H) alpha */
 static int g_font_h;
 static Glyph g_glyph[FONT_NSIZES][128];
@@ -124,7 +199,6 @@ static Glyph g_glyph[FONT_NSIZES][128];
 /* ================================================================== port settings */
 /* <binary>_settings.ini next to the executable: options of the port itself (not of the game,
  * which keeps its own in the NVRAM). One "key = value" per line. */
-static struct { int fullscreen, show_fps, scale; } g_set = { 0, 0, 1 };
 void voodoo_set_scale(int n);
 static char g_settings_path[1024];
 
@@ -138,6 +212,7 @@ static void settings_load(void) {
             if (!strcmp(key, "fullscreen")) g_set.fullscreen = v != 0;
             else if (!strcmp(key, "show_fps")) g_set.show_fps = v != 0;
             else if (!strcmp(key, "render_scale")) g_set.scale = v < 1 ? 1 : v > 2 ? 2 : v;
+            else if (!strcmp(key, "aspect")) g_set.aspect = v < 0 || v >= N_ASPECTS ? 0 : v;
         }
     fclose(f);
 }
@@ -147,6 +222,7 @@ static void settings_save(void) {
     if (!f) { rt_log("enhanced: cannot write %s\n", g_settings_path); return; }
     fprintf(f, "# " GAME_TITLE ", enhanced mode: port settings\n");
     fprintf(f, "fullscreen = %d\nshow_fps = %d\nrender_scale = %d\n", g_set.fullscreen, g_set.show_fps, g_set.scale);
+    fprintf(f, "# 0 = 4:3, 1 = 16:10, 2 = 16:9, 3 = 21:9\naspect = %d\n", g_set.aspect);
     fclose(f);
 }
 
@@ -159,6 +235,7 @@ void enh_init(const char *work, const char *settings) {
     snprintf(g_settings_path, sizeof g_settings_path, "%s", settings);
     settings_load();
     voodoo_set_scale(g_set.scale);       /* the only place the render scale is set */
+    set_aspect(g_set.aspect);
     const char *file = GAME_ENH_FONT_FILE;
     if (!file) return;
     char path[1024];
@@ -182,9 +259,14 @@ void enh_init(const char *work, const char *settings) {
             for (int x = 0; x < fs->cw && cx + x < GAME_ENH_FONT_W; x++)
                 for (int y = 0; y < fs->ch && r->y + y < g_font_h; y++)
                     if (atlas[(r->y + y) * GAME_ENH_FONT_W + cx + x] > 40) { if (x < lo) lo = x; if (x > hi) hi = x; break; }
-            if (hi >= lo) g_glyph[r->size][(unsigned char)*p] = (Glyph){ (int16_t)(cx + lo), (int16_t)r->y, (int16_t)(hi - lo + 1), (int16_t)fs->ch };
+            if (hi >= lo) g_glyph[r->size][(unsigned char)*p] = (Glyph){ (int16_t)(cx + lo), (int16_t)r->y, (int16_t)(hi - lo + 1), (int16_t)fs->ch, 0 };
         }
     }
+    for (int z = 0; z < FONT_NSIZES; z++)      /* no colon (Thrill Drive 2): two full stops */
+        if (!g_glyph[z][':'].w && g_glyph[z]['.'].w) {
+            g_glyph[z][':'] = g_glyph[z]['.'];
+            g_glyph[z][':'].twin = (int16_t)(k_font_sizes[z].ch * 3 / 8);
+        }
     g_font = atlas;
 }
 
@@ -223,8 +305,9 @@ static int glyph_alpha(const Glyph *g, float u, float v) {
     return (int)((a[0] * (1 - fx) + a[1] * fx) * (1 - fy) + (a[2] * (1 - fx) + a[3] * fx) * fy + 0.5f);
 }
 
-/* The overlay is laid out in logical 512x384 coordinates; on a scaled frame (resolution
- * option) the primitives map them to the real pixels, g_ui real pixels per logical one. */
+/* The overlay is laid out in logical units, 384 lines high (512 wide, or wider in widescreen);
+ * on a scaled frame (resolution option) the primitives map them to the real pixels, g_ui real
+ * pixels per logical one. */
 static float g_ui = 1.0f;
 static int g_fbw, g_fbh;
 
@@ -238,18 +321,19 @@ static void draw_text(uint32_t *fb, int w, int h, int z, int x, int y, const cha
         if (!g->w) { fx += glyph_space(z) * g_ui; continue; }
         int gw = (int)(glyph_width(z, g) * g_ui + 0.5f), gh = (int)(font_px(z, g->h) * g_ui + 0.5f);
         int px0 = (int)(fx + 0.5f), off0 = (int)(2 * g_ui + 0.5f);
-        for (int pass = 0; pass < 2; pass++) {      /* drop shadow, then the glyph */
-            int off = pass ? 0 : off0;
-            uint32_t col = pass ? rgb : 0x000000;
+        for (int pass = 0; pass < 4; pass++) {      /* drop shadow, then the glyph (and its twin) */
+            int off = pass & 1 ? 0 : off0, up = pass & 2 ? (int)(font_px(z, g->twin) * g_ui + 0.5f) : 0;
+            uint32_t col = pass & 1 ? rgb : 0x000000;
+            if (up == 0 && pass >= 2) continue;
             for (int gy = 0; gy < gh; gy++) {
-                int py = py0 + gy + off;
+                int py = py0 + gy + off - up;
                 if (py < 0 || py >= g_fbh) continue;
                 for (int gx = 0; gx < gw; gx++) {
                     int px = px0 + gx + off;
                     if (px < 0 || px >= g_fbw) continue;
                     int a = inv == 1.0f ? g_font[(g->y + gy) * GAME_ENH_FONT_W + g->x + gx]
                                         : glyph_alpha(g, (gx + 0.5f) * inv - 0.5f, (gy + 0.5f) * inv - 0.5f);
-                    if (!pass) a = a * 3 / 5;
+                    if (!(pass & 1)) a = a * 3 / 5;
                     if (a) blend(&fb[py * g_fbw + px], col, a);
                 }
             }
@@ -348,7 +432,7 @@ static void options_read(void) {
  * letters, so the Italian texts avoid them. */
 enum { T_START, T_OPTIONS, T_CREDITS, T_QUIT, T_GAME, T_SOUND, T_DISPLAY, T_BACK, T_WINDOW, T_FULLSCREEN,
        T_SHOW_FPS, T_OFF, T_ON, T_LOADING, T_APPLYING, T_ORIGINAL_GAME, T_RECOMPILATION, T_VOODOO,
-       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_RESOLUTION, T_COUNT };
+       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_RESOLUTION, T_ASPECT, T_COUNT };
 static const char *const k_text[T_COUNT][2] = {
     { "START GAME", "INIZIA PARTITA" }, { "OPTIONS", "OPZIONI" }, { "CREDITS", "RICONOSCIMENTI" },
     { "QUIT", "ESCI" }, { "GAME", "GIOCO" }, { "SOUND", "AUDIO" }, { "DISPLAY", "SCHERMO" },
@@ -358,7 +442,9 @@ static const char *const k_text[T_COUNT][2] = {
     { "STATIC RECOMPILATION", "RICOMPILAZIONE STATICA" }, { "VOODOO GRAPHICS CORE", "GRAFICA VOODOO" },
     { "PRESS START TO GO BACK", "PREMI START PER TORNARE" }, { "PAUSE", "PAUSA" },
     { "RESUME", "RIPRENDI" }, { "MAIN MENU", "MENU PRINCIPALE" }, { "RESOLUTION", "RISOLUZIONE" },
+    { "ASPECT RATIO", "FORMATO" },
 };
+static const char *const k_aspect_name[N_ASPECTS] = { "4:3", "16:10", "16:9", "21:9" };
 
 static int menu_language(void) {
     for (int i = 0; i < g_n_game_options; i++)
@@ -449,7 +535,13 @@ int enh_quit_requested(void) { return g_quit; }
 /* the rows of an options page: game options of that page, or the port options (DISPLAY) */
 static int page_rows(int page, int *rows) {
     int n = 0;
-    if (page == PAGE_DISPLAY) { rows[n++] = -1; rows[n++] = -3; rows[n++] = -2; return n; }
+    if (page == PAGE_DISPLAY) {
+        rows[n++] = -1;
+        rows[n++] = -3;
+        if (GAME_ENH_WIDE_VIEWPORT) rows[n++] = -4;
+        rows[n++] = -2;
+        return n;
+    }
     for (int i = 0; i < g_n_game_options; i++)
         if (k_game_options[i].page == page) rows[n++] = i;
     return n;
@@ -459,6 +551,7 @@ static void page_change(int row, int dir) {
     if (row == -1) { g_set.fullscreen = !g_set.fullscreen; settings_save(); return; }
     if (row == -2) { g_set.show_fps = !g_set.show_fps; settings_save(); return; }
     if (row == -3) { g_set.scale = g_set.scale == 1 ? 2 : 1; voodoo_set_scale(g_set.scale); settings_save(); return; }
+    if (row == -4) { g_set.aspect = (g_set.aspect + dir + N_ASPECTS) % N_ASPECTS; set_aspect(g_set.aspect); settings_save(); return; }
     const GameOption *o = &k_game_options[row];
     int v = g_opt_value[row] + dir, span = o->max - o->min + 1;
     g_opt_value[row] = o->min + ((v - o->min) % span + span) % span;
@@ -575,7 +668,7 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
     if (!g_enhanced) return;
     g_fbw = w;
     g_fbh = h;
-    g_ui = w >= 1024 ? (float)w / 512.0f : 1.0f;    /* lay out in 512-wide logical units */
+    g_ui = h >= 768 ? (float)h / 384.0f : 1.0f;     /* lay out in 384-high logical units */
     w = (int)(w / g_ui + 0.5f);
     h = (int)(h / g_ui + 0.5f);
     if (enh_turbo()) {                               /* booting or applying: cover it all */
@@ -636,6 +729,7 @@ static void draw_menu(uint32_t *fb, int w, int h) {
             if (rows[i] == -1) { label = T(T_DISPLAY); value = T(g_set.fullscreen ? T_FULLSCREEN : T_WINDOW); }
             else if (rows[i] == -2) { label = T(T_SHOW_FPS); value = T(g_set.show_fps ? T_ON : T_OFF); }
             else if (rows[i] == -3) { label = T(T_RESOLUTION); value = g_set.scale == 2 ? "2X" : "1X"; }
+            else if (rows[i] == -4) { label = T(T_ASPECT); value = k_aspect_name[g_set.aspect]; }
             else {
                 const GameOption *o = &k_game_options[rows[i]];
                 label = lang ? o->label_it : o->label_en;

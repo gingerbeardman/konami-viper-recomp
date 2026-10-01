@@ -8,7 +8,8 @@
  * Controls (driving-game inputs as in MAME's viper.cpp "thrild2" / "gticlub2"):
  *   Left/Right  steering      Up  gas      Down  brake      Space  handbrake (GTI Club 2)
  *   A  shift up   Z  shift down   5  coin   1  start   F2  test   9  service
- *   (enhanced mode: test and service are not passed to the game, so TEST MODE cannot be opened)
+ *   (enhanced mode: test, service and coin are not passed to the game: TEST MODE cannot be
+ *   opened, and the game is on free play)
  *   Gamepad: left stick = steering, R2/L2 = gas/brake, R1/L1 = shift up/down,
  *            X = handbrake, Start = start, Back = coin
  *   F11 fullscreen, Esc quit
@@ -130,7 +131,7 @@ static void apply_inputs(double dt) {
     uint8_t in3 = 0xff, in4 = 0xff;
     if (ctl.service && !g_enhanced) in3 &= ~0x01;
     if (ctl.test && !g_enhanced) in3 &= ~0x02;
-    if (ctl.coin) in3 &= ~0x04;
+    if (ctl.coin && !g_enhanced) in3 &= ~0x04;
     if (ctl.start || enh_start_held()) in3 &= ~0x10;
     if (ctl.shift_down) in3 &= ~0x40;
     if (ctl.shift_up) in4 &= ~0x01;
@@ -292,6 +293,12 @@ int frontend_run(int scale) {
             last_frame = cnt;
             voodoo_get_frame(raw, 2048 * 2048, &w, &h);
             if (w != tw || h != th) {
+                /* a new aspect ratio (enhanced mode, widescreen): the window keeps its height */
+                if ((long)w * th != (long)h * tw && !(SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP)) {
+                    int ww, wh;
+                    SDL_GetWindowSize(win, &ww, &wh);
+                    SDL_SetWindowSize(win, (int)((long)wh * w / h), wh);
+                }
                 SDL_DestroyTexture(tex);
                 tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
                 SDL_RenderSetLogicalSize(ren, w, h);

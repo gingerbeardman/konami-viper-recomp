@@ -53,10 +53,11 @@ menus.
 | ------------------- | ------------------------- | ------------------------------------------------------------------------------------------ |
 | **Starting a game** | Insert coins, press START | START GAME from the menu                                                                   |
 | **Main screen**     | Attract mode              | Menu: START GAME, OPTIONS, CREDITS, QUIT over the attract mode                             |
-| **Options**         | None                      | OPTIONS: course difficulty, language, sound, window or fullscreen, resolution, fps counter |
+| **Options**         | None                      | OPTIONS: course difficulty, language, sound, window or fullscreen, resolution, aspect ratio, fps counter |
 | **Pause**           | None                      | Esc: RESUME or MAIN MENU                                                                   |
 | **Resolution**      | 512×384, as the original  | 512×384 or 1024×768 (1X or 2X)                                                             |
-| **TEST MODE**       | F2                        | None                                                                                       |
+| **Aspect ratio**    | 4:3, as the original      | 4:3, 16:10, 16:9 or 21:9 (the 3D scene widens; the HUD stays in the centre)                |
+| **TEST MODE**       | F2                        | None (TEST, SERVICE and COIN are ignored)                                                  |
 | **Save file**       | `td2_nvram.bin`           | `td2_enhanced_nvram.bin`, separate from the classic one                                    |
 
 More about the enhanced mode in [Enhanced mode in detail](#enhanced-mode-in-detail).
@@ -231,6 +232,10 @@ The environment variables for debugging are described in
   - **Display:** window or fullscreen (F11 also switches it), the rendering resolution, and an
     fps counter. 2X renders the 3D scenes and the HUD at 1024×768. It needs about twice the CPU
     time, so be sure to check the fps counter on slower machines.
+  - **Aspect ratio:** 4:3 (the original), 16:10, 16:9 or 21:9. A wider format shows more of the
+    3D scene on the left and right, with the same vertical field of view; the window widens to
+    match. The HUD and the 2D screens keep their 4:3 layout in the centre, and a few 2D effects
+    (the noise on Thrill Drive 2's crash screen) cover only that part.
 - **Saving the options:** game and sound options are the game's own TEST MODE settings, stored
   in its NVRAM. The game reads them only at boot, so on leaving OPTIONS it restarts, which takes
   a few seconds. Display options are saved in `<executable>_settings.ini` (`--settings FILE` to

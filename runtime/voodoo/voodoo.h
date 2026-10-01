@@ -494,6 +494,9 @@ public:
 	// recomp: render the displayed colour buffers at N times the resolution (applied at the next
 	// buffer swap); hires_frame() gives the last scaled picture, if the front buffer had one
 	void set_render_scale(int n) { m_hires_pending = n < 1 ? 1 : n > 4 ? 4 : n; }
+	// recomp: widescreen, a margin of M native pixels left and right of the displayed buffers
+	// (the game draws at x from -M to width + M); applied at the next buffer swap
+	void set_wide_margin(int m) { m_wide_pending = m < 0 ? 0 : m > 512 ? 512 : m; }
 	int render_scale() const { return m_hires_scale; }
 	bool hires_frame(u32 const *&pix, int &w, int &h) const
 	{
@@ -667,7 +670,10 @@ protected:
 	// recomp: scaled render targets, keyed by the VRAM byte offset of a displayed colour buffer
 	u16 *hires_target(u16 const *native);
 	void hires_scale_poly(voodoo::poly_data &poly, voodoo::voodoo_renderer::vertex_t *vert);
+	s32 hires_native_pixels(s32 pixels) const;
 	int m_hires_scale = 1, m_hires_pending = 1;
+	int m_wide = 0, m_wide_pending = 0;                         // widescreen margin (native pixels)
+	s32 m_display_w = 512;                                      // native width of the displayed picture
 	std::unordered_map<u32, std::vector<u16>> m_hires;
 	std::set<u32> m_hires_displayed;
 	std::vector<u16> m_hires_aux;

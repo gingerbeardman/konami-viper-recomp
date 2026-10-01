@@ -2329,7 +2329,7 @@ u32 voodoo_1_device::reg_fastfill_w(u32 chipmask, u32 regnum, u32 data)
 	// 2 pixels per clock (native pixels: a scaled target keeps the native timing)
 	u32 pixels = m_renderer->enqueue_fastfill(poly);
 	if (poly.bufwidth)
-		pixels /= m_hires_scale * m_hires_scale;
+		pixels = hires_native_pixels(pixels);
 	return pixels / 2;
 }
 
@@ -2631,11 +2631,12 @@ extern "C" unsigned long long voodoo_swap_count(void) { return g_voodoo_swaps; }
 void voodoo_1_device::swap_buffers()
 {
 	g_voodoo_swaps++;
-	if (m_hires_pending != m_hires_scale)
+	if (m_hires_pending != m_hires_scale || m_wide_pending != m_wide)
 	{
-		// a new render scale starts with the next frame; the old buffers are dropped
+		// a new render scale or margin starts with the next frame; the old buffers are dropped
 		m_renderer->wait("render scale");
 		m_hires_scale = m_hires_pending;
+		m_wide = m_wide_pending;
 		m_hires.clear();
 		m_hires_aux.clear();
 		m_hires_out_valid = false;
@@ -2743,12 +2744,13 @@ int voodoo_1_device::update_common(bitmap_rgb32 &bitmap, const rectangle &clipre
 	{
 		u32 off = u32((u8 *)buffer_base - m_fbram);
 		if (m_hires_displayed.size() < 8) m_hires_displayed.insert(off);
-		auto it = m_hires_scale > 1 ? m_hires.find(off) : m_hires.end();
+		auto it = m_hires_scale > 1 || m_wide ? m_hires.find(off) : m_hires.end();
 		m_hires_out_valid = false;
+		m_display_w = cliprect.max_x - cliprect.min_x + 1;
 		if (it != m_hires.end())
 		{
-			s32 const n = m_hires_scale, hrow = s32(rowpixels) * n;
-			s32 const w = (cliprect.max_x - cliprect.min_x + 1) * n, h = (cliprect.max_y - cliprect.min_y + 1) * n;
+			s32 const n = m_hires_scale, hrow = s32(rowpixels + 2 * m_wide) * n;
+			s32 const w = (m_display_w + 2 * m_wide) * n, h = (cliprect.max_y - cliprect.min_y + 1) * n;
 			s32 const rows = s32(it->second.size() / hrow);
 			m_hires_out.resize(size_t(w) * h);
 			for (s32 y = 0; y < h; y++)
@@ -2774,6 +2776,26 @@ int voodoo_1_device::update_common(bitmap_rgb32 &bitmap, const rectangle &clipre
 		u32 *dst = &bitmap.pix(y);
 		for (s32 x = cliprect.min_x; x <= cliprect.max_x; x++)
 			dst[x] = pens[src[x]];
+	}
+
+	// recomp: a front buffer with no scaled target (nothing drawn into it since the scale or
+	// margin changed, or only 2D blits) is published at the same size, enlarged and centred,
+	// so the picture does not change size from one frame to the next
+	if (!m_hires_out_valid && (m_hires_scale > 1 || m_wide))
+	{
+		s32 const n = m_hires_scale, m = m_wide * n;
+		s32 const w = (m_display_w + 2 * m_wide) * n, h = (cliprect.max_y - cliprect.min_y + 1) * n;
+		m_hires_out.assign(size_t(w) * h, 0);
+		for (s32 y = 0; y < h; y++)
+		{
+			u32 const *src = &bitmap.pix(cliprect.min_y + y / n, cliprect.min_x);
+			u32 *dst = &m_hires_out[size_t(y) * w + m];
+			for (s32 x = 0; x < m_display_w * n; x++)
+				dst[x] = src[x / n];
+		}
+		m_hires_out_w = w;
+		m_hires_out_h = h;
+		m_hires_out_valid = true;
 	}
 
 	// update stats display
@@ -2950,18 +2972,22 @@ void voodoo_1_device::recompute_video_memory_common(u32 config, u32 rowpixels)
 //  coordinates, start position and clip rectangle scaled by N and the per-pixel gradients
 //  divided by N, and the display scans it out. Buffers the game never displays (off-screen
 //  targets it uses as textures) stay in VRAM at the native resolution.
+//
+//  Widescreen adds a margin of M native pixels left and right: native x maps to (x + M) * N,
+//  and a clip rectangle spanning the whole picture is widened to the margins. The game itself
+//  draws past the 4:3 edges (runtime/enhanced.c widens its frustum).
 //-------------------------------------------------
 
 static constexpr u32 HIRES_NATIVE_ROWS = 512;   // native rows covered (the display uses 384)
 
 u16 *voodoo_1_device::hires_target(u16 const *native)
 {
-	if (m_hires_scale <= 1)
+	if (m_hires_scale <= 1 && m_wide == 0)
 		return nullptr;
 	u32 const off = u32((u8 const *)native - m_fbram);
 	if (!m_hires_displayed.count(off))
 		return nullptr;
-	size_t const size = size_t(m_renderer->rowpixels()) * m_hires_scale * HIRES_NATIVE_ROWS * m_hires_scale;
+	size_t const size = size_t(m_renderer->rowpixels() + 2 * m_wide) * m_hires_scale * HIRES_NATIVE_ROWS * m_hires_scale;
 	auto &buf = m_hires[off];
 	if (buf.size() != size || m_hires_aux.size() != size)
 	{
@@ -2972,38 +2998,77 @@ u16 *voodoo_1_device::hires_target(u16 const *native)
 	return buf.data();
 }
 
+// the emulated cost of a scaled or widened draw: that of the native 4:3 picture
+s32 voodoo_1_device::hires_native_pixels(s32 pixels) const
+{
+	s64 const area = s64(m_hires_scale) * m_hires_scale * (m_display_w + 2 * m_wide);
+	return s32(s64(pixels) * m_display_w / area);
+}
+
 void voodoo_1_device::hires_scale_poly(voodoo::poly_data &poly, voodoo::voodoo_renderer::vertex_t *vert)
 {
 	u16 *target = hires_target(poly.destbase);
 	if (target == nullptr)
 		return;
-	s32 const n = m_hires_scale;
+	s32 const n = m_hires_scale, m = m_wide;
 	poly.destbase = target;
 	poly.depthbase = m_hires_aux.data();
-	poly.rowpixels = m_renderer->rowpixels() * n;
+	poly.rowpixels = (m_renderer->rowpixels() + 2 * m) * n;
 	poly.yorigin = (m_renderer->yorigin() + 1) * n - 1;
 	poly.bufwidth = s32(poly.rowpixels);
 	poly.bufheight = s32(HIRES_NATIVE_ROWS) * n;
-	poly.clipleft = u16(std::min<s32>(poly.clipleft * n, poly.bufwidth));
-	poly.clipright = u16(std::min<s32>(poly.clipright * n, poly.bufwidth));
+	if (m && poly.clipleft == 0 && poly.clipright >= m_display_w)
+	{
+		poly.clipleft = 0;                      // the whole picture: out to the margins
+		poly.clipright = u16(std::min<s32>((m_display_w + 2 * m) * n, poly.bufwidth));
+	}
+	else
+	{
+		poly.clipleft = u16(std::min<s32>((poly.clipleft + m) * n, poly.bufwidth));
+		poly.clipright = u16(std::min<s32>((poly.clipright + m) * n, poly.bufwidth));
+	}
 	poly.cliptop = u16(std::min<s32>(poly.cliptop * n, poly.bufheight));
 	poly.clipbottom = u16(std::min<s32>(poly.clipbottom * n, poly.bufheight));
 	if (vert == nullptr)
 		return;                                 // fast fill: only the area changes
 
-	// same triangle, N times larger: positions scale up, gradients per pixel scale down
-	poly.ax *= n;
+	// widescreen: an untextured triangle spanning exactly the 4:3 width (the fades to a colour)
+	// is stretched about the centre to the whole picture, its x gradients shrinking to match
+	if (m && poly.tex0 == nullptr && poly.tex1 == nullptr)
+	{
+		float const x0 = std::min({vert[0].x, vert[1].x, vert[2].x}), x1 = std::max({vert[0].x, vert[1].x, vert[2].x});
+		if (std::abs(x0) <= 0.5f && std::abs(x1 - float(m_display_w)) <= 0.5f)
+		{
+			float const c = float(m_display_w) / 2, k = float(m_display_w + 2 * m) / float(m_display_w);
+			for (int i = 0; i < 3; i++)
+				vert[i].x = (vert[i].x - c) * k + c;
+			poly.ax = s32(std::lround((float(poly.ax) / 16 - c) * k * 16 + c * 16));
+			poly.drdx = s32(poly.drdx / k); poly.dgdx = s32(poly.dgdx / k); poly.dbdx = s32(poly.dbdx / k);
+			poly.dadx = s32(poly.dadx / k); poly.dzdx = s32(poly.dzdx / k); poly.dwdx = s64(poly.dwdx / k);
+		}
+	}
+	// same triangle, moved right by the margin and N times larger: positions scale up,
+	// gradients per pixel scale down
+	// the rasterizer measures every parameter from the whole pixel holding vertex A (ax >> 4);
+	// at N times the size that pixel lies fx, fy scaled pixels past N times the native one
+	s32 const fx = ((poly.ax * n) >> 4) - n * (poly.ax >> 4), fy = ((poly.ay * n) >> 4) - n * (poly.ay >> 4);
+	poly.ax = (poly.ax + 16 * m) * n;
 	poly.ay *= n;
 	for (int i = 0; i < 3; i++)
 	{
-		vert[i].x *= float(n);
+		vert[i].x = (vert[i].x + float(m)) * float(n);
 		vert[i].y *= float(n);
 	}
-	// The Voodoo samples at the top-left corner of a pixel; the N scaled pixels of a native one
-	// would sample up to (N-1)/N of a pixel further. Centre them on the native sample instead
-	// (a shift of -(N-1)/2N native pixel in X and Y), so a sprite edge does not reach past its
-	// last texel into the wrapped-around one.
-	auto centre = [n](auto &start, auto ddx, auto ddy) { start -= (ddx + ddy) * (n - 1) / (2 * n); };
+	// Scaled pixel X stands for native position (X + 1/2) / N - 1/2: the N scaled pixels of a
+	// native one are centred on its sample, so a sprite edge does not reach past its last texel
+	// into the wrapped-around one. Each start value moves to match, also by the fx, fy above:
+	// the values then follow the native ones exactly, measured from the same reference. Without
+	// that term each triangle was off by its own fraction of a gradient, and coplanar decals
+	// (zebra crossings) lost their depth test against the road in some frames.
+	auto centre = [n, fx, fy](auto &start, auto ddx, auto ddy)
+	{
+		start += decltype(start + 0)((s64(ddx) * (2 * fx - (n - 1)) + s64(ddy) * (2 * fy - (n - 1))) / (2 * n));
+	};
 	centre(poly.startr, poly.drdx, poly.drdy); centre(poly.startg, poly.dgdx, poly.dgdy);
 	centre(poly.startb, poly.dbdx, poly.dbdy); centre(poly.starta, poly.dadx, poly.dady);
 	centre(poly.startz, poly.dzdx, poly.dzdy); centre(poly.startw, poly.dwdx, poly.dwdy);
@@ -3153,7 +3218,7 @@ s32 voodoo_1_device::triangle()
 	// stay that of the native triangle
 	s32 pixels = m_renderer->enqueue_triangle(poly, vert);
 	if (poly.bufwidth)
-		pixels /= m_hires_scale * m_hires_scale;
+		pixels = hires_native_pixels(pixels);
 
 	// update stats
 	m_reg.add(voodoo_regs::reg_fbiTrianglesOut, 1);

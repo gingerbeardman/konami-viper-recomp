@@ -369,7 +369,7 @@ An optional layer on top of the faithful port, in development. Everything is gat
   - Only these exact strings are blanked. The TEST MODE strings ("PRESS START BUTTON =
     CONTINUE", the FREE PLAY option name) and "PRESS START BUTTON TO DECIDE" are separate.
   - `RT_ENH_BLANK="addr:text,…"` blanks extra strings at run time, to find new ones.
-- **TEST MODE locked:** the frontend does not pass Test and Service to the game. Scripted inputs
+- **TEST MODE locked:** the frontend does not pass Test, Service and Coin to the game. Scripted inputs
   (`RT_INPUT`) still reach every port, so the setup passes and the tests keep working.
 - **Attract detection:** the hook `attract` sits on the free-play branch of the credit display.
   That routine is shared by the games (TD2 `0x7DD40`, GTI Club 2 JAB `0x61B4C`, EAA `0x61B70`),
@@ -498,6 +498,12 @@ An optional layer on top of the faithful port, in development. Everything is gat
   - The start values move by −(N−1)/2N native pixel, so the N sub-pixels are centred on the
     native sample. Without it, the right edge of HUD sprites sampled past their last texel and
     wrapped to the other side of the texture (a one-pixel line next to TD2's rev counter).
+  - The rasterizer measures every parameter from the whole pixel holding vertex A (`ax >> 4`).
+    Scaled, that pixel is `floor(N·ax)`, which lies fx = `floor(N·ax) − N·floor(ax)` scaled
+    pixels past the native one, a different amount for each triangle. The start values also
+    move by fx/N (and fy/N) of a gradient, so every scaled pixel gets exactly the native value
+    at its position. Without it, coplanar decals (zebra crossings, GTI Club 2's start line) got
+    a slightly different depth from the road and flickered as the depth test flipped.
   - `poly_data` now carries the stride, the Y origin and the buffer size per polygon. Scaled
     polygons get a clip rectangle equal to their buffer.
 - **Timing.** The triangle and fast-fill costs returned to the emulated pipeline are divided
@@ -515,6 +521,62 @@ An optional layer on top of the faithful port, in development. Everything is gat
     about 7 s at 1×.
   - TD2's 2D host-to-screen blits and the unimplemented screen-to-screen blits still act on VRAM
     only. No missing element was seen at 2×, but this was not checked in depth.
+
+## 5c. Widescreen (enhanced mode, DISPLAY → ASPECT RATIO)
+
+4:3, 16:10, 16:9 or 21:9 (`aspect` 0–3 in the settings file), at 1X and 2X. The picture is
+`512 + 2M` native pixels wide at 384 lines: M = 51, 85 or 199.
+
+**The gl library's state.** Konami's `gl` module (the same code in both games, at different
+addresses) keeps its projection and viewport at fixed low-memory addresses, found by searching
+a RAM dump for 256.0/192.0 and following the code that reads them:
+- two **projection slots** (current one: byte `0x3452` in GTI Club 2, `0x3460` in TD2). Slot 0
+  is the 3D perspective (frustum ±0.14 × ±0.105 at near 0.2 in GTI Club 2), slot 1 the 2D
+  orthographic projection (±256 × ±192). Each has six matrix terms at `0x26DC + 24·slot`, row 0
+  first (e.g. 2n/(r−l)), and the frustum they come from, left, right, bottom, top, near and far,
+  at `0x270C + 24·slot`;
+- the **viewport**: x scale, x centre, y scale, y centre (256, 256, 192, 192) at `0x2940`
+  (TD2 `0x2944`). Screen x = centre + scale · x_clip / w;
+- the screen size as integers at `0x274C` (512, 384), which the library writes to the Voodoo's
+  `clipLeftRight`/`clipLowYHighY`;
+- the bounding-sphere culling (GTI Club 2 `0x281AC`) builds its six planes from the frustum.
+
+**Widening (Hor+).** For a factor k = (512 + 2M) / 512, row 0 of each projection is divided by
+k and the viewport x scale multiplied by k. The two cancel on screen, so every pixel stays where
+it was, but the clip volume is k times wider; the frustum's left and right are widened k times
+around their centre, so the culling matches. The game then draws the same picture plus what
+lies to its left and right, at x from −M to 512 + M. The 2D layer, drawn through the same
+transform, keeps its 4:3 layout in the centre.
+- **Hooks** (`enhanced.hooks.gl`): `projection` after each write of a slot (identity, the two
+  frustum commands of the command-list dispatcher, the library's init), `viewport` after the
+  viewport API and the init. GTI Club 2 (JAB and EAA share the module): `0x213F4`, `0x21718`,
+  `0x2178C`, `0x28C1C`, and `0x212E4`, `0x28E60`. TD2 (EBB, JAA and AAA): `0x217BC`, `0x21AE0`,
+  `0x21B54`, `0x2A888`, and `0x215F4`, `0x2AAC8`.
+- Each hook widens the values just written, once. A change of the option rescales what is
+  already there by k_new / k_applied (`wide_tick`, every frame), so it takes effect at once.
+- The emulated timing does not change: the frame rate stays at 29 fps in races. The attract
+  demos drift slightly from the 4:3 run (more objects pass the culling, so the CPU does more
+  work), but the game logic still steps per frame.
+
+**Voodoo side** (`set_wide_margin`). The displayed colour buffers get render targets
+(512 + 2M)·N wide, the same mechanism as the 2X resolution, also at N = 1.
+- Native x maps to (x + M)·N. A clip rectangle that spans the whole picture (left 0, right ≥
+  512) is widened to the margins; any other is moved by M.
+- An untextured triangle spanning exactly x = 0…512 (the fades to a colour) is stretched about
+  the centre to the full width, with its x gradients divided by k. The textured full-screen
+  effects stay 4:3: TD2's crash noise is not a single quad.
+- The emulated cost of a draw is scaled back to the native 4:3 area (`hires_native_pixels`).
+- A front buffer without a scaled target (no triangles since the option changed, or only 2D
+  blits) is published enlarged and centred, so the frame size never changes from frame to
+  frame; the frontend resizes the window only when the aspect ratio changes.
+- The overlay is laid out 384 logical lines high, so the menus use the whole width.
+
+**Speed** (Apple Silicon, GTI Club 2, 125 emulated seconds of attract and race): 1X 4:3 12.6 s,
+16:9 14.6 s, 21:9 16.7 s; 2X 4:3 30.6 s, 16:9 37.3 s, 21:9 46.1 s.
+
+**Known limits.** Elements that the original kept just off screen can show at the sides (TD2's
+crash captions scrolling in). The in-car start camera of TD2 shows the edge of its cockpit
+model. 21:9 has not been checked for missing scenery at the far edges, beyond the attract demos.
 
 ## 6. Current status (2026-09-29)
 

@@ -5,12 +5,33 @@ All notable changes to this project are listed here. The format follows
 [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a new minor
 version can change the build, the profiles or the command-line options.
 
-## [Unreleased]
+## [0.6.0] - 2026-10-01
 
 ### Added
 - `make game GAME=<id>` extracts, recompiles and builds a game in one step.
+- **Widescreen** (enhanced mode, DISPLAY → ASPECT RATIO): 4:3, 16:10, 16:9 or 21:9, at 1X and
+  2X, for Thrill Drive 2 (EBB, JAA, AAA) and GTI Club 2 (JAB, EAA). The game draws more of the
+  scene on each side (Hor+); the HUD stays in the 4:3 centre. `aspect` in the settings file.
+  - Hooks after every write of the gl library's projection and viewport widen the frustum
+    (culling and clipping included) while keeping each pixel where it was; the Voodoo core
+    renders the displayed buffers with a margin on each side.
+  - Untextured fades over the whole 4:3 picture are stretched to the full width.
+  - The window keeps its height and takes the new width.
+- **Profiles:** `enhanced.widescreen` (gl state addresses); a hook name may mark several
+  addresses (`GAME_ENH_HOOKS`).
+
+### Fixed
+- **2X resolution:** flickering road decals (zebra crossings, the start line, lane markings).
+  The rasterizer measures every parameter from the whole pixel holding vertex A; at 2X that
+  pixel is a different fraction of a native pixel for each triangle, so coplanar decals and the
+  road got slightly different depths and the depth test flipped between frames. The start values
+  now follow the native ones exactly. Compared with 1X over a race, the pixels that differ
+  strongly from the native picture are about halved, and what remains is edges.
 
 ### Changed
+- **Enhanced mode:** COIN is ignored too, like TEST and SERVICE (the game is on free play).
+- **Enhanced mode:** a colon missing from the game font (Thrill Drive 2) is drawn as two full
+  stops.
 - **README:** reorganised around the two modes, classic (the arcade cabinet) and enhanced (like
   a PC game), with screenshots in `docs/images/` and step-by-step build instructions. The
   reference material follows below.
@@ -118,7 +139,7 @@ version can change the build, the profiles or the command-line options.
   (ver EBB) is playable at 30 fps with sound, and steering and pedals are calibrated
   automatically.
 
-[Unreleased]: https://github.com/spita90/konami-viper-recomp/compare/bd64498...HEAD
+[0.6.0]: https://github.com/spita90/konami-viper-recomp/compare/bd64498...HEAD
 [0.5.0]: https://github.com/spita90/konami-viper-recomp/compare/aaa8758...bd64498
 [0.4.0]: https://github.com/spita90/konami-viper-recomp/compare/cf5280a...aaa8758
 [0.3.0]: https://github.com/spita90/konami-viper-recomp/compare/b10d12a...cf5280a

@@ -121,7 +121,22 @@
     "hooks": {
       "game": {
         "0x7dd40": "attract"
+      },
+      "gl": {
+        "0x217bc": "projection",
+        "0x21ae0": "projection",
+        "0x21b54": "projection",
+        "0x2a888": "projection",
+        "0x215f4": "viewport",
+        "0x2aac8": "viewport"
       }
+    },
+    "widescreen": {
+      "note": "same gl state as GTI Club 2 (see there), with the current slot at 0x3460 and the viewport at 0x2944",
+      "proj_matrix": "0x26dc",
+      "proj_frustum": "0x270c",
+      "proj_slot": "0x3460",
+      "viewport": "0x2944"
     },
     "font": {
       "note": "A8 textures of the game's stencil font (INSERT COIN[S], rankings), loaded to VRAM 0x6c000 and 0x7c000; one size, drawn scaled",

@@ -191,10 +191,18 @@ def write_config_header(g, out):
         f"#define GAME_ENH_SETTINGS {c_str(g['binary'] + '_settings.ini')}",
         f"#define GAME_ENH_SETUP_SCRIPT {c_str(setup['script']) if setup.get('script') else 'NULL'}",
         f"#define GAME_ENH_SETUP_SECONDS {setup.get('seconds', 0)}",
-        # named hooks: GAME_ENH_HOOK_<NAME> = address (the recompiler inserts rt_hook() there)
+        # named hooks (the recompiler inserts rt_hook() there): GAME_ENH_HOOK_<NAME> = address for
+        # a name used once, and GAME_ENH_HOOKS lists them all (a name may mark several addresses)
         *[f"#define GAME_ENH_HOOK_{name.upper()} 0x{int(a, 16):08x}u"
-          for mod in (enh.get('hooks') or {}).values() for a, name in mod.items()],
+          for mod in (enh.get('hooks') or {}).values() for a, name in mod.items()
+          if sum(n == name for m in (enh.get('hooks') or {}).values() for n in m.values()) == 1],
+        "#define GAME_ENH_HOOKS {" + "".join(f"{{0x{int(a, 16):08x}u, {c_str(name)}}}, "
+                                             for mod in (enh.get('hooks') or {}).values()
+                                             for a, name in mod.items()) + "{0, NULL}}",
         *font_config(enh.get('font')),
+        # widescreen: where the gl library keeps its projection slots and viewport (0: not supported)
+        *[f"#define GAME_ENH_WIDE_{k.upper()} 0x{int((enh.get('widescreen') or {}).get(k, '0'), 16):x}u"
+          for k in ('proj_matrix', 'proj_frustum', 'proj_slot', 'viewport')],
         game_options_config(enh.get('game_options')),
         # TEST MODE main menu index of GAME MODE: the pause menu's "main menu" returns to the attract through it
         f"#define GAME_ENH_TEST_GAME_MODE {enh.get('test_menu_game_mode', -1)}",

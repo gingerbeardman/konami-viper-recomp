@@ -182,6 +182,7 @@ void publish_frame()
 extern "C" {
 
 static int s_scale = 1;          /* kept for voodoo_init when set before the device exists */
+static int s_wide = 0;
 void voodoo_init(void)
 {
 	emu_shim::g_log_enabled = getenv("RT_VOODOO_LOG") != nullptr;
@@ -192,6 +193,7 @@ void voodoo_init(void)
 	s_machine.m_root = s_dev.get();
 	s_dev->set_fbmem(8);              // as MAME viper.cpp (TODO there: should be 16)
 	s_dev->set_render_scale(s_scale);
+	s_dev->set_wide_margin(s_wide);
 	s_dev->set_status_cycles(getenv("RT_VOODOO_STATUS_CYCLES") ? u32(atoi(getenv("RT_VOODOO_STATUS_CYCLES"))) : 1000);
 	s_dev->vblank_callback().set([](int state) {
 		if (state) {
@@ -220,6 +222,8 @@ void voodoo_reg_write(uint32_t off, uint32_t v, uint32_t mask)
 }
 /* recomp: render the displayed buffers at n times the resolution (1 = native), from the next frame */
 void voodoo_set_scale(int n) { s_scale = n; if (s_dev) s_dev->set_render_scale(n); }
+/* recomp: widescreen margin, native pixels on each side of the displayed buffers (0 = 4:3) */
+void voodoo_set_wide(int m) { s_wide = m; if (s_dev) s_dev->set_wide_margin(m); }
 
 uint32_t voodoo_lfb_read(uint32_t off) { s_lfb_reads++; g_fbstats.lfb_read_mb[(off >> 20) & 15]++; return s_dev->read_lfb(off >> 2); }
 void voodoo_lfb_write(uint32_t off, uint32_t v, uint32_t mask) { s_lfb_writes++; g_fbstats.lfb_write_mb[(off >> 20) & 15]++; s_dev->write_lfb(off >> 2, v, mask); }

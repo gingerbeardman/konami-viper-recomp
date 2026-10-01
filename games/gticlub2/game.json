@@ -133,7 +133,22 @@
     "hooks": {
       "game": {
         "0x61b4c": "attract"
+      },
+      "gl": {
+        "0x213f4": "projection",
+        "0x21718": "projection",
+        "0x2178c": "projection",
+        "0x28c1c": "projection",
+        "0x212e4": "viewport",
+        "0x28e60": "viewport"
       }
+    },
+    "widescreen": {
+      "note": "gl state at fixed addresses: projection slots (0x3452 = current) of 6 matrix terms at 0x26dc + 24*slot (row 0 first) and 6 frustum values (left, right, bottom, top, near, far) at 0x270c + 24*slot; viewport x scale 0x2940, x centre 0x2944, y scale 0x2948, y centre 0x294c. The hooks sit right after each write.",
+      "proj_matrix": "0x26dc",
+      "proj_frustum": "0x270c",
+      "proj_slot": "0x3452",
+      "viewport": "0x2940"
     },
     "font": {
       "note": "A8 textures of the attract captions: letters (VRAM 0x6e400) and the digits in the same style (VRAM 0x5e400, e.g. the SELECT A CAR countdown)",
