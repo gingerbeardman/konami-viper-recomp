@@ -40,25 +40,30 @@ you, as an operator would.
 ./td2 --enhanced
 ```
 
-The same game, set up like a PC game: menus, options and pause instead of coins and operator
+The same game, set up like a PC game: menus, options (even graphic improvement ones) and pause instead of coins and operator
 menus.
 
 <p align="center">
-  <img src="docs/images/enhanced-menu.png" width="32%" alt="Enhanced mode: attract menu with START GAME, OPTIONS, CREDITS, QUIT">
-  <img src="docs/images/enhanced-options.png" width="32%" alt="Enhanced mode: DISPLAY options with window mode, 2X resolution and fps counter">
-  <img src="docs/images/enhanced-pause.png" width="32%" alt="Enhanced mode: pause menu during a race">
+  <img src="docs/images/enhanced-td2-menu.png" width="32%" alt="Thrill Drive 2, enhanced mode at 16:9: attract menu with START GAME, OPTIONS, CREDITS, QUIT">
+  <img src="docs/images/enhanced-td2-options.png" width="32%" alt="Thrill Drive 2, enhanced mode at 16:9: DISPLAY options with window mode, 2X resolution, 16:9 aspect ratio and fps counter">
+  <img src="docs/images/enhanced-td2-pause.png" width="32%" alt="Thrill Drive 2, enhanced mode at 16:9: pause menu during a race in London">
+  <br>
+  <img src="docs/images/enhanced-gticlub2-menu.png" width="32%" alt="GTI Club 2, enhanced mode at 16:9: attract menu over a demo race">
+  <img src="docs/images/enhanced-gticlub2-options.png" width="32%" alt="GTI Club 2, enhanced mode at 16:9: DISPLAY options">
+  <img src="docs/images/enhanced-gticlub2-pause.png" width="32%" alt="GTI Club 2, enhanced mode at 16:9: pause menu during a race">
 </p>
+<p align="center"><sub>Thrill Drive 2 (top) and GTI Club 2 (bottom) in enhanced mode, 2X resolution, 16:9.</sub></p>
 
-|                     | Classic                   | Enhanced                                                                                   |
-| ------------------- | ------------------------- | ------------------------------------------------------------------------------------------ |
-| **Starting a game** | Insert coins, press START | START GAME from the menu                                                                   |
-| **Main screen**     | Attract mode              | Menu: START GAME, OPTIONS, CREDITS, QUIT over the attract mode                             |
+|                     | Classic                   | Enhanced                                                                                                 |
+| ------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Starting a game** | Insert coins, press START | START GAME from the menu                                                                                 |
+| **Main screen**     | Attract mode              | Menu: START GAME, OPTIONS, CREDITS, QUIT over the attract mode                                           |
 | **Options**         | None                      | OPTIONS: course difficulty, language, sound, window or fullscreen, resolution, aspect ratio, fps counter |
-| **Pause**           | None                      | Esc: RESUME or MAIN MENU                                                                   |
-| **Resolution**      | 512×384, as the original  | 512×384 or 1024×768 (1X or 2X)                                                             |
-| **Aspect ratio**    | 4:3, as the original      | 4:3, 16:10, 16:9 or 21:9 (the 3D scene widens; the HUD stays in the centre)                |
-| **TEST MODE**       | F2                        | None (TEST, SERVICE and COIN are ignored)                                                  |
-| **Save file**       | `td2_nvram.bin`           | `td2_enhanced_nvram.bin`, separate from the classic one                                    |
+| **Pause**           | None                      | Esc: RESUME or MAIN MENU                                                                                 |
+| **Resolution**      | 512×384, as the original  | 512×384 or 1024×768 (1X or 2X)                                                                           |
+| **Aspect ratio**    | 4:3, as the original      | 4:3, 16:10, 16:9 or 21:9 (the 3D scene widens; the HUD stays in the centre)                              |
+| **TEST MODE**       | F2                        | None (TEST, SERVICE and COIN are ignored)                                                                |
+| **Save file**       | `td2_nvram.bin`           | `td2_enhanced_nvram.bin`, separate from the classic one                                                  |
 
 More about the enhanced mode in [Enhanced mode in detail](#enhanced-mode-in-detail).
 

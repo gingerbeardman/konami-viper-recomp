@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 int g_enhanced;
 
@@ -295,7 +296,7 @@ static void blend(uint32_t *px, uint32_t rgb, int a) {
 
 /* alpha of glyph g at (u, v) in glyph pixels, bilinear */
 static int glyph_alpha(const Glyph *g, float u, float v) {
-    int x0 = (int)u, y0 = (int)v;
+    int x0 = (int)floorf(u), y0 = (int)floorf(v);   /* floor: u, v start at -1/4 at 2X */
     float fx = u - x0, fy = v - y0;
     int a[4];
     for (int k = 0; k < 4; k++) {

@@ -5,6 +5,16 @@ All notable changes to this project are listed here. The format follows
 [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a new minor
 version can change the build, the profiles or the command-line options.
 
+## [0.6.1] - 2026-10-01
+
+### Fixed
+- **Enhanced mode, 2X:** stray coloured pixels along the top and left edges of the menu
+  letters. The bilinear font sampling truncated the coordinate −1/4 to 0 instead of flooring
+  it, so it extrapolated and the alpha overflowed.
+
+### Changed
+- **README:** the enhanced-mode screenshots show both games at 2X and 16:9.
+
 ## [0.6.0] - 2026-10-01
 
 ### Added
@@ -139,7 +149,8 @@ version can change the build, the profiles or the command-line options.
   (ver EBB) is playable at 30 fps with sound, and steering and pedals are calibrated
   automatically.
 
-[0.6.0]: https://github.com/spita90/konami-viper-recomp/compare/bd64498...HEAD
+[0.6.1]: https://github.com/spita90/konami-viper-recomp/compare/9b71187...HEAD
+[0.6.0]: https://github.com/spita90/konami-viper-recomp/compare/bd64498...9b71187
 [0.5.0]: https://github.com/spita90/konami-viper-recomp/compare/aaa8758...bd64498
 [0.4.0]: https://github.com/spita90/konami-viper-recomp/compare/cf5280a...aaa8758
 [0.3.0]: https://github.com/spita90/konami-viper-recomp/compare/b10d12a...cf5280a
