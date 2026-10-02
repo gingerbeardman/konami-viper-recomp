@@ -154,12 +154,18 @@ static Uint32 g_rumble_test_started;
 
 static void test_rumble(void) {
     if (!g_pad) { rt_log("rumble test: no controller connected\n"); return; }
+    if (g_rumble_testing) return; /* let the current pulse finish */
     g_rumble_test_started = SDL_GetTicks();
+    if (controller_rumble_pulse(&g_rumble, g_pad, g_rumble_gain, g_rumble_test_started) < 0) {
+        rt_log("rumble test failed: %s\n", SDL_GetError());
+        return;
+    }
     g_rumble_testing = 1;
     g_rumble_trace = 1;
     g_rumble_trace_started = g_rumble_test_started;
     g_rumble_trace_tick = g_rumble_test_started - 1000;
-    rt_log("rumble test: one second at %.1fx strength\n", frontend_rumble_multiplier() / 100.0);
+    rt_log("rumble test: single 1000 ms pulse at %.1fx strength (output=%u)\n",
+           frontend_rumble_multiplier() / 100.0, g_rumble.strength);
 }
 
 /* Guest publishes motor commands; SDL calls stay on the host main thread. */
@@ -175,8 +181,8 @@ static void update_rumble(int active) {
     if (g_rumble_testing && (!window || (Uint32)(now - g_rumble_test_started) >= 1000))
         g_rumble_testing = 0;
     uint8_t motor = atomic_load_explicit(&g_motor_output, memory_order_relaxed);
-    controller_rumble_update(&g_rumble, g_pad, g_rumble_testing ? 0x8f : motor,
-        g_rumble_gain, g_rumble_testing || active, now);
+    if (!g_rumble_testing)
+        controller_rumble_update(&g_rumble, g_pad, motor, g_rumble_gain, active, now);
     if (g_rumble_trace && (Uint32)(now - g_rumble_trace_started) >= 30000) g_rumble_trace = 0;
     if (g_rumble_trace && (Uint32)(now - g_rumble_trace_tick) >= 1000) {
         g_rumble_trace_tick = now;

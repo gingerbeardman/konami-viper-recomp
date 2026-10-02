@@ -52,3 +52,17 @@ static void controller_rumble_update(ControllerRumble *state, SDL_GameController
     state->strength = strength;
     state->refreshed = now;
 }
+
+/* Diagnostic pulse: one finite effect, without the race loop's refreshes. */
+static int controller_rumble_pulse(ControllerRumble *state, SDL_GameController *pad,
+                                    double gain, Uint32 now) {
+    if (!pad) return -1;
+    Uint16 strength = controller_motor_strength(0x8f, gain);
+    if (CONTROLLER_RUMBLE_SEND(pad, strength, strength, strength ? 1000 : 0) < 0)
+        return -1;
+    *state = (ControllerRumble){
+        .id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad)),
+        .strength = strength, .refreshed = now, .sent = 1
+    };
+    return 0;
+}

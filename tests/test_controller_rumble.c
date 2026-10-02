@@ -86,6 +86,19 @@ int main(void) {
     count = calls;
     controller_rumble_update(&state,pad,0x8f,1,1,40);
     assert(calls == count + 1 && last_duration == 100); /* tick wrap and keepalive */
+    /* Repeated isolated tests send one full-duration command at equal strength. */
+    for (int pulse=0; pulse<5; ++pulse) {
+        Uint32 now=6000 + pulse*2000;
+        count=calls;
+        assert(controller_rumble_pulse(&state,pad,.5,now)==0);
+        assert(calls==count+1 && last_low==32768 && last_high==32768 && last_duration==1000);
+        controller_rumble_update(&state,pad,0,0,0,now+1000);
+        assert(last_low==0);
+    }
+    assert(controller_rumble_pulse(&state,pad,0,16000)==0 && last_low==0);
+    fail=1;
+    assert(controller_rumble_pulse(&state,pad,.5,17000)<0);
+    fail=0;
     SDL_GameControllerClose(pad);
     SDL_JoystickDetachVirtual(index);
     SDL_Quit();
