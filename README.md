@@ -401,8 +401,8 @@ Gyro and sensitivity are saved per game.
 R3 toggles gyro and L3 recenters without opening a menu. Recenter from Pause takes
 the controller's neutral position when driving resumes.
 Press **F8** or the Switch Pro **Capture** button in the focused game window for a
-one-second rumble test at 75% strength, including while paused. This checks the
-controller output independently of cabinet motor commands and `RT_RUMBLE` gain.
+one-second full-torque rumble test using the selected Rumble Strength, including
+while paused. This checks controller output independently of cabinet motor commands.
 A controller error is logged once; lack of physical vibration still needs checking
 on the actual controller even if the API accepts the request.
 In enhanced mode, **Home / Guide** behaves like **Esc**: pause during a race,
@@ -427,7 +427,9 @@ Native effects use the same short durations and stop on pause/focus loss/disconn
 **Options → Controls** and **Pause → Controls** include a saved **Rumble Strength** multiplier,
 from 0.0× (off) to 4.0× in 0.5× steps. 1.0× retains the default strength; boosting
 amplifies quieter cabinet motor commands and clamps at the controller's maximum.
-Capture / F8 remains a fixed-strength transport test, independent of this multiplier.
+Capture / F8 uses this multiplier too: Off silences the test, 0.5× produces quarter
+intensity, 1× half intensity, and 2× reaches maximum. Higher multipliers boost weaker
+cabinet effects but cannot exceed the hardware maximum.
 Window position and size are remembered per game in a `.window` companion to its
 settings file, in both original and enhanced modes. Fullscreen and maximized bounds
 do not replace the normal window placement. Restored windows are fitted to a currently
@@ -439,3 +441,8 @@ R3 still toggles gyro directly; the footer places L3 Recenter before R3 Toggle.
 
 Hold Left/Right to repeat menu value changes. Controller repeat starts after 400 ms
 and advances every 80 ms; keyboard uses its normal key repeat. Confirm never repeats.
+
+Temporary rumble errors retry after one second instead of disabling rumble until
+reconnection. The Apple backend checks that its engine is started before each effect,
+including the first effect after pause. Native failures retain native routing while
+recovering; unavailable native devices still use SDL.

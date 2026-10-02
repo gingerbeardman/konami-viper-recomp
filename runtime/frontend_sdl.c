@@ -39,6 +39,7 @@ static int send_controller_rumble(SDL_GameController *pad, Uint16 low, Uint16 hi
         (!backend || strcmp(backend, "sdl"))) {
         int result = controller_haptics_rumble((float)SDL_max(low, high) / 65535.0f, duration / 1000.0);
         if (result > 0) return 0;
+        if (result < 0) return SDL_SetError("Apple controller haptics temporarily unavailable");
         /* Native discovery may be delayed or the device may not expose haptics. */
     }
     controller_haptics_stop();
@@ -208,7 +209,7 @@ static void test_rumble(void) {
     if (!g_pad) { rt_log("rumble test: no controller connected\n"); return; }
     g_rumble_test_started = SDL_GetTicks();
     g_rumble_testing = 1;
-    rt_log("rumble test: one second at 75%% strength\n");
+    rt_log("rumble test: one second at %.1fx strength\n", frontend_rumble_multiplier() / 100.0);
 }
 
 /* Guest publishes motor commands; SDL calls stay on the host main thread. */
@@ -222,7 +223,7 @@ static void update_rumble(int active) {
     if (g_rumble_testing && (!window || (Uint32)(now - g_rumble_test_started) >= 1000))
         g_rumble_testing = 0;
     if (g_rumble_testing) {
-        controller_rumble_update(&g_rumble, g_pad, 0x8f, .75, 1, now);
+        controller_rumble_update(&g_rumble, g_pad, 0x8f, g_rumble_gain, 1, now);
         return;
     }
     controller_rumble_update(&g_rumble, g_pad,

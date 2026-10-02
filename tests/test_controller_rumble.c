@@ -47,10 +47,21 @@ int main(void) {
     controller_rumble_update(&state,NULL,0x8f,1,1,210); assert(state.id == -1);
     fail = 1;
     controller_rumble_update(&state,pad,0x8f,1,1,300);
-    assert(state.unsupported);
+    assert(state.failed);
     int count = calls;
     controller_rumble_update(&state,pad,0x8f,1,1,400); assert(calls == count);
     fail = 0;
+    controller_rumble_update(&state,pad,0x8f,1,1,1299);assert(calls == count);
+    controller_rumble_update(&state,pad,0x8f,1,1,1300);
+    assert(calls == count+1 && !state.failed && last_low==65535);
+    /* A failed pause stop must retry even though the desired strength is zero. */
+    fail=1;controller_rumble_update(&state,pad,0x8f,1,0,1400);assert(state.failed);
+    fail=0;controller_rumble_update(&state,pad,0x8f,1,0,2400);
+    assert(!state.failed && last_low==0);
+    controller_rumble_update(&state,pad,0x8f,.25,1,2401);assert(last_low==16384);
+    controller_rumble_update(&state,pad,0x8f,.5,1,2451);assert(last_low==32768);
+    controller_rumble_update(&state,pad,0x8f,1,1,2501);assert(last_low==65535);
+    controller_rumble_update(&state,pad,0x8f,0,1,2502);assert(last_low==0);
     state = (ControllerRumble){ .id = -1 };
     controller_rumble_update(&state,pad,0x8f,1,1,UINT32_MAX - 20);
     count = calls;

@@ -75,9 +75,12 @@ int controller_haptics_rumble(float strength, double seconds) {
         if (!slot.engine) return failed(nil);
         NSError *error = nil;
         if (slot.restart) {
-            if (![slot.engine startAndReturnError:&error]) return failed(error);
+            controller_haptics_stop();
             slot.restart = NO;
         }
+        /* Starting an already running engine is safe. Do not rely on a queued
+         * stopped callback having run before the first effect after pause. */
+        if (![slot.engine startAndReturnError:&error]) return failed(error);
         controller_haptics_stop();
         CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc]
             initWithParameterID:CHHapticEventParameterIDHapticIntensity value:fminf(1, strength)];
