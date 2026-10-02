@@ -1,6 +1,7 @@
 #include "../runtime/enhanced.c"
 #include <assert.h>
 static int enabled, sensitivity=100, recentered;
+uint8_t *g_ram;
 int frontend_gyro_enabled(void) {return enabled;}
 int frontend_gyro_available(void) {return 1;}
 int frontend_gyro_ready(void) {return 1;}
@@ -18,19 +19,31 @@ int main(int argc, char **argv) {
  assert(argc == 2);
  g_enhanced=1; g_font=(uint8_t*)1; g_booted=1;
  snprintf(g_settings_path,sizeof g_settings_path,"%s", argv[1]);
+ assert(!g_set.show_gyro);
  assert(enh_escape()); assert(g_paused);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(g_pause_controls);
  enh_menu_action(ENH_OK); assert(enabled);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_RIGHT); assert(sensitivity==110);
  enh_menu_action(ENH_LEFT); assert(sensitivity==100);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(recentered==1);
- enh_menu_action(ENH_BACK); assert(!g_pause_controls&&g_paused);
+ enh_menu_action(ENH_DOWN); enh_menu_action(ENH_RIGHT); assert(g_set.show_gyro);
+ enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(!g_pause_controls&&g_paused);
  enh_menu_action(ENH_BACK); assert(!g_paused);
- enabled=0;sensitivity=50;settings_load();assert(enabled&&sensitivity==100);
+ enabled=0;sensitivity=50;g_set.show_gyro=0;settings_load();assert(enabled&&sensitivity==100&&g_set.show_gyro);
  remove(g_settings_path);
  g_frame=g_attract_frame=100;g_screen=SCREEN_PAGE;g_page=PAGE_CONTROLS;g_page_cursor=0;
  enh_menu_action(ENH_OK);assert(!enabled);
  enh_menu_action(ENH_DOWN);enh_menu_action(ENH_RIGHT);assert(sensitivity==110);
  remove(g_settings_path);
+ /* The gameplay meter is opt-in, at the bottom, and absent when gyro is off. */
+ g_attract_frame=0; g_frame=500; enabled=1;
+ uint32_t frame[512*384]={0};
+ enh_draw_overlay(frame,512,384);
+ assert(frame[364*512+286]==0xffffd800u); /* halfway-right marker */
+ assert(frame[100*512+256]==0);
+ g_set.show_gyro=0; memset(frame,0,sizeof frame); enh_draw_overlay(frame,512,384);
+ assert(frame[364*512+286]==0);
+ g_set.show_gyro=1; enabled=0; enh_draw_overlay(frame,512,384);
+ assert(frame[364*512+286]==0);
  puts("gyro menu navigation and settings persistence: passed");
 }

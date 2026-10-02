@@ -414,3 +414,7 @@ updating while paused so sensitivity and recentering can be checked before resum
 **F9** toggles controller input logging (10 samples/second) to diagnose steering.
 The log includes the raw left-stick axis and the steering ADC sent to the game;
 use partial stick travel to check for saturation before or after mapping.
+
+In **Controls**, enable **Show in Game** for a compact live gyro meter at the bottom
+centre while driving. It defaults to off and is saved per game. The meter is hidden
+when gyro is disabled or unavailable; the full preview remains in Controls.
