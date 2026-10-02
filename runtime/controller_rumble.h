@@ -17,7 +17,7 @@ typedef struct {
 
 static inline Uint16 controller_motor_strength(uint8_t motor, double gain) {
     if (!(motor & 0x80) || !isfinite(gain) || gain <= 0) return 0;
-    return (Uint16)lround((motor & 15) * (65535.0 / 15.0) * fmin(gain, 1.0));
+    return (Uint16)lround(fmin(65535.0, (motor & 15) * (65535.0 / 15.0) * fmin(gain, 2.0)));
 }
 
 static void controller_rumble_update(ControllerRumble *state, SDL_GameController *pad,

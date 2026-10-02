@@ -423,3 +423,8 @@ On macOS, a single connected Switch Pro uses GameController/CoreHaptics for rumb
 while SDL still handles input and sensors. Other controllers and ambiguous multiple-pad
 setups retain SDL rumble. `RT_RUMBLE_BACKEND=sdl` forces SDL output for comparison.
 Native effects use the same short durations and stop on pause/focus loss/disconnect.
+
+**Options → Controls** and **Pause → Controls** include a saved **Rumble** multiplier,
+from 0.0× (off) to 4.0× in 0.5× steps. 1.0× retains the default strength; boosting
+amplifies quieter cabinet motor commands and clamps at the controller's maximum.
+Capture / F8 remains a fixed-strength transport test, independent of this multiplier.

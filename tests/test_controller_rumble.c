@@ -18,6 +18,9 @@ int main(void) {
     assert(controller_motor_strength(0x9f,1) == 65535); /* direction has no vibration equivalent */
     assert(controller_motor_strength(0x8f,.5) == 32768);
     assert(controller_motor_strength(0x8f,0) == 0);
+    assert(controller_motor_strength(0x84,2) > controller_motor_strength(0x84,1));
+    assert(controller_motor_strength(0x8f,2) == 65535);
+    assert(controller_motor_strength(0x8f,100) == 65535);
     assert(controller_motor_strength(0x8f,NAN) == 0);
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "0");
     assert(SDL_Init(SDL_INIT_GAMECONTROLLER) == 0);

@@ -188,6 +188,11 @@ static void open_pad(void) {
 static atomic_uchar g_motor_output;
 static ControllerRumble g_rumble = { .id = -1 };
 static double g_rumble_gain = 0.5;
+
+int frontend_rumble_multiplier(void) { return (int)lround(g_rumble_gain * 200); }
+void frontend_set_rumble_multiplier(int percent) {
+    g_rumble_gain = SDL_clamp(percent, 0, 400) / 200.0;
+}
 static Uint32 g_rumble_test_started;
 
 static void test_rumble(void) {
@@ -440,8 +445,8 @@ int frontend_run(int scale) {
     if (rumble) {
         char *end;
         double gain = strtod(rumble, &end);
-        if (end != rumble && !*end && isfinite(gain) && gain >= 0 && gain <= 1) g_rumble_gain = gain;
-        else rt_log("RT_RUMBLE: expected 0..1; using 0.5\n");
+        if (end != rumble && !*end && isfinite(gain) && gain >= 0 && gain <= 2) g_rumble_gain = gain;
+        else rt_log("RT_RUMBLE: expected 0..2; keeping current setting\n");
     }
 
     const char *gyro = getenv("RT_GYRO");

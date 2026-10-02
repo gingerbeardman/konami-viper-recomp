@@ -121,3 +121,5 @@ void frontend_gyro_recenter(void);
 void enh_controller_settings_changed(void);
 double frontend_gyro_position(void); /* normalized steering, also live while paused */
 int frontend_gyro_ready(void);
+int frontend_rumble_multiplier(void); /* 100 = default strength, range 0..400 */
+void frontend_set_rumble_multiplier(int percent);

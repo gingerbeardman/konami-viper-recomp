@@ -2,6 +2,9 @@
 #include <assert.h>
 static int enabled, sensitivity=100, recentered;
 uint8_t *g_ram;
+static int rumble=100;
+int frontend_rumble_multiplier(void) { return rumble; }
+void frontend_set_rumble_multiplier(int v) { rumble=v<0?0:v>400?400:v; }
 int frontend_gyro_enabled(void) {return enabled;}
 int frontend_gyro_available(void) {return 1;}
 int frontend_gyro_ready(void) {return 1;}
@@ -27,9 +30,10 @@ int main(int argc, char **argv) {
  enh_menu_action(ENH_LEFT); assert(sensitivity==100);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_RIGHT); assert(g_set.show_gyro);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(recentered==1);
+ enh_menu_action(ENH_DOWN); enh_menu_action(ENH_RIGHT); assert(rumble==150);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(!g_pause_controls&&g_paused);
  enh_menu_action(ENH_BACK); assert(!g_paused);
- enabled=0;sensitivity=50;g_set.show_gyro=0;settings_load();assert(enabled&&sensitivity==100&&g_set.show_gyro);
+ enabled=0;sensitivity=50;g_set.show_gyro=0;rumble=100;settings_load();assert(enabled&&sensitivity==100&&g_set.show_gyro&&rumble==150);
  remove(g_settings_path);
  g_frame=g_attract_frame=100;g_screen=SCREEN_PAGE;g_page=PAGE_CONTROLS;g_page_cursor=0;
  enh_menu_action(ENH_OK);assert(!enabled);
