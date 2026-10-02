@@ -613,7 +613,9 @@ int frontend_run(int scale) {
                 }
 #endif
                 if ((enh_menu_active() || enh_paused()) && menu_button(ev.cbutton.button) >= 0) menu_pad_press(ev.cbutton.button, SDL_GetTicks());
-                else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) enh_escape();
+                else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) {
+                    if (!enh_escape()) running = 0;  /* Home: pause/back in play, quit from main menu. */
+                }
                 else if (enh_name_entry_active() && !enh_paused() && (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ||
                                                                        ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT))
                     enh_name_step(ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? -1 : 1);

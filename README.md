@@ -444,3 +444,8 @@ At the default strength, torque 3–5 now maps to about 22–29% intensity inste
 
 Capture/F8 records 30 seconds of diagnostic motor/output state in the launch log;
 F9 also enables this trace alongside analog input logging.
+
+In enhanced mode, **Home / Guide** behaves like **Esc**: pause during a race,
+back out of an options page, and quit from the main menu. In Pause, choose
+**Main Menu** to leave the race, or **Resume** / B / Home to continue driving.
+A / Start still confirms menu choices. In original arcade mode, Home / Esc quits.
