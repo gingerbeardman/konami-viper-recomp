@@ -18,6 +18,8 @@
 #include "runtime.h"
 #include "game_config.h"
 #include "controller_math.h"
+
+#include "controller_rumble.h"
 #include <SDL.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -133,7 +135,10 @@ static double controller_option(const char *name, double fallback, double lo, do
 
 static int pad_matches(SDL_JoystickID id) { return g_pad && id == g_pad_id; }
 
+static void update_rumble(int active);
+
 static void close_pad(void) {
+    update_rumble(0);
     if (g_pad) SDL_GameControllerClose(g_pad);
     g_pad = NULL;
     g_pad_id = -1;
@@ -155,6 +160,21 @@ static void open_pad(void) {
     }
 }
 
+
+static atomic_uchar g_motor_output;
+static ControllerRumble g_rumble = { .id = -1 };
+static double g_rumble_gain = 0.5;
+
+/* Guest publishes motor commands; SDL calls stay on the host main thread. */
+void frontend_set_motor(uint8_t command) {
+    atomic_store_explicit(&g_motor_output, command, memory_order_relaxed);
+}
+
+static void update_rumble(int active) {
+    controller_rumble_update(&g_rumble, g_pad,
+        atomic_load_explicit(&g_motor_output, memory_order_relaxed),
+        g_rumble_gain, active, SDL_GetTicks());
+}
 
 static void apply_inputs(double dt) {
     /* keyboard steering: ramp towards target */
@@ -279,6 +299,13 @@ int frontend_run(int scale) {
         rt_log("SDL_Init failed: %s\n", SDL_GetError());
         return -1;
     }
+    const char *rumble = getenv("RT_RUMBLE");
+    if (rumble) {
+        char *end;
+        double gain = strtod(rumble, &end);
+        if (end != rumble && !*end && isfinite(gain) && gain >= 0 && gain <= 1) g_rumble_gain = gain;
+        else rt_log("RT_RUMBLE: expected 0..1; using 0.5\n");
+    }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
     SDL_Window *win = SDL_CreateWindow(g_enhanced ? GAME_TITLE " - enhanced" : GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                        512 * scale, 384 * scale, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
@@ -373,6 +400,8 @@ int frontend_run(int scale) {
             default: break;
             }
         }
+        update_rumble((SDL_GetWindowFlags(win) & SDL_WINDOW_INPUT_FOCUS) &&
+                      !enh_paused() && !enh_menu_active() && !enh_turbo() && !enh_inputs_owned());
         uint64_t now = SDL_GetPerformanceCounter();
         apply_inputs((double)(now - last_tick) / g_pace_freq);
         last_tick = now;
@@ -411,6 +440,7 @@ int frontend_run(int scale) {
         SDL_RenderCopy(ren, tex, NULL, NULL);
         SDL_RenderPresent(ren);       /* vsync paces this loop */
     }
+    update_rumble(0);
     nvram_save();
     if (g_audio) SDL_CloseAudioDevice(g_audio);
     close_pad();

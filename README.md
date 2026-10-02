@@ -178,6 +178,18 @@ Optional environment settings (also work in classic mode):
 
 For example: `RT_STICK_CURVE=1 RT_STICK_DEADZONE=0.08 ./td2`.
 
+### Controller rumble
+
+Supported SDL controllers (including Nintendo Switch Pro) vibrate in proportion to the
+cabinet's K-type steering motor torque. Set `RT_RUMBLE=0` to disable, or a strength from
+0 to 1 (default `0.5`), for example `RT_RUMBLE=0.25 ./gticlub2`.
+
+This follows actual motor commands, so versions without the K-type motor may not rumble.
+It approximates wheel force as vibration; it does not provide directional wheel force or
+synthesize collision effects. Rumble stops when unfocused, paused, in an enhanced menu,
+during automatic setup, or on normal exit. Short effects expire if the frontend stalls.
+Controllers without rumble support continue to work normally. Requires SDL 2.0.9+ for rumble.
+
 ## Required files
 
 The layout of `roms/` is the same as a MAME rompath. You only need `kviper/` plus the folders of
