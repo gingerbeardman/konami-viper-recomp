@@ -18,6 +18,7 @@
 #include "runtime.h"
 #include "game_config.h"
 #include "controller_math.h"
+#include "controller_gyro.h"
 #include <SDL.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -160,6 +161,92 @@ static void open_pad(void) {
     }
 }
 
+static int g_gyro_enabled, g_gyro_active = 1;
+static double g_gyro_range = 35 * 3.141592653589793 / 180;
+static ControllerGyro g_gyro;
+static SDL_JoystickID g_gyro_pad = -1;
+static int g_gyro_available, g_gyro_suspended;
+static double g_gyro_position;
+
+double frontend_gyro_position(void) { return g_gyro_position; }
+int frontend_gyro_ready(void) {
+    return g_gyro_enabled && g_gyro_available && g_gyro.ready && g_pad && SDL_GameControllerGetAttached(g_pad);
+}
+int frontend_gyro_enabled(void) { return g_gyro_enabled; }
+int frontend_gyro_sensitivity(void) {
+    return (int)lround(3500.0 / (g_gyro_range * 180 / 3.141592653589793));
+}
+void frontend_gyro_set_sensitivity(int percent) {
+    percent = SDL_clamp(percent, 50, 350);
+    g_gyro_range = (3500.0 / percent) * 3.141592653589793 / 180;
+}
+void frontend_gyro_recenter(void) { g_gyro.ready = 0; g_gyro_position = 0; }
+void frontend_gyro_set_enabled(int on) {
+    g_gyro_enabled = !!on;
+    g_gyro_position = 0;
+    g_gyro.ready = 0;
+    g_gyro_pad = -1;
+    g_gyro_available = 0;
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    if (!on && g_pad) {
+        SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_GYRO, SDL_FALSE);
+        SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_ACCEL, SDL_FALSE);
+    }
+#endif
+}
+int frontend_gyro_available(void) {
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    return g_pad && SDL_GameControllerHasSensor(g_pad, SDL_SENSOR_GYRO) &&
+           SDL_GameControllerHasSensor(g_pad, SDL_SENSOR_ACCEL);
+#else
+    return 0;
+#endif
+}
+
+static double gyro_steering(double dt) {
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    g_gyro_position = 0;
+    if (!g_gyro_enabled || !g_pad || !SDL_GameControllerGetAttached(g_pad)) return 0;
+    SDL_JoystickID id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad));
+    if (id != g_gyro_pad) {
+        g_gyro_pad = id;
+        g_gyro = (ControllerGyro){0};
+        g_gyro_available = SDL_GameControllerHasSensor(g_pad, SDL_SENSOR_GYRO) &&
+                           SDL_GameControllerHasSensor(g_pad, SDL_SENSOR_ACCEL);
+        if (g_gyro_available) {
+            g_gyro_available = SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_GYRO, SDL_TRUE) == 0 &&
+                               SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_ACCEL, SDL_TRUE) == 0;
+        }
+        if (!g_gyro_available) {
+            SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_GYRO, SDL_FALSE);
+            SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_ACCEL, SDL_FALSE);
+        }
+        rt_log("gyro steering: %s (click left stick to recenter)\n", g_gyro_available ? "enabled" : "unavailable; using stick");
+    }
+    if (!g_gyro_available) return 0;
+    if (!g_gyro_active || enh_turbo() || enh_inputs_owned()) {
+        g_gyro.ready = 0;
+        return 0;
+    }
+    /* Keep the preview live in menus without steering the guest. Recenter on
+     * entering/leaving a menu so resuming never inherits a paused tilt. */
+    int suspended = enh_menu_active() || enh_paused();
+    if (suspended != g_gyro_suspended) { g_gyro.ready = 0; g_gyro_suspended = suspended; }
+    float accel[3], gyro[3];
+    if (SDL_GameControllerGetSensorData(g_pad, SDL_SENSOR_ACCEL, accel, 3) < 0 ||
+        SDL_GameControllerGetSensorData(g_pad, SDL_SENSOR_GYRO, gyro, 3) < 0) {
+        g_gyro.ready = 0;
+        return 0;
+    }
+    g_gyro_position = controller_gyro_step(&g_gyro, accel, gyro, dt, g_gyro_range,
+                               SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSTICK));
+    return suspended ? 0 : g_gyro_position;
+#else
+    (void)dt;
+    return 0;
+#endif
+}
+
 
 static void apply_inputs(double dt) {
     /* Menu confirmation can consume a pedal button's down event. These controls
@@ -175,6 +262,8 @@ static void apply_inputs(double dt) {
     if (ctl.steer < target) ctl.steer = SDL_min(target, ctl.steer + speed);
     else if (ctl.steer > target) ctl.steer = SDL_max(target, ctl.steer - speed);
     double steer = ctl.steer;
+    double tilt = gyro_steering(dt);
+    if (tilt != 0 && !ctl.steer_left && !ctl.steer_right) steer = tilt;
     /* Take the strongest pedal source: a slightly pressed trigger must not reduce a
      * fully held key/button. Right-stick Y supplies proportional pedals on Switch Pro. */
     double gas = ctl.gas ? 1.0 : 0.0, brake = ctl.brake ? 1.0 : 0.0;
@@ -312,6 +401,19 @@ int frontend_run(int scale) {
         rt_log("SDL_Init failed: %s\n", SDL_GetError());
         return -1;
     }
+    const char *gyro = getenv("RT_GYRO");
+    if (gyro) frontend_gyro_set_enabled(!strcmp(gyro, "1"));
+    const char *range = getenv("RT_GYRO_RANGE");
+    if (range) {
+        char *end;
+        double degrees = strtod(range, &end);
+        if (end != range && !*end && isfinite(degrees) && degrees >= 10 && degrees <= 70)
+            g_gyro_range = degrees * 3.141592653589793 / 180;
+        else rt_log("RT_GYRO_RANGE: expected 10..70 degrees; using 35\n");
+    }
+#if !SDL_VERSION_ATLEAST(2, 0, 14)
+    if (g_gyro_enabled) rt_log("gyro steering requires SDL 2.0.14 or newer\n");
+#endif
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
     SDL_Window *win = SDL_CreateWindow(g_enhanced ? GAME_TITLE " - enhanced" : GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                        512 * scale, 384 * scale, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
@@ -358,6 +460,7 @@ int frontend_run(int scale) {
             fs_applied = enh_want_fullscreen();
             SDL_SetWindowFullscreen(win, fs_applied ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
         }
+        g_gyro_active = (SDL_GetWindowFlags(win) & SDL_WINDOW_INPUT_FOCUS) != 0;
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             switch (ev.type) {
@@ -403,6 +506,14 @@ int frontend_run(int scale) {
                 break;
             case SDL_CONTROLLERBUTTONDOWN:
                 if (pad_matches(ev.cbutton.which)) g_menu_repeat_button = -1;
+                if (g_gyro_active && g_pad && ev.cbutton.which == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad)) &&
+                    ev.cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSTICK) {
+                    frontend_gyro_set_enabled(!g_gyro_enabled);
+                    enh_controller_settings_changed();
+                    rt_log("gyro steering: %s (right-stick click toggles; left-stick click recenters)\n",
+                           g_gyro_enabled ? "on" : "off");
+                    break;
+                }
                 if (!pad_matches(ev.cbutton.which) || !g_input_focus) break;
                 if ((enh_menu_active() || enh_paused()) && menu_button(ev.cbutton.button) >= 0) menu_pad_press(ev.cbutton.button, SDL_GetTicks());
                 else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) enh_escape();

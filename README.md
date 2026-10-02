@@ -173,6 +173,23 @@ Optional environment settings (also work in classic mode):
 
 For example: `RT_STICK_CURVE=1 RT_STICK_DEADZONE=0.08 ./td2`.
 
+### Gyro steering
+
+Click the right stick (R3) to toggle gyro on/off, or start with it enabled using
+`RT_GYRO=1 ./gticlub2` (or any game executable). A controller exposing both
+SDL gyro and accelerometer sensors, such as Nintendo Switch Pro, can steer by rolling it
+like a small steering wheel. Hold it comfortably in front of you as play begins; that pose
+becomes centre. Click the left stick to recenter. A two-degree deadzone suppresses small
+movements, and 35 degrees of roll gives full steering lock. Use `RT_GYRO_RANGE=45` to change
+the full-lock angle (10–70 degrees).
+
+The gyro is corrected towards gravity to limit drift; hold the controller like a wheel,
+not flat on a table. Gravity correction is suspended during strong acceleration or when
+the controller is flat. Keyboard steering and the left stick remain available and override
+tilt when used. Sensors recenter after pause, menus, focus changes, or a long frame stall.
+Unsupported controllers fall back to the existing controls. Requires SDL 2.0.14+ for sensors;
+gyro remains off by default.
+
 ## Required files
 
 The layout of `roms/` is the same as a MAME rompath. You only need `kviper/` plus the folders of
@@ -366,3 +383,21 @@ use partial stick travel to check for saturation before or after mapping.
 Hold Left/Right to repeat menu value adjustments (400 ms delay, then 80 ms intervals
 on controllers; normal keyboard repeat). Confirm never repeats. Held pedal buttons
 are reconciled with the controller each frame, including after pause/resume.
+
+Enhanced mode exposes gyro controls in **Options → Controls** and **Pause → Controls**.
+Use the D-pad or arrow keys to choose **Gyro Sensitivity**, **Show Gyro Meter**, or **Recenter Gyro**;
+Left/Right adjusts the selected setting, and A/Enter confirms. Sensitivity defaults to
+1.0× (35° to full lock); higher values need less tilt. The Controls menu shows the current sensitivity and a live steering meter.
+Gyro and sensitivity are saved per game.
+R3 toggles gyro and L3 recenters without opening a menu. Recenter from Pause takes
+the controller's neutral position when driving resumes.
+The Controls menu has a live gyro steering meter with a centre mark; it continues
+updating while paused so sensitivity and recentering can be checked before resuming.
+
+In **Controls**, enable **Show Gyro Meter** for a compact live gyro meter at the bottom
+centre while driving. It defaults to off and is saved per game. The meter is hidden
+when gyro is disabled or unavailable; the full preview remains in Controls.
+
+**Gyro Sensitivity** combines enablement and sensitivity: Left/Right adjusts the multiplier,
+and Left below 0.5× turns it off. Right from Off restores the last sensitivity.
+R3 still toggles gyro directly; the footer places L3 Recenter before R3 Toggle.
