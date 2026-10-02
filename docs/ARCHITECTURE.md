@@ -140,9 +140,14 @@ What GTI Club 2 turned out to need:
   - flag bytes are read LSB first; 1 = literal;
   - 0 = pair `b0 b1`, with `len=(b0&15)+3` and `dist=((b0&0xF0)<<4)|b1`;
   - `dist=0` ends the stream.
-- There are 140 entries, and 139 pass their checksum.
-- 68 names were recovered from strings. The rest are built at runtime; they are not needed,
-  because the kernel looks files up by hash.
+- There are 140 entries, and 139 pass their checksum (the 140th is the empty `@@@@@@@@` entry).
+- Every file of the five versions has its name (`tools/names.txt`, 316 paths), so nothing is
+  left in `_unk/`. The kernel looks files up by hash, and many names are built at run time
+  (section and model names plus `_mdl.zin`/`_tex.zin`), so they were recovered by hashing
+  candidates: directories of the known names × words from the game module and from the name
+  lists (`game/gldata/secname.zin`, `mdlname.zin`, `texname.zin`; GTI Club 2's
+  `game/mdldata/header.zin`) × the usual suffixes. A small C brute forcer does the ~10 million
+  hashes in under a second. See section 5d for what the names revealed.
 
 ### Executable modules
 
@@ -234,9 +239,9 @@ The modules use the PowerOpen/AIX ABI: function pointers are descriptors `{code,
     `0x63ffffff` for thrild2 (IN2 `0x43`), `0x61ffffff` for gticlub2ea (IN2 `0x41`), checked
     against MAME. The runtime builds it from the profile's IN2 (`hw_boot_param()`).
   - gticlub2ea copies it to the halfword at `0x826`. If bit `0x2000` (DIP SW:3) is clear, the
-    check at `0x54628` falls through to a rental/expiry lock ("GAME MODE LOCKED! PLEASE SET THE
-    PASSWORD", with an "EXPIRY DATE" in the NVRAM). With a hard-coded TD2 value the game always
-    showed the lock screen.
+    check at `0x54628` can fall through to the "GAME MODE LOCKED! PLEASE SET THE PASSWORD"
+    screen (see "Game mode lock" below). With a hard-coded TD2 value the game always showed the
+    lock screen.
 - **Devices** (`hw.c`, behaviour taken from MAME `viper.cpp`):
   - EPIC (IRQs + 4 global timers);
   - I2C with an **ADC0838 in differential mode** for steering and pedals:
@@ -355,6 +360,53 @@ FFE00000 UART, FFE10000 I/O, FFE30000 NVRAM, FFE70000 DS2430, FFE98000 LANC
 FFF00000-FFF3FFFF  BIOS
 ```
 
+### Game mode lock ("GAME MODE LOCKED! PLEASE SET THE PASSWORD")
+
+Reverse-engineered from gticlub2ea. The addresses below are for that version. gticlub2, thrild2,
+thrild2j and thrild2a contain the same two fixed codes, right before the "GAME MODE LOCKED!"
+string. Real cabinets can show this screen too: the game does not start until a password is
+entered.
+
+- **Current date:** the kernel time routine (`0x3be6c`) reads the M48T58 clock registers
+  (NVRAM `0x1FF9`–`0x1FFF`). The year is always taken as 2000 + the two BCD digits
+  (`tm_year` = yy + 100).
+- **Decision at boot** (`0x54628`, called from the state machine at `0x468a8`). It loads the
+  NVRAM option block and looks at the word at offset `0x60`:
+  1. Bit `0x40000000` set: never lock.
+  2. DIP SW:3 on (bit `0x2000` of the halfword at `0x826`): no lock.
+  3. Bit `0x80000000` set: locked.
+  4. The timezone setting is disabled: no lock.
+  5. RTC year ≥ 2001: the game sets bit `0x40000000`, saves, and never checks again.
+  6. Otherwise (year 2000): the configured timezone hour is checked against a per-region
+     `{min, max, default}` table at `0xc1530`, indexed by the region byte `0x3ce50()`. If the
+     hour is out of range, the game sets `0x80000000`, saves, and shows the lock screen
+     (`0x5475c`).
+
+  So with a working clock the lock never triggers. A cabinet that locks again some time after
+  its NVRAM was reflashed most likely has a dead M48T58 battery: the clock falls back to year
+  `00` and the settings get corrupted.
+- **Unlock** (password editor at `0x51f4c`, check at `0x5208c`). The code is 4 bytes, entered as
+  8 hex digits. The check accepts:
+  - a code computed from the RTC date, valid from yesterday to two days ahead;
+  - the fixed code `09091999`;
+  - the fixed code `49120331`.
+
+  All three codes are 4-byte strings stored at `0xc18e8`/`0xc18ec`. On SAVE AND EXIT (`0x51de8`)
+  the game clears the top three bits of the word at `0x60`. That removes the lock but not the
+  cause: if the clock still reads 2000, the game can lock again.
+- **Not the same password:** the TEST MODE "PASSWORD" menu, the one that shows a SID and an
+  "EXPIRY DATE", belongs to the KONAMI INTERNET CHALLENGE.
+  - The SID is 6 bytes that the game derives from the DS2430 serial number. It does not show
+    the raw serial.
+  - The entered 8 bytes are decrypted with two-key 3DES (`0x51054`). The two keys are derived
+    from the SID. The decrypted block must contain the SID, a 10-bit tag and the expiry date
+    (days since 1970).
+  - Once that password expires, ranking codes stop being shown (`0x6be00`).
+  - It plays no part in the game mode lock.
+
+These findings come from reading the code only. They have not been tested in the runtime or on
+a real cabinet.
+
 ## 5a. Enhanced mode (`--enhanced`, `runtime/enhanced.c`)
 
 An optional layer on top of the faithful port, in development. Everything is gated on
@@ -392,11 +444,11 @@ An optional layer on top of the faithful port, in development. Everything is gat
     also works headless. The menu stays hidden until the game has started; if START is ignored,
     it comes back after 4 s.
   - The font is the A8 texture of the attract captions ("PRESS START BUTTON"). It sits in VRAM at
-    `0x6E400` and comes from `_unk/21ae0c7d.bin` at `0x6A0C0` (identical in JAB and EAA). It has
+    `0x6E400` and comes from `game/mdldata/COMMON_tex.zin` at `0x6A0C0` (identical in JAB and EAA). It has
     three sizes on fixed grids (24×40, 16×32, 12×24) with proportional glyphs, and holds only
     uppercase letters and punctuation. `enh_init` measures the ink width of each glyph.
   - Thrill Drive 2 uses its stencil font: two A8 textures (VRAM `0x6C000` and `0x7C000`), from
-    `_unk/76278279.bin` at `0x14` and `0x10024`. It is one size on a 32×48 grid, with digits,
+    `game/gldata/VRAM_tex.zin` at `0x14` and `0x10024`. It is one size on a 32×48 grid, with digits,
     A–Z, a few symbols and kanji, drawn at scales 0.85, 0.6 and 0.45 with bilinear sampling.
   - Found by logging the textures used on the WARNING screen (`RT_VOODOO_TEXLOG=1`, which now
     prints timestamps) and dumping the VRAM (`RT_VOODOO_VRAMDUMP=path:frame`).
@@ -620,6 +672,58 @@ transform, keeps its 4:3 layout in the centre.
 crash captions scrolling in). The in-car start camera of TD2 shows the edge of its cockpit
 model. 21:9 has not been checked for missing scenery at the far edges, beyond the attract demos.
 
+## 5d. Hidden and unused content
+
+What the file names (section 3), a log of the files each run loads (`RT_CF_LOG=1`, after the
+boot-time checksum pass that reads the whole image) and the code show. Attract mode and races
+were run headless; the findings come from those runs and from reading the code.
+
+**Both games**
+- `system/prog.zin` is the kernel itself (identical to the boot block payload, `kernel.bin`).
+- `copydisk/prog.zin` is a factory card duplicator. The kernel runs it instead of `fpga` and
+  `game` when `0xd724` sees a second card (status nibble at `0xffe10002`); it copies the game
+  card to the destination card ("too small destination card", "destination overwrite trigger
+  timeout").
+- The TEST MODE main menu has no hidden items. The SECURITY KEY / PCB / KEY / ORG / PRODUCTION
+  MODE / DISTRIBUTION / RTC TIME SETTING screen (TD2 `0x5cf40`) belongs to the boot state
+  machine's security key and conversion path ("PLEASE INSERT KEY", "CONVERSION SUCCEED");
+  a normal boot shows only DEVICE CHECK (U57, U13), RTC OK and AWAKENING.
+
+**Thrill Drive 2** (EBB; JAA and AAA have the same files)
+- `game/comcar/cc_test.zin`: a test set of computer-car paths (2 paths; the real ones have 12).
+  It is the fourth entry of the path table at `0xcf358` (Japan, USA, Europe, test), loaded by
+  `0x62fcc` with the course index, but the road table at `0xcf318` has only three courses, so it
+  cannot be reached.
+- Car 53 was cut: `PCAR53_mdl` and `ECAR53_mdl` are identical 124-byte placeholders and
+  `ACAR53_tex` is empty, and the game's car lists (`0xd1250`) stop at 12 cars (02, 03, 11, 12,
+  13, 21, 22, 42, 43, 50, 51, 52; 50–52 are the secret ones of the car select).
+- `game/gldata/EXAMPLE_mdl.zin` holds a single model, `dbg_cube`, with a 64×32 texture.
+- `game/vram/include/f08x08-font.zin`: an 8×8 ASCII font, 8 bits per pixel, that nothing loads
+  (only the 8×16 font is named in the code).
+- `TITLE_I_tex` is empty (no separate title for Italian). The `PCAR*` models load on demand,
+  not in a single-player game: the attract/game preload (`0x7f630`) lists only `ACAR`/`ECAR`
+  and SELECT. They are probably the other cabinets' cars in link play (an untested guess; the
+  HUD shows the cabinet's PLAYER number).
+
+**GTI Club 2** (JAB; EAA has the same files)
+- Unused title logos: `tHOTRUNNERS_tex` ("HOT RUNNERS – Racing in Italy") and
+  `tITALIANO500_tex` ("ITALIANO 500"), next to `titleEA` (GTI CLUB 2), `titleUA` (DRIVING
+  PARTY – Racing in Italy) and `titleJA` (Corso Italiano). Each is two 256×256 ARGB4444
+  textures. Probably working titles.
+- Orphan strings of a replay manager: "1P SHT1 & SHT2 .. SELECT DATA IMPORT", "2P SHT2 & SHT3 ..
+  REPLAY DATA CLEAR", "ALL(FROM HERE) DATA OUTPUT", "Replay %2u", "-- Replay data is Vacant --"
+  and `repdata000`–`003.brp`. No code references them (a scan of every TOC-based reference
+  finds none), so the feature was removed and its texts left behind.
+- The initials blacklist at `0x100c28` (KKK, IRA, GOD, …) is used by the name entry (`0x83c6c`).
+- Roads: `CA` is the plaza where car and course are chosen (models in `CAB`, no rival paths),
+  `CB` COAST, `CC` MOUNTAIN, `CD` TOWN (also the attract course). All eight cars are selectable
+  (shift up for the tuned `T*` versions), so no car is hidden.
+- Empty placeholders: `CA_mdl/tex`, `SKY2`, `SKY3`, `YST`, `TEST_tex`; `TEST_mdl` only points to
+  the DEMO and KONAMI images.
+
+Not covered: input combinations or DIP switches that could open a debug screen were not
+searched for in the input code.
+
 ## 6. Current status (2026-09-29)
 
 Thrill Drive 2 is working:
@@ -735,4 +839,5 @@ RT_SC_LOG=1 ./td2                     # log kernel syscalls
 RT_VOODOO_LOG=1 ./td2                 # messages from MAME's Voodoo core
 RT_VOODOO_TEXLOG=1 ./td2              # log each new texture setup (format, LODs, base registers)
 RT_VOODOO_VRAMDUMP=vram.bin:1300 ./td2 --headless ...   # dump the whole VRAM at frame 1300
+RT_CF_LOG=1 ./td2 --headless ...      # log each CF read command (LBA, sectors): which game files load
 ```

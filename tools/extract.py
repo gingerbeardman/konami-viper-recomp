@@ -60,7 +60,10 @@ def main(gid):
     shutil.copyfile(bios, os.path.join(work, 'bios.bin'))
     names = [os.path.join(os.path.dirname(__file__), 'names.txt'),
              os.path.join(game.ROOT, 'games', gid, 'names.txt')]
-    viper_fs.main(binpath, os.path.join(work, 'fs'), names)
+    fs = os.path.join(work, 'fs')
+    if os.path.isdir(fs):
+        shutil.rmtree(fs)       # no stale files under old names (e.g. _unk/ entries named since)
+    viper_fs.main(binpath, fs, names)
 
 
 if __name__ == '__main__':

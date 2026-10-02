@@ -417,6 +417,11 @@ static void cf_command(uint8_t cmd) {
     case 0x20: case 0x21: case 0xc4:            /* READ SECTORS / READ MULTIPLE */
         cf.lba = cf_cur_lba();
         cf.remaining = cf.count ? cf.count : 256;
+        {   /* RT_CF_LOG=1: log every read command, e.g. to see which game files are loaded */
+            static int log = -1;
+            if (log < 0) log = getenv("RT_CF_LOG") != NULL;
+            if (log) rt_log("CF: read lba %u count %d\n", cf.lba, cf.remaining);
+        }
         cf.writing = 0;
         cf_load_sector();
         cf.status |= ST_DRQ;

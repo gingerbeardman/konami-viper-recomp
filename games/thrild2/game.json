@@ -142,7 +142,7 @@
     },
     "font": {
       "note": "A8 textures of the game's stencil font (INSERT COIN[S], rankings), loaded to VRAM 0x6c000 and 0x7c000; one size, drawn scaled",
-      "file": "_unk/76278279.bin",
+      "file": "game/gldata/VRAM_tex.zin",
       "pages": [
         "0x14",
         "0x10024"

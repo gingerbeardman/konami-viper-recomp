@@ -5,6 +5,20 @@ All notable changes to this project are listed here. The format follows
 [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a new minor
 version can change the build, the profiles or the command-line options.
 
+## [0.8.1] - 2026-10-02
+
+### Added
+- **All file names:** every file of the five versions now has its real name
+  (`tools/names.txt`), found by hashing candidate paths, so nothing is extracted to `_unk/`.
+  **Run `make extract` again** for each game: the enhanced-mode font now comes from
+  `game/mdldata/COMMON_tex.zin` (GTI Club 2) and `game/gldata/VRAM_tex.zin` (Thrill Drive 2).
+- `RT_CF_LOG=1` logs every CF read command, to see which game files are loaded.
+- **Docs:** hidden and unused content of both games (ARCHITECTURE.md, section 5d): cut car,
+  unused title logos, test data, factory tools.
+
+### Changed
+- `make extract` empties `work/<id>/fs/` first, so files extracted under old names do not stay.
+
 ## [0.8.0] - 2026-10-02
 
 ### Added
@@ -178,7 +192,8 @@ version can change the build, the profiles or the command-line options.
   (ver EBB) is playable at 30 fps with sound, and steering and pedals are calibrated
   automatically.
 
-[0.8.0]: https://github.com/spita90/konami-viper-recomp/compare/01f29bd...HEAD
+[0.8.1]: https://github.com/spita90/konami-viper-recomp/compare/f5a9a22...HEAD
+[0.8.0]: https://github.com/spita90/konami-viper-recomp/compare/01f29bd...f5a9a22
 [0.7.0]: https://github.com/spita90/konami-viper-recomp/compare/c041b6b...01f29bd
 [0.6.1]: https://github.com/spita90/konami-viper-recomp/compare/9b71187...c041b6b
 [0.6.0]: https://github.com/spita90/konami-viper-recomp/compare/bd64498...9b71187
