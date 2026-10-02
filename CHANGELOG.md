@@ -7,10 +7,6 @@ version can change the build, the profiles or the command-line options.
 
 ## [Unreleased]
 
-### Added
-- **Sponsoring:** a GitHub Sponsors button (`.github/FUNDING.yml`) and a "Support the project"
-  section in the README.
-
 ## [0.7.0] - 2026-10-01
 
 ### Changed
