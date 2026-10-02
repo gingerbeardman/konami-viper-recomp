@@ -895,7 +895,12 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
         draw_centered(fb, w, h, FONT_MEDIUM, h / 2 - font_height(FONT_MEDIUM) / 2, T(g_apply == 1 || g_apply == 2 ? T_APPLYING : T_LOADING), 0xffffff);
         return;
     }
-    if (explorer_active()) draw_centered(fb, w, h, FONT_SMALL, h - font_height(FONT_SMALL) - 20, "F6 EXIT  PEDALS: SPEED  STEER: HEIGHT", 0xffd800);
+    if (explorer_active()) {
+        char status[80];
+        snprintf(status, sizeof status, "F6 EXIT  SPEED %.0f KM/H  HEIGHT %.0f M",
+                 explorer_speed() * 3.6f, explorer_height());
+        draw_centered(fb, w, h, FONT_SMALL, h - font_height(FONT_SMALL) - 20, status, 0xffd800);
+    }
     if (g_paused && !g_pause_controls) {
         const int z = FONT_MEDIUM, step = font_height(z) + 8;
         static const int items[3] = { T_RESUME, T_CONTROLS, T_MAIN_MENU };

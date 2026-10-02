@@ -24,6 +24,8 @@ void explorer_on_frame(uint64_t frame) {
     }
 }
 int explorer_active(void) { return atomic_load(&active); }
+float explorer_speed(void) { return atomic_load(&speed); }
+float explorer_height(void) { return atomic_load(&height); }
 void explorer_adjust(float s, float h) {
     float v = atomic_load(&speed) + s;
     atomic_store(&speed, v < 0 ? 0 : v > 160 ? 160 : v);

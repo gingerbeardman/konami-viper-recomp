@@ -12,6 +12,8 @@ Start a game and choose a course, then press **F6** to toggle the drone tour. Yo
 - **F6** again: return to the normal camera.
 - **Escape / Home**: the existing pause menu, including return to the main menu.
 
+The overlay displays live cruise speed in km/h and selected height above the road in metres.
+
 The drone follows the selected course's linked road centreline, looks ahead through turns, follows terrain elevation, and loops continuously. Race-state transitions are held during exploration; the race clock's origin advances to exclude time spent exploring. Returning to the main menu cancels an active tour. Settings are not persisted.
 
 This is a camera experiment, not an editor: the game continues simulating traffic and cars, its normal HUD remains visible, and the drone does not collide with buildings, bridges or tunnels. Routes with overhead scenery can clip at high altitudes. Only the JAB Town route has been visually checked; the other selected-course routes use the same path reader but need playtesting.

@@ -5,5 +5,7 @@ void explorer_camera(PPCContext *c, uint64_t frame);
 void explorer_race(PPCContext *c);
 void explorer_toggle(void);
 int explorer_active(void);
+float explorer_speed(void);  /* metres per second */
+float explorer_height(void); /* selected clearance in metres */
 void explorer_adjust(float speed, float height);
 void explorer_on_frame(uint64_t frame);
