@@ -3,6 +3,8 @@
 static int enabled, sensitivity=100, recentered;
 int frontend_gyro_enabled(void) {return enabled;}
 int frontend_gyro_available(void) {return 1;}
+int frontend_gyro_ready(void) {return 1;}
+double frontend_gyro_position(void) {return .5;}
 int frontend_gyro_sensitivity(void) {return sensitivity;}
 void frontend_gyro_set_enabled(int x) {enabled=x;}
 void frontend_gyro_set_sensitivity(int x) {sensitivity=x<40?40:x>350?350:x;}

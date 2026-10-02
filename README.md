@@ -396,8 +396,8 @@ listed in [CHANGELOG.md](CHANGELOG.md).
 Enhanced mode exposes gyro controls in **Options → Controls** and **Pause → Controls**.
 Use the D-pad or arrow keys to choose **Gyro Steering**, **Sensitivity**, or **Recenter**;
 Left/Right adjusts the selected setting, and A/Enter confirms. Sensitivity defaults to
-1.0× (35° to full lock); higher values need less tilt. The on-screen gyro indicator
-shows the current sensitivity while driving. Gyro and sensitivity are saved per game.
+1.0× (35° to full lock); higher values need less tilt. The Controls menu shows the current sensitivity and a live steering meter.
+Gyro and sensitivity are saved per game.
 R3 toggles gyro and L3 recenters without opening a menu. Recenter from Pause takes
 the controller's neutral position when driving resumes.
 Press **F8** or the Switch Pro **Capture** button in the focused game window for a
@@ -409,3 +409,5 @@ In enhanced mode, **Home / Guide** behaves like **Esc**: pause during a race,
 back out of an options page, and quit from the main menu. In Pause, choose
 **Main Menu** to leave the race, or **Resume** / B / Home to continue driving.
 A / Start still confirms menu choices. In original arcade mode, Home / Esc quits.
+The Controls menu has a live gyro steering meter with a centre mark; it continues
+updating while paused so sensitivity and recentering can be checked before resuming.

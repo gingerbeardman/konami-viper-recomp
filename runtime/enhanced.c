@@ -784,6 +784,17 @@ static void menu_tick(void) {
 
 static void draw_menu(uint32_t *fb, int w, int h);
 
+static void meter_rect(uint32_t *fb, int x0, int y0, int x1, int y1, uint32_t color) {
+    x0 = (int)(x0 * g_ui); y0 = (int)(y0 * g_ui);
+    x1 = (int)(x1 * g_ui); y1 = (int)(y1 * g_ui);
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > g_fbw) x1 = g_fbw;
+    if (y1 > g_fbh) y1 = g_fbh;
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++) fb[y * g_fbw + x] = 0xff000000u | color;
+}
+
 static void draw_controls(uint32_t *fb, int w, int h, int cursor) {
     const int labels[] = { T_GYRO, T_SENSITIVITY, T_RECENTER, T_BACK };
     const int z = FONT_MEDIUM, step = font_height(z) + 8;
@@ -798,8 +809,20 @@ static void draw_controls(uint32_t *fb, int w, int h, int cursor) {
         draw_text(fb, w, h, z, 40, y, T(labels[i]), col);
         draw_text(fb, w, h, z, w - 40 - text_width(z, value), y, value, col);
     }
-    draw_centered(fb, w, h, FONT_SMALL, 290,
-        frontend_gyro_available() ? "HIGHER MEANS LESS TILT" : "NO GYRO CONTROLLER CONNECTED", 0xc0c0c0);
+    const int centre = w / 2, half = 110, y = 267;
+    int ready = frontend_gyro_ready();
+    double position = ready ? frontend_gyro_position() : 0;
+    int marker = centre + (int)lround(fmax(-1, fmin(1, position)) * half);
+    meter_rect(fb, centre - half, y - 2, centre + half, y + 2, 0x606060);
+    if (ready) meter_rect(fb, marker < centre ? marker : centre, y - 3,
+                           marker > centre ? marker : centre, y + 3, 0x40ff40);
+    meter_rect(fb, centre - 1, y - 9, centre + 1, y + 9, 0xffffff);
+    meter_rect(fb, marker - 3, y - 7, marker + 3, y + 7, ready ? 0xffd800 : 0x808080);
+    draw_text(fb, w, h, FONT_SMALL, 40, y - 11, "L", 0xc0c0c0);
+    draw_text(fb, w, h, FONT_SMALL, w - 40 - text_width(FONT_SMALL, "R"), y - 11, "R", 0xc0c0c0);
+    const char *status = !frontend_gyro_available() ? "NO GYRO CONTROLLER CONNECTED" :
+        !frontend_gyro_enabled() ? "GYRO OFF" : !ready ? "HOLD CONTROLLER UPRIGHT" : "HIGHER MEANS LESS TILT";
+    draw_centered(fb, w, h, FONT_SMALL, 294, status, 0xc0c0c0);
     draw_centered(fb, w, h, FONT_SMALL, 320, "R3: TOGGLE   L3: RECENTER", 0xc0c0c0);
 }
 
@@ -826,11 +849,6 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
     }
     if (g_paused && g_pause_controls) draw_controls(fb, w, h, g_controls_cursor);
     if (enh_menu_active()) draw_menu(fb, w, h);
-    if (g_font && frontend_gyro_enabled() && !g_paused && !enh_menu_active()) {
-        char buf[48];
-        snprintf(buf, sizeof buf, "GYRO %s  %.1fX", frontend_gyro_available() ? "ON" : "UNAVAILABLE", frontend_gyro_sensitivity() / 100.0);
-        draw_text(fb, w, h, FONT_SMALL, 8, 6, buf, 0x40ff40);
-    }
     if (g_set.show_fps && g_font) {                 /* on top of everything, also in play */
         char buf[16];
         snprintf(buf, sizeof buf, "%d FPS", g_fps);

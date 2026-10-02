@@ -200,8 +200,13 @@ static int g_gyro_enabled, g_gyro_active = 1;
 static double g_gyro_range = 35 * 3.141592653589793 / 180;
 static ControllerGyro g_gyro;
 static SDL_JoystickID g_gyro_pad = -1;
-static int g_gyro_available;
+static int g_gyro_available, g_gyro_suspended;
+static double g_gyro_position;
 
+double frontend_gyro_position(void) { return g_gyro_position; }
+int frontend_gyro_ready(void) {
+    return g_gyro_enabled && g_gyro_available && g_gyro.ready && g_pad && SDL_GameControllerGetAttached(g_pad);
+}
 int frontend_gyro_enabled(void) { return g_gyro_enabled; }
 int frontend_gyro_sensitivity(void) {
     return (int)lround(3500.0 / (g_gyro_range * 180 / 3.141592653589793));
@@ -210,9 +215,10 @@ void frontend_gyro_set_sensitivity(int percent) {
     percent = SDL_clamp(percent, 40, 350);
     g_gyro_range = (3500.0 / percent) * 3.141592653589793 / 180;
 }
-void frontend_gyro_recenter(void) { g_gyro.ready = 0; }
+void frontend_gyro_recenter(void) { g_gyro.ready = 0; g_gyro_position = 0; }
 void frontend_gyro_set_enabled(int on) {
     g_gyro_enabled = !!on;
+    g_gyro_position = 0;
     g_gyro.ready = 0;
     g_gyro_pad = -1;
     g_gyro_available = 0;
@@ -234,6 +240,7 @@ int frontend_gyro_available(void) {
 
 static double gyro_steering(double dt) {
 #if SDL_VERSION_ATLEAST(2, 0, 14)
+    g_gyro_position = 0;
     if (!g_gyro_enabled || !g_pad || !SDL_GameControllerGetAttached(g_pad)) return 0;
     SDL_JoystickID id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad));
     if (id != g_gyro_pad) {
@@ -252,18 +259,23 @@ static double gyro_steering(double dt) {
         rt_log("gyro steering: %s (click left stick to recenter)\n", g_gyro_available ? "enabled" : "unavailable; using stick");
     }
     if (!g_gyro_available) return 0;
-    if (!g_gyro_active || enh_menu_active() || enh_paused() || enh_turbo() || enh_inputs_owned()) {
+    if (!g_gyro_active || enh_turbo() || enh_inputs_owned()) {
         g_gyro.ready = 0;
         return 0;
     }
+    /* Keep the preview live in menus without steering the guest. Recenter on
+     * entering/leaving a menu so resuming never inherits a paused tilt. */
+    int suspended = enh_menu_active() || enh_paused();
+    if (suspended != g_gyro_suspended) { g_gyro.ready = 0; g_gyro_suspended = suspended; }
     float accel[3], gyro[3];
     if (SDL_GameControllerGetSensorData(g_pad, SDL_SENSOR_ACCEL, accel, 3) < 0 ||
         SDL_GameControllerGetSensorData(g_pad, SDL_SENSOR_GYRO, gyro, 3) < 0) {
         g_gyro.ready = 0;
         return 0;
     }
-    return controller_gyro_step(&g_gyro, accel, gyro, dt, g_gyro_range,
+    g_gyro_position = controller_gyro_step(&g_gyro, accel, gyro, dt, g_gyro_range,
                                SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSTICK));
+    return suspended ? 0 : g_gyro_position;
 #else
     (void)dt;
     return 0;

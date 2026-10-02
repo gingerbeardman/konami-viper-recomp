@@ -119,3 +119,5 @@ void frontend_gyro_set_enabled(int on);
 void frontend_gyro_set_sensitivity(int percent);
 void frontend_gyro_recenter(void);
 void enh_controller_settings_changed(void);
+double frontend_gyro_position(void); /* normalized steering, also live while paused */
+int frontend_gyro_ready(void);
