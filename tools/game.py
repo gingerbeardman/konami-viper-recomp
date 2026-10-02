@@ -20,7 +20,9 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ROMS = os.path.join(ROOT, 'roms')
+SHARED_ROMS = os.path.join(os.path.dirname(ROOT), 'konami-viper-roms')
+ROMS = os.path.abspath(os.path.expanduser(os.environ.get(
+    'VIPER_ROMS_DIR', SHARED_ROMS if os.path.isdir(SHARED_ROMS) else os.path.join(ROOT, 'roms'))))
 
 
 def ids():

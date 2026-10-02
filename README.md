@@ -110,6 +110,11 @@ a `README.txt` that lists the files it expects. Then check them:
 make check GAME=thrild2
 ```
 
+If a sibling `../konami-viper-roms/` folder exists, the build uses it directly instead of
+`roms/`. Set `VIPER_ROMS_DIR=/path/to/roms` to override either location. Generated executables
+use paths relative to the game repository, so keep the shared folder beside it when moving
+the projects. No ROM aliases or symlinks are needed.
+
 **3. Build.** One command extracts the game, recompiles it and builds the executable:
 
 ```sh
