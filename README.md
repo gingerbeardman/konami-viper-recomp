@@ -394,7 +394,7 @@ listed in [CHANGELOG.md](CHANGELOG.md).
 - The software is provided "as is", without warranty of any kind.
 
 Enhanced mode exposes gyro controls in **Options → Controls** and **Pause → Controls**.
-Use the D-pad or arrow keys to choose **Gyro Steering**, **Sensitivity**, or **Recenter**;
+Use the D-pad or arrow keys to choose **Gyro Steering**, **Show in Game**, or **Recenter**;
 Left/Right adjusts the selected setting, and A/Enter confirms. Sensitivity defaults to
 1.0× (35° to full lock); higher values need less tilt. The Controls menu shows the current sensitivity and a live steering meter.
 Gyro and sensitivity are saved per game.
@@ -432,3 +432,7 @@ Window position and size are remembered per game in a `.window` companion to its
 settings file, in both original and enhanced modes. Fullscreen and maximized bounds
 do not replace the normal window placement. Restored windows are fitted to a currently
 available display, including when a saved monitor has been disconnected.
+
+**Gyro Steering** combines enablement and sensitivity: Left/Right adjusts the multiplier,
+and Left below 0.4× turns it off. Right from Off restores the last sensitivity.
+R3 still toggles gyro directly; the footer places L3 Recenter before R3 Toggle.
