@@ -497,7 +497,7 @@ int frontend_run(int scale) {
 #endif
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
     SDL_Rect window_rect = { SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 512 * scale, 384 * scale };
-    window_state_load(g_window_state_path, &window_rect);
+    int restored_window = window_state_load(g_window_state_path, &window_rect);
     int count = SDL_GetNumVideoDisplays(), usable = 0;
     SDL_Rect *displays = count > 0 ? calloc((size_t)count, sizeof *displays) : NULL;
     if (displays) {
@@ -655,8 +655,8 @@ int frontend_run(int scale) {
             last_frame = cnt;
             voodoo_get_frame(raw, 2048 * 2048, &w, &h);
             if (w != tw || h != th) {
-                /* a new aspect ratio (enhanced mode, widescreen): the window keeps its height */
-                if ((long)w * th != (long)h * tw && !(SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP)) {
+                /* Fit new windows to the game aspect ratio, but preserve restored user dimensions. */
+                if (!restored_window && (long)w * th != (long)h * tw && !(SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP)) {
                     int ww, wh;
                     SDL_GetWindowSize(win, &ww, &wh);
                     SDL_SetWindowSize(win, (int)((long)wh * w / h), wh);
