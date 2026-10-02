@@ -197,6 +197,10 @@ static double gyro_steering(double dt) {
             g_gyro_available = SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_GYRO, SDL_TRUE) == 0 &&
                                SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_ACCEL, SDL_TRUE) == 0;
         }
+        if (!g_gyro_available) {
+            SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_GYRO, SDL_FALSE);
+            SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_ACCEL, SDL_FALSE);
+        }
         rt_log("gyro steering: %s (click left stick to recenter)\n", g_gyro_available ? "enabled" : "unavailable; using stick");
     }
     if (!g_gyro_available) return 0;
@@ -446,6 +450,21 @@ int frontend_run(int scale) {
                 if (pad_matches(ev.cdevice.which)) { close_pad(); open_pad(); }
                 break;
             case SDL_CONTROLLERBUTTONDOWN:
+                if (g_gyro_active && g_pad && ev.cbutton.which == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad)) &&
+                    ev.cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSTICK) {
+                    g_gyro_enabled = !g_gyro_enabled;
+                    g_gyro.ready = 0;
+                    g_gyro_pad = -1;
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+                    if (!g_gyro_enabled) {
+                        SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_GYRO, SDL_FALSE);
+                        SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_ACCEL, SDL_FALSE);
+                    }
+#endif
+                    rt_log("gyro steering: %s (right-stick click toggles; left-stick click recenters)\n",
+                           g_gyro_enabled ? "on" : "off");
+                    break;
+                }
                 if (!pad_matches(ev.cbutton.which) || !g_input_focus) break;
                 if ((enh_menu_active() || enh_paused()) && menu_button(ev.cbutton.button) >= 0) enh_menu_action(menu_button(ev.cbutton.button));
                 else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) enh_escape();

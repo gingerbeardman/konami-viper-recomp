@@ -192,7 +192,8 @@ Controllers without rumble support continue to work normally. Requires SDL 2.0.9
 
 ### Gyro steering
 
-Opt in with `RT_GYRO=1 ./gticlub2` (or any game executable). A controller exposing both
+Click the right stick (R3) to toggle gyro on/off, or start with it enabled using
+`RT_GYRO=1 ./gticlub2` (or any game executable). A controller exposing both
 SDL gyro and accelerometer sensors, such as Nintendo Switch Pro, can steer by rolling it
 like a small steering wheel. Hold it comfortably in front of you as play begins; that pose
 becomes centre. Click the left stick to recenter. A two-degree deadzone suppresses small
