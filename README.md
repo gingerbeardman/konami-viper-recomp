@@ -451,3 +451,9 @@ Cabinet torque uses a square-root response curve before the rumble multiplier,
 boosting weak driving forces without adding vibration when the game sends zero.
 At the default strength, torque 3–5 now maps to about 22–29% intensity instead of
 10–17%. Full-force output and the Capture/F8 test are unchanged.
+
+**Options → Display → Texture Filter** controls enlarged texture sampling:
+**Original** follows the game's choice (default), **Nearest** keeps hard texel edges,
+and **Bilinear** blends neighbouring texels. Changes apply immediately and persist
+per game in enhanced mode. Distant-texture minification/mipmap choices stay with the
+game. This controls the Voodoo texture sampler, separately from final window scaling.

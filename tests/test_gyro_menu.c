@@ -13,6 +13,7 @@ int frontend_gyro_sensitivity(void) {return sensitivity;}
 void frontend_gyro_set_enabled(int x) {enabled=x;}
 void frontend_gyro_set_sensitivity(int x) {sensitivity=x<50?50:x>350?350:x;}
 void frontend_gyro_recenter(void) {recentered++;}
+void voodoo_set_texture_filter(int n) {(void)n;}
 void voodoo_set_scale(int n) {(void)n;}
 void voodoo_set_wide(int n) {(void)n;}
 void rt_log(const char *s,...) {(void)s;}

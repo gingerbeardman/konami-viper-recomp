@@ -9,6 +9,7 @@ void frontend_gyro_recenter(void) {}
 uint8_t *g_ram;
 int frontend_rumble_multiplier(void) {return multiplier;}
 void frontend_set_rumble_multiplier(int v) {multiplier=v<0?0:v>400?400:v;}
+void voodoo_set_texture_filter(int n) {(void)n;}
 void voodoo_set_scale(int n) {(void)n;}
 void voodoo_set_wide(int n) {(void)n;}
 void rt_log(const char *s,...) {(void)s;}
