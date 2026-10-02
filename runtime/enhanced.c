@@ -13,7 +13,8 @@
  *     branch of the credit display (a Konami library routine shared by the games): the game
  *     draws it only while no game is in progress, so it tells the attract mode apart.
  *     "projection" and "viewport" follow the gl library's writes of its projection slots and
- *     viewport, for the widescreen option;
+ *     viewport, for the widescreen option; "name_index" and "name_confirm" sit in the rankings'
+ *     name entry, typed on the keyboard (see name_entry);
  *   - widescreen: where the gl library keeps that state.
  */
 #include "runtime.h"
@@ -79,21 +80,100 @@ static void wide_tick(int aspect) {         /* guest thread, every frame: follow
     }
 }
 
+/* ================================================================== name entry */
+/* The rankings' name entry picks each letter with the steering wheel: the game turns the wheel
+ * position into an index on its wheel of characters (the profile's chars, then DEL and END), and
+ * a pedal confirms it. In the enhanced mode the keyboard types the letters instead: the
+ * "name_index" hook replaces the index the game took from the wheel with the chosen one, and the
+ * "name_confirm" hook makes the confirmation check succeed once for each typed key (DEL and END
+ * included: Backspace and Enter). Left/Right step through the wheel, and the game's own
+ * confirmation (a pedal) still accepts the letter shown, for a gamepad.
+ * The frontend queues the keys; the guest thread takes them at the hooks, one per call. */
+#define NAME_GRACE_FRAMES 10
+#define NAME_QUEUE 32
+enum { NAME_STEP_LEFT = -1, NAME_STEP_RIGHT = -2 };
+static volatile uint64_t g_name_frame;       /* the frame at which the "name_index" hook last ran */
+static int g_name_idx, g_name_confirm;       /* guest thread: the index shown, a typed key to confirm */
+static volatile int g_name_queue[NAME_QUEUE];
+static _Atomic unsigned g_name_w, g_name_r;  /* written by the frontend / by the guest thread */
+
+static int name_count(void) { return GAME_ENH_NAME_CHARS ? (int)strlen(GAME_ENH_NAME_CHARS) + 2 : 0; }
+
+int enh_name_entry_active(void) {
+    return g_enhanced && g_name_frame && g_frame - g_name_frame <= NAME_GRACE_FRAMES;
+}
+
+static void name_push(int v) {
+    unsigned w = g_name_w;
+    if (w - g_name_r >= NAME_QUEUE) return;          /* full: drop the key */
+    g_name_queue[w % NAME_QUEUE] = v;
+    g_name_w = w + 1;
+}
+
+/* a typed character ('\b' DEL, '\r' END): 1 if the wheel has it */
+int enh_name_type(int ch) {
+    if (!enh_name_entry_active()) return 0;
+    const char *chars = GAME_ENH_NAME_CHARS;
+    int n = name_count();
+    if (ch >= 'a' && ch <= 'z') ch -= 'a' - 'A';
+    int idx = ch == '\b' ? n - 2 : ch == '\r' ? n - 1 : -1;
+    const char *p = ch > 0 && idx < 0 ? strchr(chars, ch) : NULL;
+    if (p) idx = (int)(p - chars);
+    if (idx < 0) return 0;
+    name_push(idx);
+    return 1;
+}
+
+void enh_name_step(int dir) {
+    if (enh_name_entry_active()) name_push(dir < 0 ? NAME_STEP_LEFT : NAME_STEP_RIGHT);
+}
+
+static void name_index_hook(PPCContext *c) {
+    int n = name_count();
+    if (!n) return;
+    if (!enh_name_entry_active()) {             /* a new name entry: start from the game's letter */
+        uint32_t v = c->r[GAME_ENH_NAME_INDEX_REG];
+        g_name_idx = v < (uint32_t)n ? (int)v : 0;
+        g_name_confirm = 0;
+        g_name_r = g_name_w;
+        if (g_enh_log) rt_log("enhanced: name entry\n");
+    }
+    g_name_frame = g_frame;
+    while (!g_name_confirm && g_name_r != g_name_w) {
+        unsigned r = g_name_r;
+        int v = g_name_queue[r % NAME_QUEUE];
+        g_name_r = r + 1;
+        if (v == NAME_STEP_LEFT) g_name_idx = (g_name_idx + n - 1) % n;
+        else if (v == NAME_STEP_RIGHT) g_name_idx = (g_name_idx + 1) % n;
+        else { g_name_idx = v; g_name_confirm = 1; }
+    }
+    c->r[GAME_ENH_NAME_INDEX_REG] = (uint32_t)g_name_idx;
+    if (GAME_ENH_NAME_FIELD_REG >= 0) ST16(c->r[GAME_ENH_NAME_FIELD_REG] + GAME_ENH_NAME_FIELD_OFF, (uint32_t)g_name_idx);
+}
+
+static void name_confirm_hook(PPCContext *c) {
+    if (!g_name_confirm) return;
+    c->r[GAME_ENH_NAME_CONFIRM_REG] = 1;
+    g_name_confirm = 0;
+}
+
 typedef struct { uint32_t addr; const char *name; } Hook;
 static const Hook k_hooks[] = GAME_ENH_HOOKS;
-enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT };
+enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM };
 
 static int hook_kind(uint32_t pc) {
+    static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm" };
     for (const Hook *h = k_hooks; h->name; h++)
         if (h->addr == pc)
-            return !strcmp(h->name, "attract") ? HOOK_ATTRACT : !strcmp(h->name, "projection") ? HOOK_PROJECTION :
-                   !strcmp(h->name, "viewport") ? HOOK_VIEWPORT : HOOK_NONE;
+            for (int k = 1; k < (int)(sizeof names / sizeof names[0]); k++)
+                if (!strcmp(h->name, names[k])) return k;
     return HOOK_NONE;
 }
 
 void rt_hook(PPCContext *c, uint32_t pc) {
-    (void)c;
     switch (hook_kind(pc)) {
+    case HOOK_NAME_INDEX: if (g_enhanced) name_index_hook(c); break;
+    case HOOK_NAME_CONFIRM: if (g_enhanced) name_confirm_hook(c); break;
     case HOOK_ATTRACT: g_attract_frame = g_frame ? g_frame : 1; break;
     case HOOK_PROJECTION: {                  /* the current slot has just been written */
         uint32_t s = LD8(GAME_ENH_WIDE_PROJ_SLOT);
@@ -755,7 +835,8 @@ static void draw_menu(uint32_t *fb, int w, int h) {
     }
 }
 
-/* RT_ENH_MENU="seconds:action,..." (up/down/left/right/ok/back) drives the menu in headless tests */
+/* RT_ENH_MENU="seconds:action,..." (up/down/left/right/ok/back/esc) drives the menu in headless
+ * tests; "name=TEXT" types TEXT in the name entry ('<' for DEL, '>' for END) */
 static void scripted_menu(void) {
     static const char *next = (const char *)-1;
     if (next == (const char *)-1) next = getenv("RT_ENH_MENU");
@@ -765,6 +846,11 @@ static void scripted_menu(void) {
         if (*colon != ':' || (double)rt_now() / CPU_HZ < t) return;
         const char *a = colon + 1;
         if (!strncmp(a, "esc", 3)) { enh_escape(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
+        if (!strncmp(a, "name=", 5)) {
+            for (a += 5; *a && *a != ','; a++) enh_name_type(*a == '<' ? '\b' : *a == '>' ? '\r' : *a);
+            next = *a ? a + 1 : NULL;
+            continue;
+        }
         int action = !strncmp(a, "up", 2) ? ENH_UP : !strncmp(a, "down", 4) ? ENH_DOWN :
                      !strncmp(a, "left", 4) ? ENH_LEFT : !strncmp(a, "right", 5) ? ENH_RIGHT :
                      !strncmp(a, "ok", 2) ? ENH_OK : ENH_BACK;

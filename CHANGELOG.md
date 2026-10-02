@@ -5,11 +5,26 @@ All notable changes to this project are listed here. The format follows
 [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a new minor
 version can change the build, the profiles or the command-line options.
 
-## [Unreleased]
+## [0.8.0] - 2026-10-02
 
 ### Added
-- **Sponsoring:** a GitHub Sponsors button (`.github/FUNDING.yml`) and a "Support the project"
-  section in the README.
+- **Enhanced mode, rankings name entry from the keyboard** (Thrill Drive 2 EBB, JAA, AAA; GTI
+  Club 2 JAB, EAA): the initials are typed instead of being chosen with the steering wheel.
+  Backspace deletes, Enter ends the name; Left/Right (or the D-pad) and the accelerator still
+  pick and take a letter, for a gamepad. Two profile hooks, `name_index` and `name_confirm`,
+  and the profile's `name_entry` section describe each game's routine.
+
+### Changed
+- **Keyboard:** WASD drives too (A/D steer, W accelerator, S brake), next to the arrows, and
+  moves through the enhanced-mode menus. The gear shift moves from A/Z to **E** (up) and **Q**
+  (down). A control held by two keys or buttons (e.g. ↑ and the gamepad's A) is released only
+  when both are.
+
+### Fixed
+- **macOS:** holding a letter key (WASD while driving) no longer opens the system's accent
+  picker. Text input is now on only during the enhanced mode's name entry.
+- **Enhanced mode, macOS:** after a restart for new settings the game window takes the focus
+  back, so it gets the keyboard without a click (`SDL_RaiseWindow` with `SDL_FORCE_RAISEWINDOW`).
 
 ## [0.7.0] - 2026-10-01
 
@@ -163,7 +178,7 @@ version can change the build, the profiles or the command-line options.
   (ver EBB) is playable at 30 fps with sound, and steering and pedals are calibrated
   automatically.
 
-[Unreleased]: https://github.com/spita90/konami-viper-recomp/compare/01f29bd...HEAD
+[0.8.0]: https://github.com/spita90/konami-viper-recomp/compare/01f29bd...HEAD
 [0.7.0]: https://github.com/spita90/konami-viper-recomp/compare/c041b6b...01f29bd
 [0.6.1]: https://github.com/spita90/konami-viper-recomp/compare/9b71187...c041b6b
 [0.6.0]: https://github.com/spita90/konami-viper-recomp/compare/bd64498...9b71187

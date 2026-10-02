@@ -57,7 +57,11 @@
     "hooks": {
       "game": {
         "0x61b4c": null,
-        "0x61b70": "attract"
+        "0x61b70": "attract",
+        "0x839b4": null,
+        "0x839f8": null,
+        "0x839d8": "name_index",
+        "0x83a1c": "name_confirm"
       }
     },
     "test_menu_game_mode": 13

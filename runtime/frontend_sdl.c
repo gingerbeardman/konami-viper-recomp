@@ -6,10 +6,11 @@
  * frame (mutex inside the voodoo bridge) and a lock-free audio ring buffer.
  *
  * Controls (driving-game inputs as in MAME's viper.cpp "thrild2" / "gticlub2"):
- *   Left/Right  steering      Up  gas      Down  brake      Space  handbrake (GTI Club 2)
- *   A  shift up   Z  shift down   5  coin   1  start   F2  test   9  service
+ *   Left/Right or A/D  steering   Up or W  gas   Down or S  brake   Space  handbrake (GTI Club 2)
+ *   E  shift up   Q  shift down   5  coin   1  start   F2  test   9  service
  *   (enhanced mode: test, service and coin are not passed to the game: TEST MODE cannot be
- *   opened, and the game is on free play)
+ *   opened, and the game is on free play. In the rankings' name entry the keyboard types the
+ *   letters, Backspace deletes, Enter ends, Left/Right and the D-pad step through the letters)
  *   Gamepad: left stick = steering, R2/L2 = gas/brake, R1/L1 = shift up/down,
  *            X = handbrake, Start = start, Back = coin
  *   F11 fullscreen, Esc quit
@@ -101,6 +102,9 @@ void rt_pace_vblank(void) {
 }
 
 /* ------------------------------------------------------------------ input */
+/* each digital control may be held by several keys and buttons: one bit per source, so
+ * releasing one of them does not release the others */
+enum { SRC_KEY = 1, SRC_KEY2 = 2, SRC_PAD = 4 };
 typedef struct {
     int steer_left, steer_right, gas, brake, handbrake;
     double steer;                   /* -1..1 (keyboard, ramped) */
@@ -108,11 +112,13 @@ typedef struct {
     int shift_up, shift_down, coin, start, test, service;
 } Controls;
 static Controls ctl;
+
+static void hold(int *f, int src, int down) { *f = down ? *f | src : *f & ~src; }
 static SDL_GameController *g_pad;
 
 static void apply_inputs(double dt) {
     /* keyboard steering: ramp towards target */
-    double target = (ctl.steer_right - ctl.steer_left);
+    double target = !!ctl.steer_right - !!ctl.steer_left;
     double speed = 4.0 * dt;
     if (ctl.steer < target) ctl.steer = SDL_min(target, ctl.steer + speed);
     else if (ctl.steer > target) ctl.steer = SDL_max(target, ctl.steer - speed);
@@ -124,6 +130,7 @@ static void apply_inputs(double dt) {
         if (ctl.pad_gas > 1000) gas = ctl.pad_gas * 255 / 32767;
         if (ctl.pad_brake > 1000) brake = ctl.pad_brake * 255 / 32767;
     }
+    if (enh_name_entry_active()) steer = 0;   /* the letters come from the keyboard */
     g_analog[0] = (int16_t)(steer * ANALOG_RANGE);
     g_analog[1] = (int16_t)(-ANALOG_RANGE + gas * 2 * ANALOG_RANGE / 255);
     g_analog[2] = (int16_t)(-ANALOG_RANGE + brake * 2 * ANALOG_RANGE / 255);
@@ -148,10 +155,10 @@ static void apply_inputs(double dt) {
 /* enhanced mode: keys and buttons that drive the attract menu while it is on screen */
 static int menu_key(SDL_Keycode k) {
     switch (k) {
-    case SDLK_UP: return ENH_UP;
-    case SDLK_DOWN: return ENH_DOWN;
-    case SDLK_LEFT: return ENH_LEFT;
-    case SDLK_RIGHT: return ENH_RIGHT;
+    case SDLK_UP: case SDLK_w: return ENH_UP;
+    case SDLK_DOWN: case SDLK_s: return ENH_DOWN;
+    case SDLK_LEFT: case SDLK_a: return ENH_LEFT;
+    case SDLK_RIGHT: case SDLK_d: return ENH_RIGHT;
     case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_1: return ENH_OK;
     case SDLK_BACKSPACE: return ENH_BACK;
     default: return -1;
@@ -170,17 +177,33 @@ static int menu_button(int b) {
     }
 }
 
+/* enhanced mode, name entry: 1 if the key is the name entry's (the characters themselves come
+ * as SDL_TEXTINPUT, which follows the keyboard layout) */
+static int name_key(SDL_Keycode k) {
+    switch (k) {
+    case SDLK_BACKSPACE: enh_name_type('\b'); return 1;
+    case SDLK_RETURN: case SDLK_KP_ENTER: enh_name_type('\r'); return 1;
+    case SDLK_LEFT: enh_name_step(-1); return 1;
+    case SDLK_RIGHT: enh_name_step(1); return 1;
+    default: return (k >= SDLK_SPACE && k <= SDLK_z) || (k >= SDLK_KP_1 && k <= SDLK_KP_PERIOD);
+    }
+}
+
 static void key(SDL_Keycode k, int down) {
     switch (k) {
-    case SDLK_LEFT: ctl.steer_left = down; break;
-    case SDLK_RIGHT: ctl.steer_right = down; break;
-    case SDLK_UP: ctl.gas = down; break;
-    case SDLK_DOWN: ctl.brake = down; break;
-    case SDLK_SPACE: ctl.handbrake = down; break;
-    case SDLK_a: ctl.shift_up = down; break;
-    case SDLK_z: ctl.shift_down = down; break;
-    case SDLK_5: ctl.coin = down; break;
-    case SDLK_1: ctl.start = down; break;
+    case SDLK_LEFT: hold(&ctl.steer_left, SRC_KEY, down); break;
+    case SDLK_RIGHT: hold(&ctl.steer_right, SRC_KEY, down); break;
+    case SDLK_UP: hold(&ctl.gas, SRC_KEY, down); break;
+    case SDLK_DOWN: hold(&ctl.brake, SRC_KEY, down); break;
+    case SDLK_a: hold(&ctl.steer_left, SRC_KEY2, down); break;
+    case SDLK_d: hold(&ctl.steer_right, SRC_KEY2, down); break;
+    case SDLK_w: hold(&ctl.gas, SRC_KEY2, down); break;
+    case SDLK_s: hold(&ctl.brake, SRC_KEY2, down); break;
+    case SDLK_SPACE: hold(&ctl.handbrake, SRC_KEY, down); break;
+    case SDLK_e: hold(&ctl.shift_up, SRC_KEY, down); break;
+    case SDLK_q: hold(&ctl.shift_down, SRC_KEY, down); break;
+    case SDLK_5: hold(&ctl.coin, SRC_KEY, down); break;
+    case SDLK_1: hold(&ctl.start, SRC_KEY, down); break;
     case SDLK_F2: ctl.test = down; break;
     case SDLK_9: ctl.service = down; break;
     default: break;
@@ -189,13 +212,13 @@ static void key(SDL_Keycode k, int down) {
 
 static void pad_button(int b, int down) {
     switch (b) {
-    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: ctl.shift_up = down; break;
-    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: ctl.shift_down = down; break;
-    case SDL_CONTROLLER_BUTTON_START: ctl.start = down; break;
-    case SDL_CONTROLLER_BUTTON_BACK: ctl.coin = down; break;
-    case SDL_CONTROLLER_BUTTON_A: ctl.gas = down; break;
-    case SDL_CONTROLLER_BUTTON_B: ctl.brake = down; break;
-    case SDL_CONTROLLER_BUTTON_X: ctl.handbrake = down; break;
+    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: hold(&ctl.shift_up, SRC_PAD, down); break;
+    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: hold(&ctl.shift_down, SRC_PAD, down); break;
+    case SDL_CONTROLLER_BUTTON_START: hold(&ctl.start, SRC_PAD, down); break;
+    case SDL_CONTROLLER_BUTTON_BACK: hold(&ctl.coin, SRC_PAD, down); break;
+    case SDL_CONTROLLER_BUTTON_A: hold(&ctl.gas, SRC_PAD, down); break;
+    case SDL_CONTROLLER_BUTTON_B: hold(&ctl.brake, SRC_PAD, down); break;
+    case SDL_CONTROLLER_BUTTON_X: hold(&ctl.handbrake, SRC_PAD, down); break;
     default: break;
     }
 }
@@ -211,6 +234,11 @@ int frontend_run(int scale) {
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
     SDL_Window *win = SDL_CreateWindow(g_enhanced ? GAME_TITLE " - enhanced" : GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                        512 * scale, 384 * scale, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    if (getenv("RT_RESTARTED")) {       /* enhanced mode, after a restart: macOS does not reactivate */
+        unsetenv("RT_RESTARTED");       /* the re-executed program, so take the focus back */
+        SDL_SetHint("SDL_FORCE_RAISEWINDOW", "1");
+        SDL_RaiseWindow(win);
+    }
     SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     SDL_RenderSetLogicalSize(ren, 512, 384);
     SDL_Texture *tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 512, 384);
@@ -238,8 +266,14 @@ int frontend_run(int scale) {
 
     static uint32_t frame[2048 * 2048], raw[2048 * 2048];
     uint64_t last_frame = 0, last_tick = SDL_GetPerformanceCounter(), last_save = last_tick;
-    int running = 1, fs_applied = 0, restart = 0;
+    int running = 1, fs_applied = 0, restart = 0, text_on = 1;
     while (running) {
+        /* text input only for the name entry: SDL starts it with the video, and while it is on
+         * macOS opens its accent picker on a held letter key (W, A, S, D while driving) */
+        if (enh_name_entry_active() != text_on) {
+            text_on = enh_name_entry_active();
+            if (text_on) SDL_StartTextInput(); else SDL_StopTextInput();
+        }
         if (enh_want_fullscreen() != fs_applied) {      /* enhanced mode: DISPLAY option */
             fs_applied = enh_want_fullscreen();
             SDL_SetWindowFullscreen(win, fs_applied ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
@@ -259,9 +293,14 @@ int frontend_run(int scale) {
                     SDL_SetWindowFullscreen(win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
                     enh_set_fullscreen(!fs);    /* enhanced mode: remembered in the settings */
                     fs_applied = !fs;
-                } else key(ev.key.keysym.sym, 1);
+                } else if (!(enh_name_entry_active() && !enh_paused() && name_key(ev.key.keysym.sym)))
+                    key(ev.key.keysym.sym, 1);
                 break;
             case SDL_KEYUP: key(ev.key.keysym.sym, 0); break;
+            case SDL_TEXTINPUT:
+                if (enh_name_entry_active() && !enh_paused())
+                    for (const char *p = ev.text.text; *p; p++) enh_name_type((unsigned char)*p);
+                break;
             case SDL_CONTROLLERDEVICEADDED:
                 if (!g_pad) g_pad = SDL_GameControllerOpen(ev.cdevice.which);
                 break;
@@ -273,6 +312,9 @@ int frontend_run(int scale) {
             case SDL_CONTROLLERBUTTONDOWN:
                 if ((enh_menu_active() || enh_paused()) && menu_button(ev.cbutton.button) >= 0) enh_menu_action(menu_button(ev.cbutton.button));
                 else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) enh_escape();
+                else if (enh_name_entry_active() && !enh_paused() && (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ||
+                                                                       ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT))
+                    enh_name_step(ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? -1 : 1);
                 else pad_button(ev.cbutton.button, 1);
                 break;
             case SDL_CONTROLLERBUTTONUP: pad_button(ev.cbutton.button, 0); break;

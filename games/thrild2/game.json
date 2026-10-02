@@ -120,7 +120,9 @@
     ],
     "hooks": {
       "game": {
-        "0x7dd40": "attract"
+        "0x7dd40": "attract",
+        "0xb59c4": "name_index",
+        "0xb510c": "name_confirm"
       },
       "gl": {
         "0x217bc": "projection",
@@ -397,6 +399,16 @@
         "max": 30
       }
     ],
+    "name_entry": {
+      "note": "ranking name entry: the steering wheel turns a wheel of these characters, then DEL and END; a pedal (or the button bit at 0x82c) confirms. 0xb5874 maps the steering to the index (in r4 at its exit 0xb59c4, also kept at r31+0x34, where the wheel is drawn from); r3 at 0xb510c is the result of the pedal check 0xb59e4",
+      "chars": "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789. ",
+      "index_reg": 4,
+      "index_field": {
+        "reg": 31,
+        "offset": "0x34"
+      },
+      "confirm_reg": 3
+    },
     "test_menu_game_mode": 13
   }
 }

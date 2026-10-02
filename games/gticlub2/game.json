@@ -136,7 +136,9 @@
     ],
     "hooks": {
       "game": {
-        "0x61b4c": "attract"
+        "0x61b4c": "attract",
+        "0x839b4": "name_index",
+        "0x839f8": "name_confirm"
       },
       "gl": {
         "0x213f4": "projection",
@@ -383,6 +385,12 @@
         "max": 30
       }
     ],
+    "name_entry": {
+      "note": "ranking name entry: the steering wheel position picks one of these characters, then DEL and END (0x8388c, the index wraps around); a pedal (or the button bit at 0x82c) confirms. The index is in r24 at 0x839b4, r3 at 0x839f8 is the result of the pedal check 0x84350",
+      "chars": "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.&?! ",
+      "index_reg": 24,
+      "confirm_reg": 3
+    },
     "test_menu_game_mode": 12
   }
 }

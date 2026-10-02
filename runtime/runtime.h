@@ -71,6 +71,9 @@ void enh_set_headless(int on);
 int enh_escape(void);                                  /* Esc: pause / back; 0 = not handled */
 int enh_paused(void);
 int enh_inputs_owned(void);                            /* the enhanced layer drives IN3/IN4 */
+int enh_name_entry_active(void);                       /* rankings name entry: letters from the keyboard */
+int enh_name_type(int ch);                             /* a letter, '\b' DEL, '\r' END; 1 if accepted */
+void enh_name_step(int dir);                           /* previous (-1) / next (+1) letter on the wheel */
 void hw_shutdown(void);
 void nvram_save(void);
 void rt_pace_vblank(void);
