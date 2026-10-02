@@ -357,10 +357,12 @@ while paused. This checks controller output independently of cabinet motor comma
 A controller error is logged once; lack of physical vibration still needs checking
 on the actual controller even if the API accepts the request.
 
-On macOS, a single connected Switch Pro uses GameController/CoreHaptics for rumble,
-while SDL still handles input and sensors. Other controllers and ambiguous multiple-pad
-setups retain SDL rumble. `RT_RUMBLE_BACKEND=sdl` forces SDL output for comparison.
-Native effects use the same short durations and stop on pause/focus loss/disconnect.
+SDL handles rumble by default on all platforms, including Switch Pro controllers.
+On macOS, `RT_RUMBLE_BACKEND=apple` explicitly selects the experimental
+GameController/CoreHaptics route for one unambiguously matched Switch Pro;
+other controllers and ambiguous multiple-pad setups retain SDL routing.
+`RT_RUMBLE_BACKEND=sdl` also selects the default SDL route.
+Effects stop on pause, focus loss and disconnect.
 
 **Options → Controls** and **Pause → Controls** include a saved **Rumble Strength** multiplier,
 from 0.0× (off) to 4.0× in 0.5× steps. 1.0× retains the default strength; boosting

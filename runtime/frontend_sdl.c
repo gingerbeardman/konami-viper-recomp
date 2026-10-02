@@ -33,7 +33,7 @@ static const char *g_rumble_backend = "SDL";
 static int send_controller_rumble(SDL_GameController *pad, Uint16 low, Uint16 high, Uint32 duration) {
     const char *backend = getenv("RT_RUMBLE_BACKEND");
     if (SDL_NumJoysticks() == 1 && SDL_GameControllerGetType(pad) == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO &&
-        (!backend || strcmp(backend, "sdl"))) {
+        (backend && !strcmp(backend, "apple"))) {
         int result = controller_haptics_rumble((float)SDL_max(low, high) / 65535.0f, duration / 1000.0);
         if (result > 0) { g_rumble_backend = "Apple"; return 0; }
         if (result < 0) { g_rumble_backend = "Apple retry"; return SDL_SetError("Apple controller haptics temporarily unavailable"); }
@@ -307,7 +307,8 @@ void nvram_save(void);
 
 int frontend_run(int scale) {
 #ifdef VIPER_NATIVE_HAPTICS
-    controller_haptics_init();
+    const char *rumble_backend = getenv("RT_RUMBLE_BACKEND");
+    if (rumble_backend && !strcmp(rumble_backend, "apple")) controller_haptics_init();
 #endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         rt_log("SDL_Init failed: %s\n", SDL_GetError());
