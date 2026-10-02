@@ -1,0 +1,68 @@
+/* Exercise the actual frontend input path with SDL virtual controllers, no ROMs/window. */
+#include "../runtime/frontend_sdl.c"
+#include <assert.h>
+#include <stdio.h>
+uint8_t g_in[8];
+int16_t g_analog[4];
+int g_enhanced;
+static int menu_active;
+uint64_t rt_now(void) { return 0; }
+void rt_log(const char *fmt, ...) { (void)fmt; }
+void nvram_save(void) {}
+int enh_turbo(void) { return 0; }
+int enh_paused(void) { return 0; }
+int enh_start_held(void) { return 0; }
+int enh_inputs_owned(void) { return 0; }
+int enh_menu_active(void) { return menu_active; }
+int enh_name_entry_active(void) { return 0; }
+void enh_menu_action(int a) { (void)a; }
+int enh_name_type(int a) { return a; }
+void enh_name_step(int a) { (void)a; }
+int enh_escape(void) { return 0; }
+int enh_want_fullscreen(void) { return 0; }
+void enh_set_fullscreen(int a) { (void)a; }
+int enh_quit_requested(void) { return 0; }
+int enh_restart_requested(void) { return 0; }
+void enh_draw_overlay(uint32_t *f, int w, int h) { (void)f; (void)w; (void)h; }
+uint64_t voodoo_get_frame(uint32_t *f, int n, int *w, int *h) { (void)f; (void)n; *w=*h=0; return 0; }
+
+static void axis(SDL_GameControllerAxis a, Sint16 value) {
+    assert(SDL_JoystickSetVirtualAxis(SDL_GameControllerGetJoystick(g_pad), a, value) == 0);
+    SDL_JoystickUpdate();
+}
+
+int main(void) {
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "0");
+    assert(SDL_Init(SDL_INIT_GAMECONTROLLER) == 0);
+    int index = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, SDL_CONTROLLER_AXIS_MAX,
+                                         SDL_CONTROLLER_BUTTON_MAX, 0);
+    assert(index >= 0);
+    open_pad();
+    assert(g_pad);
+    assert(pad_matches(g_pad_id));
+    assert(!pad_matches(g_pad_id + 1));
+    /* SDL's virtual joystick maps -32768..32767 to controller trigger 0..32767. */
+    axis(SDL_CONTROLLER_AXIS_TRIGGERLEFT, -32768);
+    axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, -32768);
+    apply_inputs(.016);
+    assert(g_analog[0] == 0 && g_analog[1] == -200 && g_analog[2] == -200);
+    axis(SDL_CONTROLLER_AXIS_LEFTX, -32768); apply_inputs(.016); assert(g_analog[0] == -200);
+    axis(SDL_CONTROLLER_AXIS_LEFTX, 32767); apply_inputs(.016); assert(g_analog[0] == 200);
+    axis(SDL_CONTROLLER_AXIS_LEFTX, 3000); apply_inputs(.016); assert(g_analog[0] == 0);
+    axis(SDL_CONTROLLER_AXIS_RIGHTY, -32768); apply_inputs(.016); assert(g_analog[1] == 200 && g_analog[2] == -200);
+    axis(SDL_CONTROLLER_AXIS_RIGHTY, 32767); apply_inputs(.016); assert(g_analog[2] == 200 && g_analog[1] == -200);
+    axis(SDL_CONTROLLER_AXIS_RIGHTY, 0);
+    axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, 0);
+    key(SDLK_w, 1); apply_inputs(.016); assert(g_analog[1] == 200);
+    pad_button(SDL_CONTROLLER_BUTTON_A, 1);
+    key(SDLK_w, 0); apply_inputs(.016); assert(g_analog[1] == 200);
+    key(SDLK_w, 1); close_pad(); apply_inputs(.016); assert(g_analog[1] == 200);
+    key(SDLK_w, 0); apply_inputs(.016); assert(g_analog[1] == -200);
+    open_pad(); axis(SDL_CONTROLLER_AXIS_RIGHTY, -32768);
+    g_input_focus = 0; apply_inputs(.016); assert(g_analog[1] == -200);
+    g_input_focus = 1; menu_active = 1; apply_inputs(.016); assert(g_analog[1] == -200);
+    close_pad();
+    assert(SDL_JoystickDetachVirtual(index) == 0);
+    SDL_Quit();
+    puts("frontend virtual-controller tests: passed");
+}

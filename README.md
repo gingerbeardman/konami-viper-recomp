@@ -158,6 +158,26 @@ takes a little longer, because of the force-feedback wheel test.
 
 ---
 
+
+### Analog controllers
+
+The left stick uses a rescaled deadzone and a response curve for finer steering near the
+centre, while retaining full left/right lock. The right stick provides proportional pedals:
+up accelerates, down brakes. This is useful on Nintendo Switch Pro controllers, whose ZL/ZR
+triggers are digital. Triggers and face buttons still work; the strongest pedal input wins.
+Only the active controller contributes input. Disconnecting it releases its controls and
+selects another available controller; losing window focus releases held inputs.
+
+Optional environment settings (also work in classic mode):
+
+| Variable | Default | Range | Effect |
+| --- | --- | --- | --- |
+| `RT_STICK_DEADZONE` | `0.10` | 0–0.5 | Centre deadzone, rescaled to retain full travel |
+| `RT_STICK_CURVE` | `1.5` | 1–3 | Steering exponent; 1 is linear |
+| `RT_TRIGGER_DEADZONE` | `0.03` | 0–0.5 | Trigger deadzone |
+
+For example: `RT_STICK_CURVE=1 RT_STICK_DEADZONE=0.08 ./td2`.
+
 ## Required files
 
 The layout of `roms/` is the same as a MAME rompath. You only need `kviper/` plus the folders of
