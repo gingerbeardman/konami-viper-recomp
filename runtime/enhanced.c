@@ -607,9 +607,9 @@ int enh_escape(void) {
 static void controls_change(int row, int dir) {
     if (row == 0) frontend_gyro_set_enabled(!frontend_gyro_enabled());
     else if (row == 1) frontend_gyro_set_sensitivity(frontend_gyro_sensitivity() + dir * 10);
-    else if (row == 2) frontend_gyro_recenter();
-    else if (row == 3) g_set.show_gyro = !g_set.show_gyro;
-    if (row != 2) settings_save();
+    else if (row == 2) g_set.show_gyro = !g_set.show_gyro;
+    else if (row == 3) frontend_gyro_recenter();
+    if (row != 3) settings_save();
 }
 
 static void pause_action(int action) {
@@ -623,7 +623,7 @@ static void pause_action(int action) {
             controls_change(g_controls_cursor, 1);
             break;
         case ENH_LEFT: case ENH_RIGHT:
-            if (g_controls_cursor < 2 || g_controls_cursor == 3) controls_change(g_controls_cursor, action == ENH_LEFT ? -1 : 1);
+            if (g_controls_cursor < 3) controls_change(g_controls_cursor, action == ENH_LEFT ? -1 : 1);
             break;
         default: break;
         }
@@ -698,7 +698,7 @@ void enh_menu_action(int action) {
         case ENH_BACK: g_screen = SCREEN_OPTIONS; break;
         case ENH_LEFT: case ENH_RIGHT: case ENH_OK:
             if (g_page_cursor == n) { if (action == ENH_OK) g_screen = SCREEN_OPTIONS; }
-            else if (rows[g_page_cursor] != -7 || action == ENH_OK) page_change(rows[g_page_cursor], action == ENH_LEFT ? -1 : 1);
+            else if (rows[g_page_cursor] != -8 || action == ENH_OK) page_change(rows[g_page_cursor], action == ENH_LEFT ? -1 : 1);
             break;
         default: break;
         }
@@ -800,7 +800,7 @@ static void meter_rect(uint32_t *fb, int x0, int y0, int x1, int y1, uint32_t co
 }
 
 static void draw_controls(uint32_t *fb, int w, int h, int cursor) {
-    const int labels[] = { T_GYRO, T_SENSITIVITY, T_RECENTER, T_SHOW_GYRO, T_BACK };
+    const int labels[] = { T_GYRO, T_SENSITIVITY, T_SHOW_GYRO, T_RECENTER, T_BACK };
     const int z = FONT_MEDIUM, step = font_height(z) + 2;
     dim_rect(fb, w, h, 0, 0, w, h, 190);
     draw_centered(fb, w, h, FONT_LARGE, 24, T(T_CONTROLS), 0xffd800);
@@ -808,7 +808,7 @@ static void draw_controls(uint32_t *fb, int w, int h, int cursor) {
         char value[32] = "";
         if (i == 0) snprintf(value, sizeof value, "%s", T(frontend_gyro_enabled() ? T_ON : T_OFF));
         if (i == 1) snprintf(value, sizeof value, "%.1fX", frontend_gyro_sensitivity() / 100.0);
-        if (i == 3) snprintf(value, sizeof value, "%s", T(g_set.show_gyro ? T_ON : T_OFF));
+        if (i == 2) snprintf(value, sizeof value, "%s", T(g_set.show_gyro ? T_ON : T_OFF));
         uint32_t col = i == cursor ? 0xffd800 : 0xffffff;
         int y = 78 + i * step;
         draw_text(fb, w, h, z, 40, y, T(labels[i]), col);

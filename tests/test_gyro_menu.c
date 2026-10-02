@@ -25,8 +25,8 @@ int main(int argc, char **argv) {
  enh_menu_action(ENH_OK); assert(enabled);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_RIGHT); assert(sensitivity==110);
  enh_menu_action(ENH_LEFT); assert(sensitivity==100);
- enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(recentered==1);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_RIGHT); assert(g_set.show_gyro);
+ enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(recentered==1);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(!g_pause_controls&&g_paused);
  enh_menu_action(ENH_BACK); assert(!g_paused);
  enabled=0;sensitivity=50;g_set.show_gyro=0;settings_load();assert(enabled&&sensitivity==100&&g_set.show_gyro);
