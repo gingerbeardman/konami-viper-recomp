@@ -860,7 +860,6 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
         /* Compact, text-free live meter, centred in the current viewport. */
         const int centre = w / 2, half = 60, y = h - 20;
         int marker = centre + (int)lround(fmax(-1, fmin(1, frontend_gyro_position())) * half);
-        dim_rect(fb, w, h, centre - half - 6, y - 10, centre + half + 6, y + 10, 150);
         meter_rect(fb, centre - half, y - 1, centre + half, y + 1, 0x909090);
         meter_rect(fb, marker < centre ? marker : centre, y - 1,
                    marker > centre ? marker : centre, y + 1, 0x40ff40);
