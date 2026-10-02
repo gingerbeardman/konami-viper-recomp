@@ -394,7 +394,7 @@ listed in [CHANGELOG.md](CHANGELOG.md).
 - The software is provided "as is", without warranty of any kind.
 
 Enhanced mode exposes gyro controls in **Options → Controls** and **Pause → Controls**.
-Use the D-pad or arrow keys to choose **Gyro Steering**, **Show in Game**, or **Recenter**;
+Use the D-pad or arrow keys to choose **Gyro Sensitivity**, **Show Gyro Meter**, or **Recenter Gyro**;
 Left/Right adjusts the selected setting, and A/Enter confirms. Sensitivity defaults to
 1.0× (35° to full lock); higher values need less tilt. The Controls menu shows the current sensitivity and a live steering meter.
 Gyro and sensitivity are saved per game.
@@ -415,7 +415,7 @@ updating while paused so sensitivity and recentering can be checked before resum
 The log includes the raw left-stick axis and the steering ADC sent to the game;
 use partial stick travel to check for saturation before or after mapping.
 
-In **Controls**, enable **Show in Game** for a compact live gyro meter at the bottom
+In **Controls**, enable **Show Gyro Meter** for a compact live gyro meter at the bottom
 centre while driving. It defaults to off and is saved per game. The meter is hidden
 when gyro is disabled or unavailable; the full preview remains in Controls.
 
@@ -424,7 +424,7 @@ while SDL still handles input and sensors. Other controllers and ambiguous multi
 setups retain SDL rumble. `RT_RUMBLE_BACKEND=sdl` forces SDL output for comparison.
 Native effects use the same short durations and stop on pause/focus loss/disconnect.
 
-**Options → Controls** and **Pause → Controls** include a saved **Rumble** multiplier,
+**Options → Controls** and **Pause → Controls** include a saved **Rumble Strength** multiplier,
 from 0.0× (off) to 4.0× in 0.5× steps. 1.0× retains the default strength; boosting
 amplifies quieter cabinet motor commands and clamps at the controller's maximum.
 Capture / F8 remains a fixed-strength transport test, independent of this multiplier.
@@ -433,7 +433,7 @@ settings file, in both original and enhanced modes. Fullscreen and maximized bou
 do not replace the normal window placement. Restored windows are fitted to a currently
 available display, including when a saved monitor has been disconnected.
 
-**Gyro Steering** combines enablement and sensitivity: Left/Right adjusts the multiplier,
+**Gyro Sensitivity** combines enablement and sensitivity: Left/Right adjusts the multiplier,
 and Left below 0.5× turns it off. Right from Off restores the last sensitivity.
 R3 still toggles gyro directly; the footer places L3 Recenter before R3 Toggle.
 

@@ -533,10 +533,10 @@ static const char *const k_text[T_COUNT][2] = {
     { "PRESS START TO GO BACK", "PREMI START PER TORNARE" }, { "PAUSE", "PAUSA" },
     { "RESUME", "RIPRENDI" }, { "MAIN MENU", "MENU PRINCIPALE" }, { "RESOLUTION", "RISOLUZIONE" },
     { "ASPECT RATIO", "FORMATO" },
-    { "CONTROLS", "COMANDI" }, { "GYRO STEERING", "STERZO GIROSCOPIO" },
-    { "RECENTER", "RICENTRA" },
-    { "SHOW IN GAME", "MOSTRA IN GIOCO" },
-    { "RUMBLE", "VIBRAZIONE" },
+    { "CONTROLS", "COMANDI" }, { "GYRO SENSITIVITY", "STERZO GIROSCOPIO" },
+    { "RECENTER GYRO", "RICENTRA" },
+    { "SHOW GYRO METER", "MOSTRA IN GIOCO" },
+    { "RUMBLE STRENGTH", "VIBRAZIONE" },
 };
 static const char *const k_aspect_name[N_ASPECTS] = { "4:3", "16:10", "16:9", "21:9" };
 
@@ -853,7 +853,7 @@ static void draw_controls(uint32_t *fb, int w, int h, int cursor) {
     draw_text(fb, w, h, FONT_SMALL, 40, y - 11, "L", 0xc0c0c0);
     draw_text(fb, w, h, FONT_SMALL, w - 40 - text_width(FONT_SMALL, "R"), y - 11, "R", 0xc0c0c0);
     const char *status = !frontend_gyro_available() ? "NO GYRO CONTROLLER CONNECTED" :
-        !frontend_gyro_enabled() ? "GYRO OFF" : !ready ? "HOLD CONTROLLER UPRIGHT" : "HIGHER MEANS LESS TILT";
+        !frontend_gyro_enabled() ? "GYRO OFF" : !ready ? "HOLD CONTROLLER UPRIGHT" : "HIGHER SENSITIVITY NEEDS LESS TILT";
     draw_centered(fb, w, h, FONT_SMALL, 260, status, 0xc0c0c0);
     draw_centered(fb, w, h, FONT_SMALL, 291, "L3: RECENTER   R3: TOGGLE", 0xc0c0c0);
 }
