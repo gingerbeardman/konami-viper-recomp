@@ -31,3 +31,5 @@ int main(int argc, char **argv) {
  remove(g_settings_path);
  puts("stick response menu, pause, persistence and invalid settings: passed");
 }
+
+void voodoo_set_texture_filter(int n) { (void)n; }

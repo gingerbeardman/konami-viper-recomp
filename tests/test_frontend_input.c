@@ -118,3 +118,10 @@ int main(void) {
     SDL_Quit();
     puts("frontend virtual-controller tests: passed");
 }
+
+int enh_want_window(int *r) { (void)r; return 0; }
+void enh_set_window(const int *r) { (void)r; }
+int enh_texture_filter(void) { return 0; }
+int enh_wheel_select_active(void) { return 0; }
+void enh_wheel_select_step(int dir) { (void)dir; }
+double enh_wheel_select_pos(void) { return 0; }

@@ -14,7 +14,8 @@
  *     draws it only while no game is in progress, so it tells the attract mode apart.
  *     "projection" and "viewport" follow the gl library's writes of its projection slots and
  *     viewport, for the widescreen option; "name_index" and "name_confirm" sit in the rankings'
- *     name entry, typed on the keyboard (see name_entry);
+ *     name entry, typed on the keyboard (see name_entry); the wheel selects' hooks (named in
+ *     the profile, e.g. "course_select") run every frame of their screen (see wheel selects);
  *   - widescreen: where the gl library keeps that state.
  */
 #include "runtime.h"
@@ -33,8 +34,8 @@ static int g_attract, g_enh_log = -1;
 
 int enh_in_attract(void) { return g_attract; }
 
-/* port settings (<binary>_settings.ini, see below) */
-static struct { int fullscreen, show_fps, scale, aspect; } g_set = { 0, 0, 1, 0 };
+/* port settings (<binary>_enhanced_settings.ini, see below) */
+static struct { int fullscreen, show_fps, scale, aspect, texture_filter, win[4]; } g_set = { 0, 0, 1, 0, 0, { 0 } };
 
 /* ================================================================== widescreen */
 /* The games draw a 512x384 picture through Konami's gl library, which keeps its state at fixed
@@ -157,23 +158,73 @@ static void name_confirm_hook(PPCContext *c) {
     g_name_confirm = 0;
 }
 
+/* ================================================================== wheel selects */
+/* Some selection screens take the choice from the wheel position (zones of the steering range):
+ * the course select, and GTI Club 2's transmission select. With a key the choice springs back as
+ * soon as it is released. In the enhanced mode, while such a screen's hook runs, Left/Right step
+ * through the profile's wheel positions (one inside each choice's zone, from left to right) and
+ * the frontend holds the wheel there: the game itself still makes the choice, with its sounds
+ * and animations. Each screen starts at the position nearest the centre, as the wheel at rest. */
+typedef struct { const char *hook; int count; double pos[8]; } WheelSelect;
+static const WheelSelect k_wsel[] = GAME_ENH_WHEEL_SELECTS;
+static volatile uint64_t g_wsel_frame;      /* the frame at which a wheel select's hook last ran */
+static volatile int g_wsel, g_wsel_idx;     /* which one (k_wsel), the chosen position */
+
+int enh_wheel_select_active(void) {
+    return g_enhanced && g_wsel_frame && g_frame - g_wsel_frame <= NAME_GRACE_FRAMES;
+}
+
+void enh_wheel_select_step(int dir) {
+    int i = g_wsel_idx + (dir < 0 ? -1 : 1);
+    if (enh_wheel_select_active() && i >= 0 && i < k_wsel[g_wsel].count) g_wsel_idx = i;
+}
+
+double enh_wheel_select_pos(void) { return k_wsel[g_wsel].pos[g_wsel_idx]; }
+
+static void wheel_select_hook(int w) {
+    if (!enh_wheel_select_active() || g_wsel != w) {      /* a new screen: the wheel at rest */
+        const WheelSelect *s = &k_wsel[w];
+        int c = 0;
+        for (int i = 1; i < s->count; i++)
+            if (fabs(s->pos[i]) < fabs(s->pos[c])) c = i;
+        g_wsel_idx = c;
+        g_wsel = w;
+        if (g_enh_log) rt_log("enhanced: %s\n", s->hook);
+    }
+    g_wsel_frame = g_frame;
+}
+
 typedef struct { uint32_t addr; const char *name; } Hook;
 static const Hook k_hooks[] = GAME_ENH_HOOKS;
-enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM };
+enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_WHEEL_SELECT };
+#define NHOOKS (sizeof k_hooks / sizeof k_hooks[0])
 
-static int hook_kind(uint32_t pc) {
-    static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm" };
-    for (const Hook *h = k_hooks; h->name; h++)
-        if (h->addr == pc)
+/* the kind of the hook at pc, and for a wheel select its entry in k_wsel (*arg); the names are
+ * resolved once, so a call only compares addresses */
+static int hook_kind(uint32_t pc, int *arg) {
+    static signed char kind[NHOOKS], karg[NHOOKS];
+    static int resolved;
+    if (!resolved) {
+        static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm" };
+        for (size_t i = 0; k_hooks[i].name; i++) {
             for (int k = 1; k < (int)(sizeof names / sizeof names[0]); k++)
-                if (!strcmp(h->name, names[k])) return k;
+                if (!strcmp(k_hooks[i].name, names[k])) kind[i] = (signed char)k;
+            for (int w = 0; k_wsel[w].hook; w++)
+                if (!strcmp(k_hooks[i].name, k_wsel[w].hook)) { kind[i] = HOOK_WHEEL_SELECT; karg[i] = (signed char)w; }
+        }
+        resolved = 1;
+    }
+    for (size_t i = 0; k_hooks[i].name; i++)
+        if (k_hooks[i].addr == pc) { *arg = karg[i]; return kind[i]; }
     return HOOK_NONE;
 }
 
 void rt_hook(PPCContext *c, uint32_t pc) {
-    switch (hook_kind(pc)) {
+    int arg = 0;
+    switch (hook_kind(pc, &arg)) {
     case HOOK_NAME_INDEX: if (g_enhanced) name_index_hook(c); break;
     case HOOK_NAME_CONFIRM: if (g_enhanced) name_confirm_hook(c); break;
+    case HOOK_WHEEL_SELECT: if (g_enhanced) wheel_select_hook(arg); break;
     case HOOK_ATTRACT: g_attract_frame = g_frame ? g_frame : 1; break;
     case HOOK_PROJECTION: {                  /* the current slot has just been written */
         uint32_t s = LD8(GAME_ENH_WIDE_PROJ_SLOT);
@@ -221,6 +272,72 @@ static void blank(const BlankString *b) {
     if (memcmp(g_ram + b->addr, b->text, n) == 0) g_ram[b->addr] = 0;
 }
 
+/* Text textures with typos (Thrill Drive 2's Italian "per Tasmissone Maniale"): the profile's
+ * text_fixes rebuild a band of rows of the texture in VRAM from columns of the same band (and an
+ * n turned upside down for a u). A band is recognised by the CRC-32 of its original pixels,
+ * checked every 16 frames: the textures are loaded once, at boot, and a patched band no longer
+ * matches. Only in the enhanced mode. */
+typedef struct { int16_t x0, x1, y0, y1; } FixSpan;     /* y0 < 0: plain columns x0..x1 */
+typedef struct { uint32_t addr, stride; int y0, y1; uint32_t crc; int fit0, fit1, nspans; FixSpan span[24]; } TextFix;
+static const TextFix k_text_fix[] = GAME_ENH_TEXT_FIXES;
+
+static uint32_t crc32_buf(const uint8_t *p, size_t n) {
+    static uint32_t table[256];
+    if (!table[1])
+        for (uint32_t i = 0; i < 256; i++) {
+            uint32_t c = i;
+            for (int k = 0; k < 8; k++) c = c & 1 ? 0xedb88320u ^ (c >> 1) : c >> 1;
+            table[i] = c;
+        }
+    uint32_t c = 0xffffffffu;
+    while (n--) c = table[(c ^ *p++) & 0xff] ^ (c >> 8);
+    return ~c;
+}
+
+static void text_fix_tick(void) {
+    if (!k_text_fix[0].addr || g_frame % 16) return;
+    uint32_t size;
+    const uint8_t *vram = voodoo_vram(&size);
+    for (const TextFix *f = k_text_fix; f->addr; f++) {
+        size_t band = (size_t)(f->y1 - f->y0) * f->stride;
+        if (!vram || f->addr + (size_t)f->y1 * f->stride > size) continue;
+        if (crc32_buf(vram + f->addr + (size_t)f->y0 * f->stride, band) != f->crc) continue;
+        enum { MAXW = 512, MAXH = 64 };
+        static uint8_t src[MAXH * 256], line[MAXH * MAXW];
+        if (f->stride > 256 || f->y1 - f->y0 > MAXH) continue;
+        uint8_t *dst = voodoo_vram_for_write() + f->addr + (size_t)f->y0 * f->stride;
+        memcpy(src, dst, band);
+        memset(line, 0, sizeof line);
+        int x = 0;                               /* the new line, left to right */
+        for (int i = 0; i < f->nspans; i++) {
+            const FixSpan *s = &f->span[i];
+            int w = s->x1 - s->x0;
+            if (x + w > MAXW) break;
+            for (int y = 0; y < f->y1 - f->y0; y++) {
+                uint8_t *d = line + (size_t)y * MAXW + x;
+                if (s->y0 < 0) memcpy(d, src + (size_t)y * f->stride + s->x0, (size_t)w);
+                else if (y + f->y0 >= s->y0 && y + f->y0 < s->y1)   /* turned by 180 degrees in its rectangle */
+                    for (int k = 0; k < w; k++)
+                        d[k] = src[(size_t)(s->y1 - 1 - (y + f->y0) + s->y0 - f->y0) * f->stride + s->x1 - 1 - k];
+            }
+            x += w;
+        }
+        /* into columns fit0..fit1, where the game draws the line from: squeezed (linearly) if wider */
+        int fw = f->fit1 - f->fit0;
+        memset(dst, 0, band);
+        for (int j = 0; j < fw && j < x; j++)
+            for (int y = 0; y < f->y1 - f->y0; y++) {
+                const uint8_t *l = line + (size_t)y * MAXW;
+                uint8_t *d = dst + (size_t)y * f->stride + f->fit0 + j;
+                if (x <= fw) { *d = l[j]; continue; }
+                int p = (int)(((2 * j + 1) * x - fw) * 128 / fw);      /* source position, 1/256 column */
+                int c = p < 0 ? 0 : p >> 8, t = p < 0 ? 0 : p & 255;
+                *d = (uint8_t)((l[c] * (256 - t) + (c + 1 < x ? l[c + 1] : 0) * t) >> 8);
+            }
+        if (g_enh_log) rt_log("enhanced: text texture fixed at %06x\n", f->addr);
+    }
+}
+
 /* RT_NVRAM_POKE="seconds:addr=value,..." writes NVRAM bytes (and fixes the checksum) at run time */
 static void nvram_poke_tick(void) {
     static const char *next = (const char *)-1;
@@ -254,6 +371,7 @@ void enh_on_frame(const uint32_t *buf, int w, int h) {
     menu_tick();
     scripted_menu();
     nvram_poke_tick();
+    text_fix_tick();
     if (g_nextra < 0) parse_extra();
     for (const BlankString *b = k_blank; b->text; b++) blank(b);
     for (int i = 0; i < g_nextra; i++) blank(&g_extra[i]);
@@ -278,10 +396,13 @@ static int g_font_h;
 static Glyph g_glyph[FONT_NSIZES][128];
 
 /* ================================================================== port settings */
-/* <binary>_settings.ini next to the executable: options of the port itself (not of the game,
- * which keeps its own in the NVRAM). One "key = value" per line. */
+/* <binary>_enhanced_settings.ini next to the executable (classic mode: <binary>_settings.ini,
+ * the window only): options of the port itself (not of the game, which keeps its own in the
+ * NVRAM). One "key = value" per line. */
 void voodoo_set_scale(int n);
+void voodoo_set_texture_filter(int mode);
 static char g_settings_path[1024];
+static const char *const k_win_key[4] = { "window_x", "window_y", "window_width", "window_height" };
 
 static void settings_load(void) {
     FILE *f = fopen(g_settings_path, "r");
@@ -292,9 +413,11 @@ static void settings_load(void) {
         if (sscanf(line, " %63[a-z_] = %d", key, &v) == 2) {
             if (!strcmp(key, "fullscreen")) g_set.fullscreen = v != 0;
             else if (!strcmp(key, "stick_response")) frontend_set_stick_response(v);
+            else if (!strcmp(key, "texture_filter")) g_set.texture_filter = v == 1;
             else if (!strcmp(key, "show_fps")) g_set.show_fps = v != 0;
             else if (!strcmp(key, "render_scale")) g_set.scale = v < 1 ? 1 : v > 2 ? 2 : v;
             else if (!strcmp(key, "aspect")) g_set.aspect = v < 0 || v >= N_ASPECTS ? 0 : v;
+            else for (int i = 0; i < 4; i++) if (!strcmp(key, k_win_key[i])) g_set.win[i] = v;
         }
     fclose(f);
 }
@@ -302,23 +425,44 @@ static void settings_load(void) {
 static void settings_save(void) {
     FILE *f = fopen(g_settings_path, "w");
     if (!f) { rt_log("enhanced: cannot write %s\n", g_settings_path); return; }
-    fprintf(f, "# " GAME_TITLE ", enhanced mode: port settings\n");
-    fprintf(f, "stick_response = %d\n", frontend_stick_response());
-    fprintf(f, "fullscreen = %d\nshow_fps = %d\nrender_scale = %d\n", g_set.fullscreen, g_set.show_fps, g_set.scale);
-    fprintf(f, "# 0 = 4:3, 1 = 16:10, 2 = 16:9, 3 = 21:9\naspect = %d\n", g_set.aspect);
+    fprintf(f, "# " GAME_TITLE "%s: port settings\n", g_enhanced ? ", enhanced mode" : "");
+    if (g_enhanced) {
+        fprintf(f, "fullscreen = %d\nshow_fps = %d\nrender_scale = %d\n", g_set.fullscreen, g_set.show_fps, g_set.scale);
+        fprintf(f, "# 0 = 4:3, 1 = 16:10, 2 = 16:9, 3 = 21:9\naspect = %d\n", g_set.aspect);
+        fprintf(f, "stick_response = %d\n", frontend_stick_response());
+        fprintf(f, "texture_filter = %d\n", g_set.texture_filter);
+    }
+    if (g_set.win[2])
+        for (int i = 0; i < 4; i++) fprintf(f, "%s = %d\n", k_win_key[i], g_set.win[i]);
     fclose(f);
 }
 
+int enh_texture_filter(void) { return g_enhanced ? g_set.texture_filter : 0; }
 int enh_want_fullscreen(void) { return g_enhanced && g_set.fullscreen; }
 void enh_set_fullscreen(int on) { if (g_enhanced && g_set.fullscreen != !!on) { g_set.fullscreen = !!on; settings_save(); } }
 
+/* the window (both modes): x, y, width, height of the last normal window, 0 if none saved */
+int enh_want_window(int *r) {
+    const int *v = g_set.win;
+    if (v[2] < 320 || v[3] < 240 || v[2] > 16384 || v[3] > 16384 ||
+        abs(v[0]) > 1000000 || abs(v[1]) > 1000000) return 0;
+    memcpy(r, v, sizeof g_set.win);
+    return 1;
+}
+void enh_set_window(const int *r) {
+    if (!memcmp(g_set.win, r, sizeof g_set.win)) return;
+    memcpy(g_set.win, r, sizeof g_set.win);
+    settings_save();
+}
+
 void enh_init(const char *work, const char *settings) {
+    snprintf(g_settings_path, sizeof g_settings_path, "%s", settings);
+    settings_load();                     /* also in classic mode: its own file, the window */
     if (!g_enhanced) return;
     count_game_options();
-    snprintf(g_settings_path, sizeof g_settings_path, "%s", settings);
-    settings_load();
     voodoo_set_scale(g_set.scale);       /* the only place the render scale is set */
     set_aspect(g_set.aspect);
+    voodoo_set_texture_filter(enh_texture_filter());
     const char *file = GAME_ENH_FONT_FILE;
     if (!file) return;
     char path[1024];
@@ -515,7 +659,7 @@ static void options_read(void) {
  * letters, so the Italian texts avoid them. */
 enum { T_START, T_OPTIONS, T_CREDITS, T_QUIT, T_GAME, T_SOUND, T_DISPLAY, T_BACK, T_WINDOW, T_FULLSCREEN,
        T_SHOW_FPS, T_OFF, T_ON, T_LOADING, T_APPLYING, T_ORIGINAL_GAME, T_RECOMPILATION, T_VOODOO,
-       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_RESOLUTION, T_ASPECT, T_STICK_RESPONSE, T_CONTROLS, T_COUNT };
+       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_RESOLUTION, T_ASPECT, T_STICK_RESPONSE, T_CONTROLS, T_TEXTURE_FILTER, T_COUNT };
 static const char *const k_text[T_COUNT][2] = {
     { "START GAME", "INIZIA PARTITA" }, { "OPTIONS", "OPZIONI" }, { "CREDITS", "RICONOSCIMENTI" },
     { "QUIT", "ESCI" }, { "GAME", "GIOCO" }, { "SOUND", "AUDIO" }, { "DISPLAY", "SCHERMO" },
@@ -528,8 +672,10 @@ static const char *const k_text[T_COUNT][2] = {
     { "ASPECT RATIO", "FORMATO" },
     { "STICK RESPONSE", "RISPOSTA STICK" },
     { "CONTROLS", "COMANDI" },
+    { "TEXTURE FILTER", "FILTRO TEXTURE" },
 };
 static const char *const k_stick_response_name[] = { "LINEAR", "SOFT", "EXTRA SOFT" };
+static const char *const k_texture_filter_name[] = { "ORIGINAL", "NEAREST" };
 static const char *const k_aspect_name[N_ASPECTS] = { "4:3", "16:10", "16:9", "21:9" };
 
 static int menu_language(void) {
@@ -640,6 +786,7 @@ static int page_rows(int page, int *rows) {
         rows[n++] = -1;
         rows[n++] = -3;
         if (GAME_ENH_WIDE_VIEWPORT) rows[n++] = -4;
+        rows[n++] = -10;
         rows[n++] = -2;
         return n;
     }
@@ -650,6 +797,7 @@ static int page_rows(int page, int *rows) {
 
 static void page_change(int row, int dir) {
     if (row == -9) { change_stick_response(dir); return; }
+    if (row == -10) { g_set.texture_filter = !g_set.texture_filter; voodoo_set_texture_filter(g_set.texture_filter); settings_save(); return; }
     if (row == -1) { g_set.fullscreen = !g_set.fullscreen; settings_save(); return; }
     if (row == -2) { g_set.show_fps = !g_set.show_fps; settings_save(); return; }
     if (row == -3) { g_set.scale = g_set.scale == 1 ? 2 : 1; voodoo_set_scale(g_set.scale); settings_save(); return; }
@@ -844,6 +992,7 @@ static void draw_menu(uint32_t *fb, int w, int h) {
             else if (rows[i] == -2) { label = T(T_SHOW_FPS); value = T(g_set.show_fps ? T_ON : T_OFF); }
             else if (rows[i] == -3) { label = T(T_RESOLUTION); value = g_set.scale == 2 ? "2X" : "1X"; }
             else if (rows[i] == -9) { label = T(T_STICK_RESPONSE); value = k_stick_response_name[frontend_stick_response()]; }
+            else if (rows[i] == -10) { label = T(T_TEXTURE_FILTER); value = k_texture_filter_name[g_set.texture_filter]; }
             else if (rows[i] == -4) { label = T(T_ASPECT); value = k_aspect_name[g_set.aspect]; }
             else {
                 const GameOption *o = &k_game_options[rows[i]];
