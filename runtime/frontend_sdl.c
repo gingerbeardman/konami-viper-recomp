@@ -17,6 +17,7 @@
  */
 #include "runtime.h"
 #include "game_config.h"
+#include "controller_math.h"
 #include <SDL.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -108,32 +109,96 @@ enum { SRC_KEY = 1, SRC_KEY2 = 2, SRC_PAD = 4 };
 typedef struct {
     int steer_left, steer_right, gas, brake, handbrake;
     double steer;                   /* -1..1 (keyboard, ramped) */
-    int pad_steer, pad_gas, pad_brake;   /* raw gamepad */
     int shift_up, shift_down, coin, start, test, service;
 } Controls;
 static Controls ctl;
 
 static void hold(int *f, int src, int down) { *f = down ? *f | src : *f & ~src; }
 static SDL_GameController *g_pad;
+static SDL_JoystickID g_pad_id = -1;
+static int g_input_focus = 1;
+static int g_menu_repeat_button = -1;
+static Uint32 g_menu_repeat_at;
+static int g_controller_log;
+static Uint32 g_controller_log_tick;
+static double g_stick_deadzone = 0.10, g_stick_curve = 1.5, g_trigger_deadzone = 0.03;
+
+static double controller_option(const char *name, double fallback, double lo, double hi) {
+    const char *value = getenv(name);
+    if (!value) return fallback;
+    char *end;
+    double result = strtod(value, &end);
+    if (end == value || *end || !isfinite(result) || result < lo || result > hi) {
+        rt_log("%s: expected a number between %g and %g; using %g\n", name, lo, hi, fallback);
+        return fallback;
+    }
+    return result;
+}
+
+static int pad_matches(SDL_JoystickID id) { return g_pad && id == g_pad_id; }
+
+static void close_pad(void) {
+    g_menu_repeat_button = -1;
+    if (g_pad) SDL_GameControllerClose(g_pad);
+    g_pad = NULL;
+    g_pad_id = -1;
+    /* Releasing a controller must not release a held keyboard key. */
+    ctl.gas &= ~SRC_PAD; ctl.brake &= ~SRC_PAD; ctl.handbrake &= ~SRC_PAD;
+    ctl.shift_up &= ~SRC_PAD; ctl.shift_down &= ~SRC_PAD;
+    ctl.coin &= ~SRC_PAD; ctl.start &= ~SRC_PAD;
+}
+
+static void open_pad(void) {
+    if (g_pad) return;
+    for (int i = 0; i < SDL_NumJoysticks(); i++) {
+        if (!SDL_IsGameController(i)) continue;
+        g_pad = SDL_GameControllerOpen(i);
+        if (!g_pad) continue;
+        g_pad_id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad));
+        rt_log("gamepad: %s\n", SDL_GameControllerName(g_pad));
+        break;
+    }
+}
+
 
 static void apply_inputs(double dt) {
+    /* Menu confirmation can consume a pedal button's down event. These controls
+     * represent held state, so reconcile them with the device every frame. */
+    int pad_active = g_pad && g_input_focus;
+    hold(&ctl.gas, SRC_PAD, pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_A));
+    hold(&ctl.brake, SRC_PAD, pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_B));
+    hold(&ctl.handbrake, SRC_PAD, pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_X));
+
     /* keyboard steering: ramp towards target */
     double target = !!ctl.steer_right - !!ctl.steer_left;
-    double speed = 4.0 * dt;
+    double speed = 4.0 * SDL_min(dt, 0.05);
     if (ctl.steer < target) ctl.steer = SDL_min(target, ctl.steer + speed);
     else if (ctl.steer > target) ctl.steer = SDL_max(target, ctl.steer - speed);
     double steer = ctl.steer;
-    if (g_pad && abs(ctl.pad_steer) > 3000) steer = ctl.pad_steer / 32767.0;
-    /* signed positions for the differential ADC (hw.c): steering -200..+200, pedals -200 (released)..+200 */
-    int gas = ctl.gas ? 255 : 0, brake = ctl.brake ? 255 : 0;
-    if (g_pad) {
-        if (ctl.pad_gas > 1000) gas = ctl.pad_gas * 255 / 32767;
-        if (ctl.pad_brake > 1000) brake = ctl.pad_brake * 255 / 32767;
+    /* Take the strongest pedal source: a slightly pressed trigger must not reduce a
+     * fully held key/button. Right-stick Y supplies proportional pedals on Switch Pro. */
+    double gas = ctl.gas ? 1.0 : 0.0, brake = ctl.brake ? 1.0 : 0.0;
+    if (g_pad && g_input_focus) {
+        double stick = controller_axis(SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_LEFTX),
+                                       g_stick_deadzone, g_stick_curve);
+        if (stick != 0) steer = stick;
+        double pedals = controller_axis(SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_RIGHTY),
+                                        g_stick_deadzone, 1.0);
+        gas = fmax(gas, fmax(-pedals, controller_trigger(
+            SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT), g_trigger_deadzone)));
+        brake = fmax(brake, fmax(pedals, controller_trigger(
+            SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT), g_trigger_deadzone)));
     }
+    /* signed positions for the differential ADC: steering -200..+200, pedals released=-200 */
     if (enh_name_entry_active()) steer = 0;   /* the letters come from the keyboard */
     g_analog[0] = (int16_t)(steer * ANALOG_RANGE);
-    g_analog[1] = (int16_t)(-ANALOG_RANGE + gas * 2 * ANALOG_RANGE / 255);
-    g_analog[2] = (int16_t)(-ANALOG_RANGE + brake * 2 * ANALOG_RANGE / 255);
+    if (g_controller_log && g_pad && (Uint32)(SDL_GetTicks() - g_controller_log_tick) >= 100) {
+        g_controller_log_tick = SDL_GetTicks();
+        rt_log("controller: left_x=%d steering_adc=%d gas=%.3f brake=%.3f\n",
+               SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_LEFTX), g_analog[0], gas, brake);
+    }
+    g_analog[1] = (int16_t)(-ANALOG_RANGE + gas * 2 * ANALOG_RANGE);
+    g_analog[2] = (int16_t)(-ANALOG_RANGE + brake * 2 * ANALOG_RANGE);
     if (GAME_HAS_HANDBRAKE) g_analog[3] = (int16_t)(ctl.handbrake ? ANALOG_RANGE : -ANALOG_RANGE);
     uint8_t in3 = 0xff, in4 = 0xff;
     if (ctl.service && !g_enhanced) in3 &= ~0x01;
@@ -174,6 +239,22 @@ static int menu_button(int b) {
     case SDL_CONTROLLER_BUTTON_A: case SDL_CONTROLLER_BUTTON_START: return ENH_OK;
     case SDL_CONTROLLER_BUTTON_B: return ENH_BACK;
     default: return -1;
+    }
+}
+
+/* Repeat only value adjustments; confirmation must never repeat into another page. */
+static void menu_pad_press(int button, Uint32 now) {
+    int action = menu_button(button);
+    g_menu_repeat_button = (action == ENH_LEFT || action == ENH_RIGHT) ? button : -1;
+    g_menu_repeat_at = now + 400;
+    enh_menu_action(action);
+}
+
+static void menu_pad_repeat(Uint32 now) {
+    if (!g_input_focus || !(enh_menu_active() || enh_paused())) g_menu_repeat_button = -1;
+    if (g_menu_repeat_button >= 0 && (Sint32)(now - g_menu_repeat_at) >= 0) {
+        enh_menu_action(menu_button(g_menu_repeat_button));
+        g_menu_repeat_at = now + 80;
     }
 }
 
@@ -254,11 +335,10 @@ int frontend_run(int scale) {
     if (g_audio) SDL_PauseAudioDevice(g_audio, 0);
     else rt_log("audio: %s\n", SDL_GetError());
 
-    for (int i = 0; i < SDL_NumJoysticks(); i++)
-        if (SDL_IsGameController(i) && (g_pad = SDL_GameControllerOpen(i))) {
-            rt_log("gamepad: %s\n", SDL_GameControllerName(g_pad));
-            break;
-        }
+    g_stick_deadzone = controller_option("RT_STICK_DEADZONE", 0.10, 0.0, 0.5);
+    g_stick_curve = controller_option("RT_STICK_CURVE", 1.5, 1.0, 3.0);
+    g_trigger_deadzone = controller_option("RT_TRIGGER_DEADZONE", 0.03, 0.0, 0.5);
+    open_pad();
 
     g_pace_freq = (double)SDL_GetPerformanceFrequency();
     g_pace_t0 = SDL_GetPerformanceCounter() - (uint64_t)((double)rt_now() / CPU_HZ * g_pace_freq);
@@ -282,9 +362,25 @@ int frontend_run(int scale) {
         while (SDL_PollEvent(&ev)) {
             switch (ev.type) {
             case SDL_QUIT: running = 0; break;
+            case SDL_WINDOWEVENT:
+                if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+                    g_input_focus = 0;
+                    g_menu_repeat_button = -1;
+                    memset(&ctl, 0, sizeof ctl);
+                } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) g_input_focus = 1;
+                break;
             case SDL_KEYDOWN:
+                if (ev.key.keysym.sym == SDLK_F9) {
+                    if (!ev.key.repeat) {
+                        g_controller_log = !g_controller_log;
+                        rt_log("controller input logging: %s\n", g_controller_log ? "on" : "off");
+                    }
+                    break;
+                }
                 if ((enh_menu_active() || enh_paused()) && menu_key(ev.key.keysym.sym) >= 0) {
-                    if (!ev.key.repeat) enh_menu_action(menu_key(ev.key.keysym.sym));
+                    int action = menu_key(ev.key.keysym.sym);
+                    g_menu_repeat_button = -1;
+                    if (!ev.key.repeat || action == ENH_LEFT || action == ENH_RIGHT) enh_menu_action(action);
                 } else if (ev.key.keysym.sym == SDLK_ESCAPE) {
                     if (!ev.key.repeat && !enh_escape()) running = 0;   /* enhanced: pause / back */
                 }
@@ -301,26 +397,30 @@ int frontend_run(int scale) {
                 if (enh_name_entry_active() && !enh_paused())
                     for (const char *p = ev.text.text; *p; p++) enh_name_type((unsigned char)*p);
                 break;
-            case SDL_CONTROLLERDEVICEADDED:
-                if (!g_pad) g_pad = SDL_GameControllerOpen(ev.cdevice.which);
-                break;
-            case SDL_CONTROLLERAXISMOTION:
-                if (ev.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX) ctl.pad_steer = ev.caxis.value;
-                else if (ev.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) ctl.pad_gas = ev.caxis.value;
-                else if (ev.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) ctl.pad_brake = ev.caxis.value;
+            case SDL_CONTROLLERDEVICEADDED: open_pad(); break;
+            case SDL_CONTROLLERDEVICEREMOVED:
+                if (pad_matches(ev.cdevice.which)) { close_pad(); open_pad(); }
                 break;
             case SDL_CONTROLLERBUTTONDOWN:
-                if ((enh_menu_active() || enh_paused()) && menu_button(ev.cbutton.button) >= 0) enh_menu_action(menu_button(ev.cbutton.button));
+                if (pad_matches(ev.cbutton.which)) g_menu_repeat_button = -1;
+                if (!pad_matches(ev.cbutton.which) || !g_input_focus) break;
+                if ((enh_menu_active() || enh_paused()) && menu_button(ev.cbutton.button) >= 0) menu_pad_press(ev.cbutton.button, SDL_GetTicks());
                 else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) enh_escape();
                 else if (enh_name_entry_active() && !enh_paused() && (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ||
                                                                        ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT))
                     enh_name_step(ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? -1 : 1);
                 else pad_button(ev.cbutton.button, 1);
                 break;
-            case SDL_CONTROLLERBUTTONUP: pad_button(ev.cbutton.button, 0); break;
+            case SDL_CONTROLLERBUTTONUP:
+                if (pad_matches(ev.cbutton.which)) {
+                    if (g_menu_repeat_button == ev.cbutton.button) g_menu_repeat_button = -1;
+                    pad_button(ev.cbutton.button, 0);
+                }
+                break;
             default: break;
             }
         }
+        menu_pad_repeat(SDL_GetTicks());
         uint64_t now = SDL_GetPerformanceCounter();
         apply_inputs((double)(now - last_tick) / g_pace_freq);
         last_tick = now;
@@ -361,6 +461,7 @@ int frontend_run(int scale) {
     }
     nvram_save();
     if (g_audio) SDL_CloseAudioDevice(g_audio);
+    close_pad();
     SDL_Quit();
     return restart ? 2 : 0;
 }
