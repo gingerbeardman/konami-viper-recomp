@@ -21,3 +21,8 @@ ${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -Wall -Wextra -Wno-missi
     -ffunction-sections -fdata-sections -Iruntime -I"$TEMP_TEST_DIR" \
     tests/test_gyro_menu.c "$GC_SECTIONS" -lm -o "$TEMP_TEST_DIR/menu"
 "$TEMP_TEST_DIR/menu" "$TEMP_TEST_DIR/settings.ini"
+
+${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -Wall -Wextra \
+    -Iruntime -I"$TEMP_TEST_DIR" $(sdl2-config --cflags) tests/test_frontend_gyro.c \
+    $(sdl2-config --libs) -lm -o "$TEMP_TEST_DIR/frontend"
+"$TEMP_TEST_DIR/frontend"
