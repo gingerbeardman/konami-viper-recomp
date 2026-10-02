@@ -18,7 +18,11 @@ typedef struct {
 
 static inline Uint16 controller_motor_strength(uint8_t motor, double gain) {
     if (!(motor & 0x80) || !isfinite(gain) || gain <= 0) return 0;
-    return (Uint16)lround(fmin(65535.0, (motor & 15) * (65535.0 / 15.0) * fmin(gain, 2.0)));
+    /* Wheel resistance is easy to feel at low torque; gamepad vibration is not.
+     * Lift weak forces while preserving zero, ordering and the full-force endpoint.
+     * Apply the user's gain afterwards so the multiplier remains proportional. */
+    double force = sqrt((motor & 15) / 15.0);
+    return (Uint16)lround(fmin(65535.0, force * 65535.0 * fmin(gain, 2.0)));
 }
 
 static void controller_rumble_update(ControllerRumble *state, SDL_GameController *pad,

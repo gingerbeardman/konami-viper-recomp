@@ -446,3 +446,8 @@ Temporary rumble errors retry after one second instead of disabling rumble until
 reconnection. The Apple backend checks that its engine is started before each effect,
 including the first effect after pause. Native failures retain native routing while
 recovering; unavailable native devices still use SDL.
+
+Cabinet torque uses a square-root response curve before the rumble multiplier,
+boosting weak driving forces without adding vibration when the game sends zero.
+At the default strength, torque 3–5 now maps to about 22–29% intensity instead of
+10–17%. Full-force output and the Capture/F8 test are unchanged.

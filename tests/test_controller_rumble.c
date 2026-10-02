@@ -22,6 +22,16 @@ int main(void) {
     assert(controller_motor_strength(0x8f,2) == 65535);
     assert(controller_motor_strength(0x8f,100) == 65535);
     assert(controller_motor_strength(0x8f,NAN) == 0);
+    /* The recorded race forces (3..5) should exceed the old 10..17% output. */
+    assert(controller_motor_strength(0x83,.5) > 14000);
+    assert(controller_motor_strength(0x85,.5) > 18000);
+    Uint16 previous = 0;
+    for (int torque=1; torque<=15; torque++) {
+        Uint16 strength = controller_motor_strength((uint8_t)(0x80 | torque),.5);
+        assert(strength > previous);
+        assert(abs((int)controller_motor_strength((uint8_t)(0x80 | torque),1) - 2*(int)strength) <= 1);
+        previous = strength;
+    }
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "0");
     assert(SDL_Init(SDL_INIT_GAMECONTROLLER) == 0);
     SDL_VirtualJoystickDesc desc = {0};
