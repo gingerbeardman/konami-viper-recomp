@@ -6,7 +6,7 @@ Build with `python3 recomp/recomp.py gticlub2` then `make GAME=gticlub2 -j8`.
 Start a game and choose a course, then press **F6** to toggle the drone tour. You can also press F6 before the race starts to arm it.
 
 - **Accelerator / brake** (A / B, triggers, or Up / Down): hold to increase/decrease cruise speed; release to keep it steady.
-- **Steer left / right** (left stick, steering gyro if enabled, or Left / Right): lower/raise the drone; release to hold height.
+- **Left / right shoulder** (L / R, or Q / E): lower/raise the drone; release to hold height. Steering and gyro do not change drone height.
 - **[ / ]**: decrease/increase speed, from stationary to 160 metres/second (default 40).
 - **− / =**: lower/raise the drone, 3–60 metres above the road (default 12).
 - **F6** again: return to the normal camera.

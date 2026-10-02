@@ -384,10 +384,14 @@ static void apply_inputs(double dt) {
     }
     if (explorer_active()) {
         if (g_input_focus && !enh_paused() && !enh_menu_active() && !enh_inputs_owned()) {
-            /* Hold pedals to change cruise speed, steer to change clearance.
+            /* Hold pedals to change cruise speed, shoulders to change clearance.
              * Release holds the setting; route navigation stays automatic. */
             double step = fmax(0, fmin(dt, .05));
-            explorer_adjust((float)((gas - brake) * 40 * step), (float)(steer * 12 * step));
+            int raise = !!(ctl.shift_up & ~SRC_PAD) ||
+                (pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER));
+            int lower = !!(ctl.shift_down & ~SRC_PAD) ||
+                (pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER));
+            explorer_adjust((float)((gas - brake) * 40 * step), (float)((raise - lower) * 12 * step));
         }
         steer = gas = brake = 0;  /* drone controls must not drive the car */
     }
@@ -407,8 +411,8 @@ static void apply_inputs(double dt) {
     if (ctl.test && !g_enhanced) in3 &= ~0x02;
     if (ctl.coin && !g_enhanced) in3 &= ~0x04;
     if (ctl.start || enh_start_held()) in3 &= ~0x10;
-    if (ctl.shift_down) in3 &= ~0x40;
-    if (ctl.shift_up) in4 &= ~0x01;
+    if (ctl.shift_down && !explorer_active()) in3 &= ~0x40;
+    if (ctl.shift_up && !explorer_active()) in4 &= ~0x01;
     if (enh_inputs_owned()) return;     /* the enhanced layer is driving TEST MODE */
     if (enh_menu_active()) {            /* the menu owns the controls: the attract gets nothing */
         in3 = enh_start_held() ? 0xef : 0xff;
