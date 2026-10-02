@@ -19,13 +19,31 @@
 #include "game_config.h"
 #include "controller_math.h"
 
-#include "controller_rumble.h"
-
 #include "controller_gyro.h"
 #include <SDL.h>
+#ifdef VIPER_NATIVE_HAPTICS
+#include "controller_haptics_mac.h"
+static int send_controller_rumble(SDL_GameController *pad, Uint16 low, Uint16 high, Uint32 duration);
+#define CONTROLLER_RUMBLE_SEND send_controller_rumble
+#endif
+#include "controller_rumble.h"
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef VIPER_NATIVE_HAPTICS
+static int send_controller_rumble(SDL_GameController *pad, Uint16 low, Uint16 high, Uint32 duration) {
+    const char *backend = getenv("RT_RUMBLE_BACKEND");
+    if (SDL_NumJoysticks() == 1 && SDL_GameControllerGetType(pad) == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO &&
+        (!backend || strcmp(backend, "sdl"))) {
+        int result = controller_haptics_rumble((float)SDL_max(low, high) / 65535.0f, duration / 1000.0);
+        if (result > 0) return 0;
+        /* Native discovery may be delayed or the device may not expose haptics. */
+    }
+    controller_haptics_stop();
+    return SDL_GameControllerRumble(pad, low, high, duration);
+}
+#endif
 
 extern uint8_t g_in[8];
 extern int16_t g_analog[4];
@@ -411,6 +429,9 @@ static void pad_button(int b, int down) {
 void nvram_save(void);
 
 int frontend_run(int scale) {
+#ifdef VIPER_NATIVE_HAPTICS
+    controller_haptics_init();
+#endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         rt_log("SDL_Init failed: %s\n", SDL_GetError());
         return -1;
@@ -600,6 +621,9 @@ int frontend_run(int scale) {
     nvram_save();
     if (g_audio) SDL_CloseAudioDevice(g_audio);
     close_pad();
+#ifdef VIPER_NATIVE_HAPTICS
+    controller_haptics_stop();
+#endif
     SDL_Quit();
     return restart ? 2 : 0;
 }

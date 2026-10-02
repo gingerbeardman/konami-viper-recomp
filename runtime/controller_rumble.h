@@ -4,6 +4,10 @@
 #include <math.h>
 #include <stdint.h>
 
+#ifndef CONTROLLER_RUMBLE_SEND
+#define CONTROLLER_RUMBLE_SEND SDL_GameControllerRumble
+#endif
+
 typedef struct {
     SDL_JoystickID id;
     Uint16 strength;
@@ -27,7 +31,7 @@ static void controller_rumble_update(ControllerRumble *state, SDL_GameController
     /* Effects expire even if the window stalls. Refresh at 20 Hz, stop immediately. */
     if (strength == state->strength && (!strength || (Uint32)(now - state->refreshed) < 50)) return;
 #if SDL_VERSION_ATLEAST(2, 0, 9)
-    if (SDL_GameControllerRumble(pad, strength, strength, strength ? 100 : 0) < 0) {
+    if (CONTROLLER_RUMBLE_SEND(pad, strength, strength, strength ? 100 : 0) < 0) {
         SDL_Log("Controller rumble failed: %s", SDL_GetError());
         state->unsupported = 1;  /* no per-frame retries on unsupported devices */
         return;

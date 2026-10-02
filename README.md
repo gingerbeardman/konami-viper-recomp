@@ -418,3 +418,8 @@ use partial stick travel to check for saturation before or after mapping.
 In **Controls**, enable **Show in Game** for a compact live gyro meter at the bottom
 centre while driving. It defaults to off and is saved per game. The meter is hidden
 when gyro is disabled or unavailable; the full preview remains in Controls.
+
+On macOS, a single connected Switch Pro uses GameController/CoreHaptics for rumble,
+while SDL still handles input and sensors. Other controllers and ambiguous multiple-pad
+setups retain SDL rumble. `RT_RUMBLE_BACKEND=sdl` forces SDL output for comparison.
+Native effects use the same short durations and stop on pause/focus loss/disconnect.
