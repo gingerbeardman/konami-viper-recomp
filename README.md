@@ -456,4 +456,9 @@ At the default strength, torque 3–5 now maps to about 22–29% intensity inste
 **Original** follows the game's choice (default), **Nearest** keeps hard texel edges,
 and **Bilinear** blends neighbouring texels. Changes apply immediately and persist
 per game in enhanced mode. Distant-texture minification/mipmap choices stay with the
-game. This controls the Voodoo texture sampler, separately from final window scaling.
+game. Nearest also uses nearest-neighbour final window scaling so menu text stays
+crisp; Original and Bilinear retain bilinear final scaling.
+
+Rumble strength changes are limited to 20 Hz as well as steady-effect refreshes.
+Stop commands remain immediate, and restarting waits one update interval to avoid
+a burst of output commands after pause or focus changes.

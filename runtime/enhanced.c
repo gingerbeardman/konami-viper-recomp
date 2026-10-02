@@ -319,6 +319,7 @@ static void settings_save(void) {
 
 void enh_controller_settings_changed(void) { if (g_enhanced) settings_save(); }
 
+int enh_texture_filter(void) { return g_enhanced ? g_set.texture_filter : 0; }
 int enh_want_fullscreen(void) { return g_enhanced && g_set.fullscreen; }
 void enh_set_fullscreen(int on) { if (g_enhanced && g_set.fullscreen != !!on) { g_set.fullscreen = !!on; settings_save(); } }
 

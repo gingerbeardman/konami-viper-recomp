@@ -124,3 +124,5 @@ int frontend_gyro_ready(void);
 int frontend_rumble_multiplier(void); /* 100 = default strength, range 0..400 */
 void frontend_set_rumble_multiplier(int percent);
 void frontend_set_settings_path(const char *path); /* companion .window file, both game modes */
+
+int enh_texture_filter(void); /* 0 original, 1 nearest, 2 bilinear */

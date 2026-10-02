@@ -20,6 +20,7 @@ void enh_menu_action(int a) { menu_calls++; last_menu_action=a; }
 int enh_name_type(int a) { return a; }
 void enh_name_step(int a) { (void)a; }
 int enh_escape(void) { return 0; }
+int enh_texture_filter(void) { return 0; }
 int enh_want_fullscreen(void) { return 0; }
 void enh_set_fullscreen(int a) { (void)a; }
 void enh_controller_settings_changed(void) {}
