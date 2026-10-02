@@ -9,20 +9,17 @@
 @interface ViperHaptics : NSObject
 @property(nonatomic, strong) GCController *controller;
 @property(nonatomic, strong) CHHapticEngine *engine;
-@property(nonatomic, strong) id<CHHapticAdvancedPatternPlayer> player;
-@property(nonatomic) NSUInteger generation;
-@property(nonatomic) float strength;
+@property(nonatomic, strong) id<CHHapticPatternPlayer> player;
 @property(nonatomic) BOOL restart;
-@property(nonatomic) BOOL logged;
 @end
 @implementation ViperHaptics
 @end
 static ViperHaptics *slot;
+static BOOL failure_logged;
 
 void controller_haptics_init(void) { (void)GCController.controllers; }
 
 void controller_haptics_stop(void) {
-    slot.generation++;
     [slot.player stopAtTime:0 error:NULL];
     slot.player = nil;
 }
@@ -33,13 +30,16 @@ static void discard_slot(void) {
     slot = nil;
 }
 
-static int failed(NSError *error) {
-    if (!slot.logged) {
-        NSLog(@"Viper controller haptics: %@", error.localizedDescription ?: @"could not create or start an effect");
-        slot.logged = YES;
+static int failed(NSString *stage, NSError *error) {
+    if (!failure_logged) {
+        NSLog(@"Viper controller haptics (%@): %@ [%@ %ld]", stage,
+              error.localizedDescription ?: @"could not create or start an effect",
+              error.domain ?: @"unknown", (long)error.code);
+        failure_logged = YES;
     }
-    controller_haptics_stop();
-    slot.restart = YES;
+    /* A helper connection failure can leave the engine unusable. Recreate it
+     * on the adapter's next throttled retry instead of reusing the failed one. */
+    discard_slot();
     return -1;
 }
 
@@ -75,47 +75,29 @@ int controller_haptics_rumble(float strength, double seconds) {
                 dispatch_async(dispatch_get_main_queue(), ^{ weakSlot.restart = YES; weakSlot.player = nil; });
             };
         }
-        if (!slot.engine) return failed(nil);
+        if (!slot.engine) return failed(@"create engine", nil);
         NSError *error = nil;
         if (slot.restart) {
             controller_haptics_stop();
             slot.restart = NO;
         }
-        BOOL starting = slot.player == nil;
-        if (starting) {
-            if (![slot.engine startAndReturnError:&error]) return failed(error);
-            CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc]
-                initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1];
-            CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc]
-                initWithParameterID:CHHapticEventParameterIDHapticSharpness value:.5f];
-            CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous
-                parameters:@[intensity, sharpness] relativeTime:0 duration:1];
-            CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
-            if (!pattern) return failed(error);
-            slot.player = [slot.engine createAdvancedPlayerWithPattern:pattern error:&error];
-            if (!slot.player) return failed(error);
-            slot.player.loopEnabled = YES;
-        }
-        /* Refreshes extend the watchdog without sending another stop/start pair.
-         * Only a changed force needs an output command. */
-        strength = fmaxf(0, fminf(1, strength));
-        if (starting || strength != slot.strength) {
-            CHHapticDynamicParameter *intensity = [[CHHapticDynamicParameter alloc]
-                initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl
-                value:strength relativeTime:0];
-            if (![slot.player sendParameters:@[intensity] atTime:0 error:&error]) return failed(error);
-            slot.strength = strength;
-        }
-        if (starting && ![slot.player startAtTime:0 error:&error]) return failed(error);
-        slot.logged = NO;
-        NSUInteger generation = ++slot.generation;
-        __weak ViperHaptics *weakSlot = slot;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            ViperHaptics *owner = weakSlot;
-            if (owner && owner == slot && owner.generation == generation)
-                controller_haptics_stop();
-        });
+        /* Starting an already running engine is safe. Do not rely on a queued
+         * stopped callback having run before the first effect after pause. */
+        if (![slot.engine startAndReturnError:&error]) return failed(@"start engine", error);
+        controller_haptics_stop();
+        CHHapticEventParameter *intensity = [[CHHapticEventParameter alloc]
+            initWithParameterID:CHHapticEventParameterIDHapticIntensity value:fminf(1, strength)];
+        CHHapticEventParameter *sharpness = [[CHHapticEventParameter alloc]
+            initWithParameterID:CHHapticEventParameterIDHapticSharpness value:.5f];
+        CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous
+            parameters:@[intensity, sharpness] relativeTime:0 duration:seconds];
+        CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
+        if (!pattern) return failed(@"create pattern", error);
+        id<CHHapticPatternPlayer> player = [slot.engine createPlayerWithPattern:pattern error:&error];
+        if (!player) return failed(@"create player", error);
+        if (![player startAtTime:0 error:&error]) return failed(@"start player", error);
+        slot.player = player;
+        failure_logged = NO;
         return 1;
     }
 }
