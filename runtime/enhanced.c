@@ -622,6 +622,8 @@ static void controls_change(int row, int dir) {
     if (row != 2) settings_save();
 }
 
+static const int k_controls_order[] = { -1, 3, 0, 1, 2 }; /* Back, rumble, gyro, overlay, recenter */
+
 static void pause_action(int action) {
     if (g_pause_controls) {
         switch (action) {
@@ -629,11 +631,11 @@ static void pause_action(int action) {
         case ENH_DOWN: g_controls_cursor = (g_controls_cursor + 1) % 5; break;
         case ENH_BACK: g_pause_controls = 0; break;
         case ENH_OK:
-            if (g_controls_cursor == 4) { g_pause_controls = 0; break; }
-            controls_change(g_controls_cursor, 1);
+            if (g_controls_cursor == 0) { g_pause_controls = 0; break; }
+            controls_change(k_controls_order[g_controls_cursor], 1);
             break;
         case ENH_LEFT: case ENH_RIGHT:
-            if (g_controls_cursor < 2 || g_controls_cursor == 3) controls_change(g_controls_cursor, action == ENH_LEFT ? -1 : 1);
+            if (g_controls_cursor > 0 && g_controls_cursor < 4) controls_change(k_controls_order[g_controls_cursor], action == ENH_LEFT ? -1 : 1);
             break;
         default: break;
         }
@@ -702,6 +704,14 @@ void enh_menu_action(int action) {
     if (!enh_menu_active()) return;
     if (g_screen == SCREEN_PAGE) {
         int rows[MAX_GAME_OPTIONS + 2], n = page_rows(g_page, rows);
+        if (g_page == PAGE_CONTROLS && (action == ENH_LEFT || action == ENH_RIGHT || action == ENH_OK)) {
+            if (g_page_cursor == 0) {
+                if (action == ENH_OK) g_screen = SCREEN_OPTIONS;
+            } else if (g_page_cursor != 4 || action == ENH_OK) {
+                controls_change(k_controls_order[g_page_cursor], action == ENH_LEFT ? -1 : 1);
+            }
+            return;
+        }
         switch (action) {
         case ENH_UP: g_page_cursor = (g_page_cursor + n) % (n + 1); break;
         case ENH_DOWN: g_page_cursor = (g_page_cursor + 1) % (n + 1); break;
@@ -810,27 +820,28 @@ static void meter_rect(uint32_t *fb, int x0, int y0, int x1, int y1, uint32_t co
 }
 
 static void draw_controls(uint32_t *fb, int w, int h, int cursor) {
-    const int labels[] = { T_GYRO, T_SHOW_GYRO, T_RECENTER, T_RUMBLE, T_BACK };
-    const int z = FONT_MEDIUM, step = font_height(z);
+    const int labels[] = { T_BACK, T_RUMBLE, T_GYRO, T_SHOW_GYRO, T_RECENTER };
+    const int positions[] = { 68, 112, 156, 188, 220 };
+    const int z = FONT_MEDIUM;
     dim_rect(fb, w, h, 0, 0, w, h, 190);
     draw_centered(fb, w, h, FONT_LARGE, 24, T(T_CONTROLS), 0xffd800);
     for (int i = 0; i < 5; i++) {
         char value[32] = "";
-        if (i == 0) {
+        if (i == 2) {
             if (frontend_gyro_enabled()) snprintf(value, sizeof value, "%.1fX", frontend_gyro_sensitivity() / 100.0);
             else snprintf(value, sizeof value, "%s", T(T_OFF));
         }
-        if (i == 1) snprintf(value, sizeof value, "%s", T(g_set.show_gyro ? T_ON : T_OFF));
-        if (i == 3) {
+        if (i == 3) snprintf(value, sizeof value, "%s", T(g_set.show_gyro ? T_ON : T_OFF));
+        if (i == 1) {
             if (frontend_rumble_multiplier()) snprintf(value, sizeof value, "%.1fX", frontend_rumble_multiplier() / 100.0);
             else snprintf(value, sizeof value, "%s", T(T_OFF));
         }
         uint32_t col = i == cursor ? 0xffd800 : 0xffffff;
-        int y = 68 + i * step;
+        int y = positions[i];
         draw_text(fb, w, h, z, 40, y, T(labels[i]), col);
         draw_text(fb, w, h, z, w - 40 - text_width(z, value), y, value, col);
     }
-    const int centre = w / 2, half = 110, y = 277;
+    const int centre = w / 2, half = 110, y = 345;
     int ready = frontend_gyro_ready();
     double position = ready ? frontend_gyro_position() : 0;
     int marker = centre + (int)lround(fmax(-1, fmin(1, position)) * half);
@@ -843,8 +854,8 @@ static void draw_controls(uint32_t *fb, int w, int h, int cursor) {
     draw_text(fb, w, h, FONT_SMALL, w - 40 - text_width(FONT_SMALL, "R"), y - 11, "R", 0xc0c0c0);
     const char *status = !frontend_gyro_available() ? "NO GYRO CONTROLLER CONNECTED" :
         !frontend_gyro_enabled() ? "GYRO OFF" : !ready ? "HOLD CONTROLLER UPRIGHT" : "HIGHER MEANS LESS TILT";
-    draw_centered(fb, w, h, FONT_SMALL, 304, status, 0xc0c0c0);
-    draw_centered(fb, w, h, FONT_SMALL, 334, "L3: RECENTER   R3: TOGGLE", 0xc0c0c0);
+    draw_centered(fb, w, h, FONT_SMALL, 260, status, 0xc0c0c0);
+    draw_centered(fb, w, h, FONT_SMALL, 291, "L3: RECENTER   R3: TOGGLE", 0xc0c0c0);
 }
 
 

@@ -19,15 +19,15 @@ int main(int argc,char **argv) {
  snprintf(g_settings_path,sizeof g_settings_path,"%s",argv[1]);
  assert(enh_escape()); enh_menu_action(ENH_DOWN);enh_menu_action(ENH_OK);
  assert(g_pause_controls);
- for(int i=0;i<3;i++) enh_menu_action(ENH_DOWN);
+ enh_menu_action(ENH_DOWN);
  enh_menu_action(ENH_RIGHT);assert(multiplier==150);
  for(int i=0;i<20;i++) enh_menu_action(ENH_RIGHT);
  assert(multiplier==400);
  multiplier=100;settings_load();assert(multiplier==400);
  for(int i=0;i<20;i++) enh_menu_action(ENH_LEFT);
- assert(multiplier==0);enh_menu_action(ENH_DOWN);enh_menu_action(ENH_OK);
+ assert(multiplier==0);enh_menu_action(ENH_UP);enh_menu_action(ENH_OK);
  assert(!g_pause_controls&&g_paused);enh_menu_action(ENH_BACK);assert(!g_paused);
- g_frame=g_attract_frame=100;g_screen=SCREEN_PAGE;g_page=PAGE_CONTROLS;g_page_cursor=3;
+ g_frame=g_attract_frame=100;g_screen=SCREEN_PAGE;g_page=PAGE_CONTROLS;g_page_cursor=1;
  enh_menu_action(ENH_RIGHT);assert(multiplier==50);
  remove(g_settings_path);puts("rumble menu navigation, range and saved multiplier: passed");
 }

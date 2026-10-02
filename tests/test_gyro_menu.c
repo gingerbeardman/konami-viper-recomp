@@ -25,17 +25,18 @@ int main(int argc, char **argv) {
  assert(!g_set.show_gyro);
  assert(enh_escape()); assert(g_paused);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(g_pause_controls);
- enh_menu_action(ENH_OK); assert(enabled);
+ enh_menu_action(ENH_RIGHT); assert(!enabled); /* Back is not a setting. */
+ enh_menu_action(ENH_DOWN);enh_menu_action(ENH_RIGHT);assert(rumble==150);
+ enh_menu_action(ENH_DOWN);enh_menu_action(ENH_OK); assert(enabled);
  enh_menu_action(ENH_RIGHT); assert(sensitivity==110);
  enh_menu_action(ENH_LEFT); assert(sensitivity==100);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_RIGHT); assert(g_set.show_gyro);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(recentered==1);
- enh_menu_action(ENH_DOWN); enh_menu_action(ENH_RIGHT); assert(rumble==150);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(!g_pause_controls&&g_paused);
  enh_menu_action(ENH_BACK); assert(!g_paused);
  enabled=0;sensitivity=50;g_set.show_gyro=0;rumble=100;settings_load();assert(enabled&&sensitivity==100&&g_set.show_gyro&&rumble==150);
  remove(g_settings_path);
- g_frame=g_attract_frame=100;g_screen=SCREEN_PAGE;g_page=PAGE_CONTROLS;g_page_cursor=0;
+ g_frame=g_attract_frame=100;g_screen=SCREEN_PAGE;g_page=PAGE_CONTROLS;g_page_cursor=2;
  enh_menu_action(ENH_RIGHT);assert(enabled&&sensitivity==110);
  for(int i=0;i<8;i++) enh_menu_action(ENH_LEFT);
  assert(!enabled&&sensitivity==40);
@@ -47,6 +48,7 @@ int main(int argc, char **argv) {
  enh_menu_action(ENH_DOWN);enh_menu_action(ENH_DOWN);
  enh_menu_action(ENH_LEFT);assert(recentered==1);
  enh_menu_action(ENH_OK);assert(recentered==2);
+ enh_menu_action(ENH_DOWN);enh_menu_action(ENH_OK);assert(g_screen==SCREEN_OPTIONS);
  remove(g_settings_path);
  /* The gameplay meter is opt-in, at the bottom, and absent when gyro is off. */
  g_attract_frame=0; g_frame=500; enabled=1;
