@@ -198,7 +198,7 @@ SDL gyro and accelerometer sensors, such as Nintendo Switch Pro, can steer by ro
 like a small steering wheel. Hold it comfortably in front of you as play begins; that pose
 becomes centre. Click the left stick to recenter. A two-degree deadzone suppresses small
 movements, and 35 degrees of roll gives full steering lock. Use `RT_GYRO_RANGE=45` to change
-the full-lock angle (10–90 degrees).
+the full-lock angle (10–70 degrees).
 
 The gyro is corrected towards gravity to limit drift; hold the controller like a wheel,
 not flat on a table. Gravity correction is suspended during strong acceleration or when
@@ -434,5 +434,8 @@ do not replace the normal window placement. Restored windows are fitted to a cur
 available display, including when a saved monitor has been disconnected.
 
 **Gyro Steering** combines enablement and sensitivity: Left/Right adjusts the multiplier,
-and Left below 0.4× turns it off. Right from Off restores the last sensitivity.
+and Left below 0.5× turns it off. Right from Off restores the last sensitivity.
 R3 still toggles gyro directly; the footer places L3 Recenter before R3 Toggle.
+
+Hold Left/Right to repeat menu value changes. Controller repeat starts after 400 ms
+and advances every 80 ms; keyboard uses its normal key repeat. Confirm never repeats.

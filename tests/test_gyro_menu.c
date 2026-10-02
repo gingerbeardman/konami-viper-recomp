@@ -11,7 +11,7 @@ int frontend_gyro_ready(void) {return 1;}
 double frontend_gyro_position(void) {return .5;}
 int frontend_gyro_sensitivity(void) {return sensitivity;}
 void frontend_gyro_set_enabled(int x) {enabled=x;}
-void frontend_gyro_set_sensitivity(int x) {sensitivity=x<40?40:x>350?350:x;}
+void frontend_gyro_set_sensitivity(int x) {sensitivity=x<50?50:x>350?350:x;}
 void frontend_gyro_recenter(void) {recentered++;}
 void voodoo_set_scale(int n) {(void)n;}
 void voodoo_set_wide(int n) {(void)n;}
@@ -39,10 +39,10 @@ int main(int argc, char **argv) {
  g_frame=g_attract_frame=100;g_screen=SCREEN_PAGE;g_page=PAGE_CONTROLS;g_page_cursor=2;
  enh_menu_action(ENH_RIGHT);assert(enabled&&sensitivity==110);
  for(int i=0;i<8;i++) enh_menu_action(ENH_LEFT);
- assert(!enabled&&sensitivity==40);
+ assert(!enabled&&sensitivity==50);
  enh_menu_action(ENH_LEFT); assert(!enabled);
- enabled=1;sensitivity=100;settings_load();assert(!enabled&&sensitivity==40);
- enh_menu_action(ENH_RIGHT);assert(enabled&&sensitivity==40);
+ enabled=1;sensitivity=100;settings_load();assert(!enabled&&sensitivity==50);
+ enh_menu_action(ENH_RIGHT);assert(enabled&&sensitivity==50);
  for(int i=0;i<40;i++) enh_menu_action(ENH_RIGHT);
  assert(enabled&&sensitivity==350);
  enh_menu_action(ENH_DOWN);enh_menu_action(ENH_DOWN);

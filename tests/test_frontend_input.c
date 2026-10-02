@@ -15,7 +15,8 @@ int enh_start_held(void) { return 0; }
 int enh_inputs_owned(void) { return 0; }
 int enh_menu_active(void) { return menu_active; }
 int enh_name_entry_active(void) { return 0; }
-void enh_menu_action(int a) { (void)a; }
+static int menu_calls, last_menu_action;
+void enh_menu_action(int a) { menu_calls++; last_menu_action=a; }
 int enh_name_type(int a) { return a; }
 void enh_name_step(int a) { (void)a; }
 int enh_escape(void) { return 0; }
@@ -33,6 +34,24 @@ static void axis(SDL_GameControllerAxis a, Sint16 value) {
 }
 
 int main(void) {
+    menu_active=1; g_input_focus=1;
+    menu_pad_press(SDL_CONTROLLER_BUTTON_DPAD_RIGHT, 1000);
+    assert(menu_calls==1 && last_menu_action==ENH_RIGHT);
+    menu_pad_repeat(1399);assert(menu_calls==1);
+    menu_pad_repeat(1400);assert(menu_calls==2);
+    menu_pad_repeat(1479);assert(menu_calls==2);
+    menu_pad_repeat(1480);assert(menu_calls==3);
+    g_input_focus=0;menu_pad_repeat(2000);assert(menu_calls==3 && g_menu_repeat_button==-1);
+    g_input_focus=1;menu_pad_press(SDL_CONTROLLER_BUTTON_A,2100);
+    menu_pad_repeat(3000);assert(menu_calls==4 && last_menu_action==ENH_OK);
+    menu_pad_press(SDL_CONTROLLER_BUTTON_DPAD_LEFT,3100);
+    menu_active=0;menu_pad_repeat(4000);assert(menu_calls==5 && g_menu_repeat_button==-1);
+    menu_active=1;menu_pad_press(SDL_CONTROLLER_BUTTON_DPAD_LEFT,UINT32_MAX-200);
+    menu_pad_repeat(198);assert(menu_calls==6);
+    menu_pad_repeat(199);assert(menu_calls==7 && last_menu_action==ENH_LEFT);
+    menu_active=0;g_menu_repeat_button=-1;
+    frontend_gyro_set_sensitivity(40);assert(frontend_gyro_sensitivity()==50);
+
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "0");
     assert(SDL_Init(SDL_INIT_GAMECONTROLLER) == 0);
     int index = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, SDL_CONTROLLER_AXIS_MAX,

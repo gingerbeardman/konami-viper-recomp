@@ -611,7 +611,7 @@ static void controls_change(int row, int dir) {
     if (row == 0) {
         if (!frontend_gyro_enabled()) {
             if (dir > 0) frontend_gyro_set_enabled(1);
-        } else if (dir < 0 && frontend_gyro_sensitivity() <= 40) {
+        } else if (dir < 0 && frontend_gyro_sensitivity() <= 50) {
             frontend_gyro_set_enabled(0);
         } else {
             frontend_gyro_set_sensitivity(frontend_gyro_sensitivity() + dir * 10);

@@ -165,8 +165,11 @@ static int pad_matches(SDL_JoystickID id) { return g_pad && id == g_pad_id; }
 
 static void update_rumble(int active);
 static int g_rumble_testing;
+static int g_menu_repeat_button = -1;
+static Uint32 g_menu_repeat_at;
 
 static void close_pad(void) {
+    g_menu_repeat_button = -1;
     g_rumble_testing = 0;
     update_rumble(0);
     if (g_pad) SDL_GameControllerClose(g_pad);
@@ -243,7 +246,7 @@ int frontend_gyro_sensitivity(void) {
     return (int)lround(3500.0 / (g_gyro_range * 180 / 3.141592653589793));
 }
 void frontend_gyro_set_sensitivity(int percent) {
-    percent = SDL_clamp(percent, 40, 350);
+    percent = SDL_clamp(percent, 50, 350);
     g_gyro_range = (3500.0 / percent) * 3.141592653589793 / 180;
 }
 void frontend_gyro_recenter(void) { g_gyro.ready = 0; g_gyro_position = 0; }
@@ -390,6 +393,22 @@ static int menu_button(int b) {
     }
 }
 
+/* Repeat only value adjustments; confirmation must never repeat into another page. */
+static void menu_pad_press(int button, Uint32 now) {
+    int action = menu_button(button);
+    g_menu_repeat_button = (action == ENH_LEFT || action == ENH_RIGHT) ? button : -1;
+    g_menu_repeat_at = now + 400;
+    enh_menu_action(action);
+}
+
+static void menu_pad_repeat(Uint32 now) {
+    if (!g_input_focus || !(enh_menu_active() || enh_paused())) g_menu_repeat_button = -1;
+    if (g_menu_repeat_button >= 0 && (Sint32)(now - g_menu_repeat_at) >= 0) {
+        enh_menu_action(menu_button(g_menu_repeat_button));
+        g_menu_repeat_at = now + 80;
+    }
+}
+
 /* enhanced mode, name entry: 1 if the key is the name entry's (the characters themselves come
  * as SDL_TEXTINPUT, which follows the keyboard layout) */
 static int name_key(SDL_Keycode k) {
@@ -461,9 +480,9 @@ int frontend_run(int scale) {
     if (range) {
         char *end;
         double degrees = strtod(range, &end);
-        if (end != range && !*end && isfinite(degrees) && degrees >= 10 && degrees <= 90)
+        if (end != range && !*end && isfinite(degrees) && degrees >= 10 && degrees <= 70)
             g_gyro_range = degrees * 3.141592653589793 / 180;
-        else rt_log("RT_GYRO_RANGE: expected 10..90 degrees; using 35\n");
+        else rt_log("RT_GYRO_RANGE: expected 10..70 degrees; using 35\n");
     }
 #if !SDL_VERSION_ATLEAST(2, 0, 14)
     if (g_gyro_enabled) rt_log("gyro steering requires SDL 2.0.14 or newer\n");
@@ -539,6 +558,7 @@ int frontend_run(int scale) {
             case SDL_WINDOWEVENT:
                 if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
                     g_input_focus = 0;
+                    g_menu_repeat_button = -1;
                     memset(&ctl, 0, sizeof ctl);
                 } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) g_input_focus = 1;
                 break;
@@ -552,7 +572,9 @@ int frontend_run(int scale) {
                     break;
                 }
                 if ((enh_menu_active() || enh_paused()) && menu_key(ev.key.keysym.sym) >= 0) {
-                    if (!ev.key.repeat) enh_menu_action(menu_key(ev.key.keysym.sym));
+                    int action = menu_key(ev.key.keysym.sym);
+                    g_menu_repeat_button = -1;
+                    if (!ev.key.repeat || action == ENH_LEFT || action == ENH_RIGHT) enh_menu_action(action);
                 } else if (ev.key.keysym.sym == SDLK_ESCAPE) {
                     if (!ev.key.repeat && !enh_escape()) running = 0;   /* enhanced: pause / back */
                 }
@@ -574,6 +596,7 @@ int frontend_run(int scale) {
                 if (pad_matches(ev.cdevice.which)) { close_pad(); open_pad(); }
                 break;
             case SDL_CONTROLLERBUTTONDOWN:
+                if (pad_matches(ev.cbutton.which)) g_menu_repeat_button = -1;
                 if (g_gyro_active && g_pad && ev.cbutton.which == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad)) &&
                     ev.cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSTICK) {
                     frontend_gyro_set_enabled(!g_gyro_enabled);
@@ -589,7 +612,7 @@ int frontend_run(int scale) {
                     test_rumble(); break;  /* Switch Capture: test the transport independently of game FFB. */
                 }
 #endif
-                if ((enh_menu_active() || enh_paused()) && menu_button(ev.cbutton.button) >= 0) enh_menu_action(menu_button(ev.cbutton.button));
+                if ((enh_menu_active() || enh_paused()) && menu_button(ev.cbutton.button) >= 0) menu_pad_press(ev.cbutton.button, SDL_GetTicks());
                 else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) {
                     if (!enh_escape()) running = 0;  /* Home: pause/back in play, quit from main menu. */
                 }
@@ -599,11 +622,15 @@ int frontend_run(int scale) {
                 else pad_button(ev.cbutton.button, 1);
                 break;
             case SDL_CONTROLLERBUTTONUP:
-                if (pad_matches(ev.cbutton.which)) pad_button(ev.cbutton.button, 0);
+                if (pad_matches(ev.cbutton.which)) {
+                    if (g_menu_repeat_button == ev.cbutton.button) g_menu_repeat_button = -1;
+                    pad_button(ev.cbutton.button, 0);
+                }
                 break;
             default: break;
             }
         }
+        menu_pad_repeat(SDL_GetTicks());
         update_rumble((SDL_GetWindowFlags(win) & SDL_WINDOW_INPUT_FOCUS) &&
                       !enh_paused() && !enh_menu_active() && !enh_turbo() && !enh_inputs_owned());
         uint64_t now = SDL_GetPerformanceCounter();
