@@ -18,6 +18,7 @@
  *   - widescreen: where the gl library keeps that state.
  */
 #include "runtime.h"
+#include "track_explorer.h"
 #include "game_config.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -159,10 +160,10 @@ static void name_confirm_hook(PPCContext *c) {
 
 typedef struct { uint32_t addr; const char *name; } Hook;
 static const Hook k_hooks[] = GAME_ENH_HOOKS;
-enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM };
+enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_EXPLORER_CAMERA, HOOK_EXPLORER_RACE };
 
 static int hook_kind(uint32_t pc) {
-    static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm" };
+    static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm", "explorer_camera", "explorer_race" };
     for (const Hook *h = k_hooks; h->name; h++)
         if (h->addr == pc)
             for (int k = 1; k < (int)(sizeof names / sizeof names[0]); k++)
@@ -172,6 +173,8 @@ static int hook_kind(uint32_t pc) {
 
 void rt_hook(PPCContext *c, uint32_t pc) {
     switch (hook_kind(pc)) {
+    case HOOK_EXPLORER_CAMERA: if (g_enhanced) explorer_camera(c, g_frame); break;
+    case HOOK_EXPLORER_RACE: if (g_enhanced) explorer_race(c); break;
     case HOOK_NAME_INDEX: if (g_enhanced) name_index_hook(c); break;
     case HOOK_NAME_CONFIRM: if (g_enhanced) name_confirm_hook(c); break;
     case HOOK_ATTRACT: g_attract_frame = g_frame ? g_frame : 1; break;
@@ -245,6 +248,7 @@ static int count_game_options(void);
 void enh_on_frame(const uint32_t *buf, int w, int h) {
     if (!g_enhanced) return;
     g_frame++;
+    explorer_on_frame(g_frame);
     fps_tick(buf, w, h);
     if (g_enh_log < 0) g_enh_log = getenv("RT_ENH_LOG") != NULL;
     int attract = g_attract_frame && g_frame - g_attract_frame <= ATTRACT_GRACE_FRAMES;
@@ -891,6 +895,7 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
         draw_centered(fb, w, h, FONT_MEDIUM, h / 2 - font_height(FONT_MEDIUM) / 2, T(g_apply == 1 || g_apply == 2 ? T_APPLYING : T_LOADING), 0xffffff);
         return;
     }
+    if (explorer_active()) draw_centered(fb, w, h, FONT_SMALL, h - 18, "DRONE: F6 EXIT  [ ] SPEED  - + HEIGHT", 0xffd800);
     if (g_paused && !g_pause_controls) {
         const int z = FONT_MEDIUM, step = font_height(z) + 8;
         static const int items[3] = { T_RESUME, T_CONTROLS, T_MAIN_MENU };
@@ -996,6 +1001,7 @@ static void scripted_menu(void) {
         double t = strtod(next, &colon);
         if (*colon != ':' || (double)rt_now() / CPU_HZ < t) return;
         const char *a = colon + 1;
+        if (!strncmp(a, "drone", 5)) { explorer_toggle(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
         if (!strncmp(a, "esc", 3)) { enh_escape(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
         if (!strncmp(a, "name=", 5)) {
             for (a += 5; *a && *a != ','; a++) enh_name_type(*a == '<' ? '\b' : *a == '>' ? '\r' : *a);

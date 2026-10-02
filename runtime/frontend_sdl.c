@@ -16,6 +16,7 @@
  *   F11 fullscreen, Esc quit
  */
 #include "runtime.h"
+#include "track_explorer.h"
 #include "game_config.h"
 #include "controller_math.h"
 
@@ -606,6 +607,14 @@ int frontend_run(int scale) {
                 } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) g_input_focus = 1;
                 break;
             case SDL_KEYDOWN:
+#ifdef GAME_ENH_HOOK_EXPLORER_CAMERA
+                if (g_enhanced && ev.key.keysym.sym == SDLK_F6) { if (!ev.key.repeat) explorer_toggle(); break; }
+#endif
+                if (explorer_active()) {
+                    SDL_Keycode k = ev.key.keysym.sym;
+                    if (k == SDLK_LEFTBRACKET || k == SDLK_RIGHTBRACKET) { explorer_adjust(k == SDLK_LEFTBRACKET ? -10 : 10, 0); break; }
+                    if (k == SDLK_MINUS || k == SDLK_EQUALS) { explorer_adjust(0, k == SDLK_MINUS ? -2 : 2); break; }
+                }
                 if (ev.key.keysym.sym == SDLK_F8) { if (!ev.key.repeat) test_rumble(); break; }
                 if (ev.key.keysym.sym == SDLK_F9) {
                     if (!ev.key.repeat) {
