@@ -138,8 +138,10 @@ static double controller_option(const char *name, double fallback, double lo, do
 static int pad_matches(SDL_JoystickID id) { return g_pad && id == g_pad_id; }
 
 static void update_rumble(int active);
+static int g_rumble_testing;
 
 static void close_pad(void) {
+    g_rumble_testing = 0;
     update_rumble(0);
     if (g_pad) SDL_GameControllerClose(g_pad);
     g_pad = NULL;
@@ -166,6 +168,14 @@ static void open_pad(void) {
 static atomic_uchar g_motor_output;
 static ControllerRumble g_rumble = { .id = -1 };
 static double g_rumble_gain = 0.5;
+static Uint32 g_rumble_test_started;
+
+static void test_rumble(void) {
+    if (!g_pad) { rt_log("rumble test: no controller connected\n"); return; }
+    g_rumble_test_started = SDL_GetTicks();
+    g_rumble_testing = 1;
+    rt_log("rumble test: one second at 75%% strength\n");
+}
 
 /* Guest publishes motor commands; SDL calls stay on the host main thread. */
 void frontend_set_motor(uint8_t command) {
@@ -173,6 +183,14 @@ void frontend_set_motor(uint8_t command) {
 }
 
 static void update_rumble(int active) {
+    Uint32 now = SDL_GetTicks();
+    SDL_Window *window = SDL_GetKeyboardFocus();
+    if (g_rumble_testing && (!window || (Uint32)(now - g_rumble_test_started) >= 1000))
+        g_rumble_testing = 0;
+    if (g_rumble_testing) {
+        controller_rumble_update(&g_rumble, g_pad, 0x8f, .75, 1, now);
+        return;
+    }
     controller_rumble_update(&g_rumble, g_pad,
         atomic_load_explicit(&g_motor_output, memory_order_relaxed),
         g_rumble_gain, active, SDL_GetTicks());
@@ -457,6 +475,7 @@ int frontend_run(int scale) {
                 } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) g_input_focus = 1;
                 break;
             case SDL_KEYDOWN:
+                if (ev.key.keysym.sym == SDLK_F8) { if (!ev.key.repeat) test_rumble(); break; }
                 if ((enh_menu_active() || enh_paused()) && menu_key(ev.key.keysym.sym) >= 0) {
                     if (!ev.key.repeat) enh_menu_action(menu_key(ev.key.keysym.sym));
                 } else if (ev.key.keysym.sym == SDLK_ESCAPE) {
@@ -489,6 +508,12 @@ int frontend_run(int scale) {
                     break;
                 }
                 if (!pad_matches(ev.cbutton.which) || !g_input_focus) break;
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+                if (g_pad && ev.cbutton.which == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad)) &&
+                    SDL_GetKeyboardFocus() && ev.cbutton.button == SDL_CONTROLLER_BUTTON_MISC1) {
+                    test_rumble(); break;  /* Switch Capture: test the transport independently of game FFB. */
+                }
+#endif
                 if ((enh_menu_active() || enh_paused()) && menu_button(ev.cbutton.button) >= 0) enh_menu_action(menu_button(ev.cbutton.button));
                 else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) enh_escape();
                 else if (enh_name_entry_active() && !enh_paused() && (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ||
@@ -542,6 +567,7 @@ int frontend_run(int scale) {
         SDL_RenderCopy(ren, tex, NULL, NULL);
         SDL_RenderPresent(ren);       /* vsync paces this loop */
     }
+    g_rumble_testing = 0;
     update_rumble(0);
     nvram_save();
     if (g_audio) SDL_CloseAudioDevice(g_audio);

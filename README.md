@@ -400,3 +400,8 @@ Left/Right adjusts the selected setting, and A/Enter confirms. Sensitivity defau
 shows the current sensitivity while driving. Gyro and sensitivity are saved per game.
 R3 toggles gyro and L3 recenters without opening a menu. Recenter from Pause takes
 the controller's neutral position when driving resumes.
+Press **F8** or the Switch Pro **Capture** button in the focused game window for a
+one-second rumble test at 75% strength, including while paused. This checks the
+controller output independently of cabinet motor commands and `RT_RUMBLE` gain.
+A controller error is logged once; lack of physical vibration still needs checking
+on the actual controller even if the API accepts the request.

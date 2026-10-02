@@ -28,6 +28,7 @@ static void controller_rumble_update(ControllerRumble *state, SDL_GameController
     if (strength == state->strength && (!strength || (Uint32)(now - state->refreshed) < 50)) return;
 #if SDL_VERSION_ATLEAST(2, 0, 9)
     if (SDL_GameControllerRumble(pad, strength, strength, strength ? 100 : 0) < 0) {
+        SDL_Log("Controller rumble failed: %s", SDL_GetError());
         state->unsupported = 1;  /* no per-frame retries on unsupported devices */
         return;
     }
