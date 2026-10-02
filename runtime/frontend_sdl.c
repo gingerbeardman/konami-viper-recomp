@@ -27,6 +27,7 @@ static int send_controller_rumble(SDL_GameController *pad, Uint16 low, Uint16 hi
 #define CONTROLLER_RUMBLE_SEND send_controller_rumble
 #endif
 #include "controller_rumble.h"
+#include "window_state.h"
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,11 @@ static int send_controller_rumble(SDL_GameController *pad, Uint16 low, Uint16 hi
     return SDL_GameControllerRumble(pad, low, high, duration);
 }
 #endif
+static char g_window_state_path[1024];
+void frontend_set_settings_path(const char *path) {
+    if (snprintf(g_window_state_path, sizeof g_window_state_path, "%s.window", path) >= (int)sizeof g_window_state_path)
+        g_window_state_path[0] = 0;
+}
 
 extern uint8_t g_in[8];
 extern int16_t g_analog[4];
@@ -463,8 +469,25 @@ int frontend_run(int scale) {
     if (g_gyro_enabled) rt_log("gyro steering requires SDL 2.0.14 or newer\n");
 #endif
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
-    SDL_Window *win = SDL_CreateWindow(g_enhanced ? GAME_TITLE " - enhanced" : GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                       512 * scale, 384 * scale, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    SDL_Rect window_rect = { SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 512 * scale, 384 * scale };
+    window_state_load(g_window_state_path, &window_rect);
+    int count = SDL_GetNumVideoDisplays(), usable = 0;
+    SDL_Rect *displays = count > 0 ? calloc((size_t)count, sizeof *displays) : NULL;
+    if (displays) {
+        for (int i = 0; i < count; i++)
+            if (SDL_GetDisplayUsableBounds(i, &displays[usable]) == 0 || SDL_GetDisplayBounds(i, &displays[usable]) == 0)
+                usable++;
+        window_state_fit(&window_rect, displays, usable);
+        free(displays);
+    }
+    SDL_Window *win = SDL_CreateWindow(g_enhanced ? GAME_TITLE " - enhanced" : GAME_TITLE,
+        window_rect.x, window_rect.y, window_rect.w, window_rect.h,
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    if (!win) { rt_log("SDL_CreateWindow failed: %s\n", SDL_GetError()); SDL_Quit(); return -1; }
+    SDL_SetWindowMinimumSize(win, 320, 240);
+    window_state_capture(win, &window_rect);
+    int window_dirty = 0;
+    Uint32 window_changed = 0;
     if (getenv("RT_RESTARTED")) {       /* enhanced mode, after a restart: macOS does not reactivate */
         unsetenv("RT_RESTARTED");       /* the re-executed program, so take the focus back */
         SDL_SetHint("SDL_FORCE_RAISEWINDOW", "1");
@@ -620,9 +643,17 @@ int frontend_run(int scale) {
         SDL_RenderClear(ren);
         SDL_RenderCopy(ren, tex, NULL, NULL);
         SDL_RenderPresent(ren);       /* vsync paces this loop */
+        Uint32 window_now = SDL_GetTicks();
+        if (window_state_capture(win, &window_rect)) { window_dirty = 1; window_changed = window_now; }
+        if (window_dirty && (Uint32)(window_now - window_changed) >= 500) {
+            if (!window_state_save(g_window_state_path, &window_rect)) rt_log("could not save game window position\n");
+            window_dirty = 0;
+        }
     }
     g_rumble_testing = 0;
     update_rumble(0);
+    window_state_capture(win, &window_rect);
+    window_state_save(g_window_state_path, &window_rect);
     nvram_save();
     if (g_audio) SDL_CloseAudioDevice(g_audio);
     close_pad();

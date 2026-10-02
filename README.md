@@ -428,3 +428,7 @@ Native effects use the same short durations and stop on pause/focus loss/disconn
 from 0.0× (off) to 4.0× in 0.5× steps. 1.0× retains the default strength; boosting
 amplifies quieter cabinet motor commands and clamps at the controller's maximum.
 Capture / F8 remains a fixed-strength transport test, independent of this multiplier.
+Window position and size are remembered per game in a `.window` companion to its
+settings file, in both original and enhanced modes. Fullscreen and maximized bounds
+do not replace the normal window placement. Restored windows are fitted to a currently
+available display, including when a saved monitor has been disconnected.
