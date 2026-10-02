@@ -449,3 +449,8 @@ In enhanced mode, **Home / Guide** behaves like **Esc**: pause during a race,
 back out of an options page, and quit from the main menu. In Pause, choose
 **Main Menu** to leave the race, or **Resume** / B / Home to continue driving.
 A / Start still confirms menu choices. In original arcade mode, Home / Esc quits.
+
+Window position and size are remembered per game in a `.window` companion to its
+settings file, in both original and enhanced modes. Fullscreen and maximized bounds
+do not replace the normal window placement. Restored windows are fitted to a currently
+available display, including when a saved monitor has been disconnected.

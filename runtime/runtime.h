@@ -123,3 +123,5 @@ double frontend_gyro_position(void); /* normalized steering, also live while pau
 int frontend_gyro_ready(void);
 int frontend_rumble_multiplier(void); /* 100 = default strength, range 0..400 */
 void frontend_set_rumble_multiplier(int percent);
+
+void frontend_set_settings_path(const char *path); /* companion .window file, both game modes */
