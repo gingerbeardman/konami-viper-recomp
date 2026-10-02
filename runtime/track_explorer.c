@@ -126,7 +126,7 @@ void explorer_camera(PPCContext *c, uint64_t frame) {
     STF32(0x8c1cf8, eye.x); STF32(0x8c1cfc, altitude); STF32(0x8c1d00, eye.z);
     STF32(0x8c1d04, atan2f(target_y-altitude, hypotf(target.x-eye.x, target.z-eye.z)));
     /* The camera looks along local -Z, opposite the road heading convention. */
-    STF32(0x8c1d08, atan2f(eye.x-target.x, eye.z-target.z) + atomic_load(&look) * 1.57079632679f);
+    STF32(0x8c1d08, atan2f(eye.x-target.x, eye.z-target.z) - atomic_load(&look) * 1.57079632679f);
     STF32(0x8c1d0c, 0);
 }
 void explorer_race(PPCContext *c) {
