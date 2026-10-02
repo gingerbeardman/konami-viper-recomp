@@ -405,3 +405,7 @@ one-second rumble test at 75% strength, including while paused. This checks the
 controller output independently of cabinet motor commands and `RT_RUMBLE` gain.
 A controller error is logged once; lack of physical vibration still needs checking
 on the actual controller even if the API accepts the request.
+In enhanced mode, **Home / Guide** behaves like **Esc**: pause during a race,
+back out of an options page, and quit from the main menu. In Pause, choose
+**Main Menu** to leave the race, or **Resume** / B / Home to continue driving.
+A / Start still confirms menu choices. In original arcade mode, Home / Esc quits.

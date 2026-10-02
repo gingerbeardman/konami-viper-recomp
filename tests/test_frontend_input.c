@@ -21,6 +21,7 @@ void enh_name_step(int a) { (void)a; }
 int enh_escape(void) { return 0; }
 int enh_want_fullscreen(void) { return 0; }
 void enh_set_fullscreen(int a) { (void)a; }
+void enh_controller_settings_changed(void) {}
 int enh_quit_requested(void) { return 0; }
 int enh_restart_requested(void) { return 0; }
 void enh_draw_overlay(uint32_t *f, int w, int h) { (void)f; (void)w; (void)h; }
