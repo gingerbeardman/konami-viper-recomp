@@ -824,7 +824,7 @@ static void draw_menu(uint32_t *fb, int w, int h) {
         draw_text(fb, w, h, z, left, y + step / 2, T(T_BACK), g_page_cursor == n ? yellow : white);
     } else {
         static const int heads[] = { T_ORIGINAL_GAME, T_RECOMPILATION, T_VOODOO };
-        static const char *const names[] = { "KONAMI", "KONAMI VIPER RECOMP", "MAME" };
+        static const char *const names[] = { "KONAMI", "SPITA90", "MAME" };
         dim_rect(fb, w, h, 0, 0, w, h, 190);
         draw_centered(fb, w, h, FONT_LARGE, 24, T(T_CREDITS), yellow);
         for (int i = 0, y = 90; i < 3; i++, y += 78) {

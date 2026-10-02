@@ -568,8 +568,8 @@ An optional layer on top of the faithful port, in development. Everything is gat
   and uses no 2D engine.
 - **Thrill Drive 2** also draws into three off-screen colour buffers (`0x4000`, `0x8000`,
   `0x15B000`), probably textures it renders itself (the rear-view mirror). It uses the 2D engine:
-  about 80,000 screen-to-screen blits, which MAME's core leaves unimplemented (`TODO`), and about
-  3 million host-to-screen blits.
+  about 80,000 screen-to-screen blits, which MAME's core leaves unimplemented (`TODO`; now
+  implemented here, see "Motion blur" below), and about 3 million host-to-screen blits.
 - **Triangle setup.** Most triangles come through the setup engine (CMDFIFO packet type 3), which
   derives the gradients from the vertices. Scaling the vertex coordinates by N therefore renders
   the same scene at N× resolution.
@@ -613,8 +613,37 @@ An optional layer on top of the faithful port, in development. Everything is gat
     compared over attract and race.
   - Speed: 70 emulated seconds take 15.7 s at 2× on GTI Club 2 and 20.6 s on TD2, against
     about 7 s at 1×.
-  - TD2's 2D host-to-screen blits and the unimplemented screen-to-screen blits still act on VRAM
-    only. No missing element was seen at 2×, but this was not checked in depth.
+  - TD2's 2D host-to-screen blits act on VRAM only. Its screen-to-screen blits read a displayed
+    colour buffer from its scaled render target (see "Motion blur" below).
+
+**Motion blur** (Thrill Drive 2, `screen_to_screen_blit` in `voodoo_banshee.cpp`). In the attract
+mode and on the CRASHED replay the picture used to fill with multicoloured noise; on a cabinet
+those moments show a motion blur.
+- After each frame the game copies the finished picture (the tiled colour buffer `0x6DE000` or
+  `0x73E000`, 512×384) into four 256-wide textures, one line per screen-to-screen blit (ROP
+  `0xCC`, `INC_Y_START`, the source row in the launch data, bottom row first): rows 383–128 of
+  the left and right halves into `0x00C000` and `0x02C000` (256×256), rows 127–0 into `0x04C000`
+  and `0x05C000` (256×128). It then draws them over the next frame as four quads (RGB565,
+  texture × iterated colour 255, alpha blending with an iterated alpha ramping from 0 to 127,
+  4×4 dither).
+- MAME's core leaves screen-to-screen blits as a `TODO`, so the textures held stale VRAM, which
+  the blending showed as noise.
+- The implementation reads a tiled surface linearly with its stride in 128-byte tiles (the
+  layout the 3D side writes), applies the ROP (pattern taken as 0), clips the destination and
+  advances `dstXY` for `INC_X_START`/`INC_Y_START`.
+- **Widescreen** (`blur_quad` in `voodoo.cpp`). The textures hold the native 4:3 picture, so
+  drawn as they are the blur would stop at the 4:3 edges.
+  While copying, the blits also keep the source at full resolution, margins included
+  (`m_blur_frame`, from the scaled render target), and record which source row each texture row
+  holds. When the game draws one of those quads, and it maps the copy back one texel per pixel
+  onto the same place (rows, columns, texture gradients checked), the quad is drawn there
+  instead of being rasterized: the same arithmetic as the rasterizer (texture colour × iterated
+  colour, source alpha / one minus source alpha with the iterated alpha, the same dither) at
+  every scaled pixel, from the full-resolution copy, with a quad that reaches a 4:3 edge
+  extended to the margin. So there is one blur, the game's, over the whole picture. It runs
+  after waiting for the renderer, in drawing order (scene before, HUD after); the first triangle
+  of a quad draws all of it and the second is skipped. Only the widescreen formats use it: at
+  4:3, 1X or 2X, the rasterizer draws the quads from the textures, as on the hardware.
 
 ## 5c. Widescreen (enhanced mode, DISPLAY → ASPECT RATIO)
 
@@ -658,7 +687,7 @@ transform, keeps its 4:3 layout in the centre.
   512) is widened to the margins; any other is moved by M.
 - An untextured triangle spanning exactly x = 0…512 (the fades to a colour) is stretched about
   the centre to the full width, with its x gradients divided by k. The textured full-screen
-  effects stay 4:3: TD2's crash noise is not a single quad.
+  effects stay 4:3, except TD2's motion blur, drawn over the whole picture (section 5b).
 - The emulated cost of a draw is scaled back to the native 4:3 area (`hires_native_pixels`).
 - A front buffer without a scaled target (no triangles since the option changed, or only 2D
   blits) is published enlarged and centred, so the frame size never changes from frame to

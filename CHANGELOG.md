@@ -5,9 +5,23 @@ All notable changes to this project are listed here. The format follows
 [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a new minor
 version can change the build, the profiles or the command-line options.
 
+## [0.8.2] - 2026-10-02
+
+### Fixed
+
+- **Thrill Drive 2: motion blur.** The attract mode and the CRASHED replay showed full-screen
+  multicoloured noise where a cabinet shows a motion blur. The game copies each frame into
+  textures with 2D screen-to-screen blits, which MAME's Voodoo core leaves unimplemented; the
+  Voodoo core now performs them (also at 2X). GTI Club 2 uses no 2D blits.
+
+### Changed
+
+- **Enhanced mode, CREDITS:** the static recompilation is credited to SPITA90.
+
 ## [0.8.1] - 2026-10-02
 
 ### Added
+
 - **All file names:** every file of the five versions now has its real name
   (`tools/names.txt`), found by hashing candidate paths, so nothing is extracted to `_unk/`.
   **Run `make extract` again** for each game: the enhanced-mode font now comes from
@@ -17,11 +31,13 @@ version can change the build, the profiles or the command-line options.
   unused title logos, test data, factory tools.
 
 ### Changed
+
 - `make extract` empties `work/<id>/fs/` first, so files extracted under old names do not stay.
 
 ## [0.8.0] - 2026-10-02
 
 ### Added
+
 - **Enhanced mode, rankings name entry from the keyboard** (Thrill Drive 2 EBB, JAA, AAA; GTI
   Club 2 JAB, EAA): the initials are typed instead of being chosen with the steering wheel.
   Backspace deletes, Enter ends the name; Left/Right (or the D-pad) and the accelerator still
@@ -29,12 +45,14 @@ version can change the build, the profiles or the command-line options.
   and the profile's `name_entry` section describe each game's routine.
 
 ### Changed
+
 - **Keyboard:** WASD drives too (A/D steer, W accelerator, S brake), next to the arrows, and
   moves through the enhanced-mode menus. The gear shift moves from A/Z to **E** (up) and **Q**
   (down). A control held by two keys or buttons (e.g. ↑ and the gamepad's A) is released only
   when both are.
 
 ### Fixed
+
 - **macOS:** holding a letter key (WASD while driving) no longer opens the system's accent
   picker. Text input is now on only during the enhanced mode's name entry.
 - **Enhanced mode, macOS:** after a restart for new settings the game window takes the focus
@@ -43,6 +61,7 @@ version can change the build, the profiles or the command-line options.
 ## [0.7.0] - 2026-10-01
 
 ### Changed
+
 - **GTI Club 2:** PROMOTION MODE is on by default, in the classic and the enhanced mode. The
   first-run calibration sets it (`calibration.nvram_set` `0x85` = `0x80`); ver EAA's starting
   NVRAM already had it, ver JAB's did not. TEST MODE can still turn it off in the classic mode.
@@ -51,16 +70,19 @@ version can change the build, the profiles or the command-line options.
 ## [0.6.1] - 2026-10-01
 
 ### Fixed
+
 - **Enhanced mode, 2X:** stray coloured pixels along the top and left edges of the menu
   letters. The bilinear font sampling truncated the coordinate −1/4 to 0 instead of flooring
   it, so it extrapolated and the alpha overflowed.
 
 ### Changed
+
 - **README:** the enhanced-mode screenshots show both games at 2X and 16:9.
 
 ## [0.6.0] - 2026-10-01
 
 ### Added
+
 - `make game GAME=<id>` extracts, recompiles and builds a game in one step.
 - **Widescreen** (enhanced mode, DISPLAY → ASPECT RATIO): 4:3, 16:10, 16:9 or 21:9, at 1X and
   2X, for Thrill Drive 2 (EBB, JAA, AAA) and GTI Club 2 (JAB, EAA). The game draws more of the
@@ -74,6 +96,7 @@ version can change the build, the profiles or the command-line options.
   addresses (`GAME_ENH_HOOKS`).
 
 ### Fixed
+
 - **2X resolution:** flickering road decals (zebra crossings, the start line, lane markings).
   The rasterizer measures every parameter from the whole pixel holding vertex A; at 2X that
   pixel is a different fraction of a native pixel for each triangle, so coplanar decals and the
@@ -82,6 +105,7 @@ version can change the build, the profiles or the command-line options.
   strongly from the native picture are about halved, and what remains is edges.
 
 ### Changed
+
 - **Enhanced mode:** COIN is ignored too, like TEST and SERVICE (the game is on free play).
 - **Enhanced mode:** a colon missing from the game font (Thrill Drive 2) is drawn as two full
   stops.
@@ -92,6 +116,7 @@ version can change the build, the profiles or the command-line options.
 ## [0.5.0] - 2026-09-30
 
 ### Added
+
 - **Thrill Drive 2 ver JAA (`thrild2j`) and ver AAA (`thrild2a`):** boot and race, with
   automatic calibration.
   - Their cabinet is the GTI Club 2 JAB one (K-type force-feedback wheel and a handbrake), so
@@ -102,15 +127,18 @@ version can change the build, the profiles or the command-line options.
 - **Profiles:** `calibration.nvram_set` writes NVRAM bytes after the calibration.
 
 ### Changed
+
 - **Profiles:** `nvram_options` moved from `enhanced` to the top level.
 
 ### Removed
+
 - **Thrill Drive 2 ver EAA (`thrild2c`):** profile and ROM folder removed. MAME marks the only
   known CF dump as bad, and its NVRAM has never been dumped.
 
 ## [0.4.0] - 2026-09-30
 
 ### Added
+
 - **Rendering resolution** (enhanced mode, DISPLAY page): 512×384 or 1024×768 internal.
   - The displayed colour buffers are rendered at twice the resolution in host memory, with
     scaled vertices and gradients. Off-screen render targets stay native.
@@ -126,6 +154,7 @@ version can change the build, the profiles or the command-line options.
 ## [0.3.0] - 2026-09-30
 
 ### Added
+
 - **Enhanced mode** (`--enhanced`): an optional mode that makes the ports behave like PC games,
   for Thrill Drive 2 EBB and GTI Club 2 JAB and EAA. The default mode is unchanged.
   - **Free play:** set up on first launch through TEST MODE, after the calibration. The
@@ -155,21 +184,25 @@ version can change the build, the profiles or the command-line options.
 - `--settings FILE` selects the enhanced-mode settings file.
 
 ### Changed
+
 - Unverified profiles (`thrild2j`, `thrild2a`, `thrild2c`) do not inherit the enhanced mode.
 
 ## [0.2.1] - 2026-09-30
 
 ### Fixed
+
 - **Voodoo texture corruption:** noise on walls, street lights, headlights, fog and lens flares,
   also present in MAME's Voodoo core. With multibase textures, the hardware adds each LOD's
   offset within the mipmap chain to its base register, and the core now does the same.
 
 ### Added
+
 - `RT_VOODOO_TEXLOG=1` logs each new texture setup.
 
 ## [0.2.0] - 2026-09-29
 
 ### Added
+
 - **GTI Club 2:** GTI Club: Corso Italiano (ver JAB) and Driving Party: Racing in Italy
   (ver EAA) boot and are playable, with automatic calibration.
   - **Handbrake:** JAB has one and calibrates it. EAA has none, as its cabinet configuration
@@ -180,6 +213,7 @@ version can change the build, the profiles or the command-line options.
 - Breakpoint output includes r0.
 
 ### Fixed
+
 - **Boot word r31** is built from IN2 like the BIOS does. Before, GTI Club 2 EAA showed its
   password lock screen.
 - **Default paths** are resolved against the executable's directory, so a game can be started
@@ -188,11 +222,13 @@ version can change the build, the profiles or the command-line options.
 ## [0.1.0] - 2026-09-29
 
 ### Added
+
 - **First public release:** static recompilation of Konami Viper games. Thrill Drive 2
   (ver EBB) is playable at 30 fps with sound, and steering and pedals are calibrated
   automatically.
 
-[0.8.1]: https://github.com/spita90/konami-viper-recomp/compare/f5a9a22...HEAD
+[0.8.2]: https://github.com/spita90/konami-viper-recomp/compare/07e7a08...HEAD
+[0.8.1]: https://github.com/spita90/konami-viper-recomp/compare/f5a9a22...07e7a08
 [0.8.0]: https://github.com/spita90/konami-viper-recomp/compare/01f29bd...f5a9a22
 [0.7.0]: https://github.com/spita90/konami-viper-recomp/compare/c041b6b...01f29bd
 [0.6.1]: https://github.com/spita90/konami-viper-recomp/compare/9b71187...c041b6b

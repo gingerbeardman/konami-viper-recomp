@@ -680,6 +680,11 @@ protected:
 	std::vector<u32> m_hires_out;
 	int m_hires_out_w = 0, m_hires_out_h = 0;
 	bool m_hires_out_valid = false;                             // pointer to aligned framebuffer
+	// recomp: Thrill Drive 2's motion blur at the scaled resolution (blur_quad)
+	struct blur_tex { std::vector<s16> srcrow; s32 coloffs; unsigned long long filled, done; };
+	std::vector<u16> m_blur_frame;                              // the last copied frame, scaled target layout
+	std::unordered_map<u32, blur_tex> m_blur_tex;               // textures copied from a displayed buffer
+	bool blur_quad(voodoo::poly_data const &poly, voodoo::voodoo_renderer::vertex_t const *vert, u16 *target);
 	u32 m_fbmask;                            // mask to apply to pointers
 	std::unique_ptr<u8[]> m_memory;          // allocated framebuffer/texture memory
 	std::unique_ptr<voodoo::shared_tables> m_shared; // shared tables
