@@ -79,6 +79,7 @@ void nvram_save(void);
 void rt_pace_vblank(void);
 void audio_frontend_push(const uint8_t *blk);
 int frontend_run(int scale);
+void frontend_set_motor(uint8_t command); /* guest -> host, atomic cabinet motor output */
 uint32_t hw_read(uint32_t ea, int size);
 void hw_write(uint32_t ea, int size, uint32_t v);
 
@@ -120,3 +121,5 @@ void frontend_gyro_recenter(void);
 void enh_controller_settings_changed(void);
 double frontend_gyro_position(void); /* normalized steering, also live while paused */
 int frontend_gyro_ready(void);
+int frontend_rumble_multiplier(void); /* 100 = default strength, range 0..400 */
+void frontend_set_rumble_multiplier(int percent);

@@ -2,6 +2,9 @@
 #include <assert.h>
 static int enabled, sensitivity=100, recentered;
 uint8_t *g_ram;
+static int rumble=100;
+int frontend_rumble_multiplier(void) { return rumble; }
+void frontend_set_rumble_multiplier(int v) { rumble=v<0?0:v>400?400:v; }
 int frontend_gyro_enabled(void) {return enabled;}
 int frontend_gyro_available(void) {return 1;}
 int frontend_gyro_ready(void) {return 1;}
@@ -22,7 +25,8 @@ int main(int argc, char **argv) {
  assert(!g_set.show_gyro);
  assert(enh_escape()); assert(g_paused);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(g_pause_controls);
- enh_menu_action(ENH_RIGHT);assert(!enabled);
+ enh_menu_action(ENH_RIGHT); assert(!enabled); /* Back is not a setting. */
+ enh_menu_action(ENH_DOWN);enh_menu_action(ENH_RIGHT);assert(rumble==150);
  enh_menu_action(ENH_DOWN);enh_menu_action(ENH_OK); assert(enabled);
  enh_menu_action(ENH_RIGHT); assert(sensitivity==110);
  enh_menu_action(ENH_LEFT); assert(sensitivity==100);
@@ -30,9 +34,9 @@ int main(int argc, char **argv) {
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(recentered==1);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(!g_pause_controls&&g_paused);
  enh_menu_action(ENH_BACK); assert(!g_paused);
- enabled=0;sensitivity=50;g_set.show_gyro=0;settings_load();assert(enabled&&sensitivity==100&&g_set.show_gyro);
+ enabled=0;sensitivity=50;g_set.show_gyro=0;rumble=100;settings_load();assert(enabled&&sensitivity==100&&g_set.show_gyro&&rumble==150);
  remove(g_settings_path);
- g_frame=g_attract_frame=100;g_screen=SCREEN_PAGE;g_page=PAGE_CONTROLS;g_page_cursor=1;
+ g_frame=g_attract_frame=100;g_screen=SCREEN_PAGE;g_page=PAGE_CONTROLS;g_page_cursor=2;
  enh_menu_action(ENH_RIGHT);assert(enabled&&sensitivity==110);
  for(int i=0;i<8;i++) enh_menu_action(ENH_LEFT);
  assert(!enabled&&sensitivity==50);
@@ -44,6 +48,7 @@ int main(int argc, char **argv) {
  enh_menu_action(ENH_DOWN);enh_menu_action(ENH_DOWN);
  enh_menu_action(ENH_LEFT);assert(recentered==1);
  enh_menu_action(ENH_OK);assert(recentered==2);
+ enh_menu_action(ENH_DOWN);enh_menu_action(ENH_OK);assert(g_screen==SCREEN_OPTIONS);
  remove(g_settings_path);
  /* The gameplay meter is opt-in, at the bottom, and absent when gyro is off. */
  g_attract_frame=0; g_frame=500; enabled=1;
