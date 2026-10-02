@@ -60,6 +60,7 @@ menus.
 | **Main screen**     | Attract mode              | Menu: START GAME, OPTIONS, CREDITS, QUIT over the attract mode                                           |
 | **Options**         | None                      | OPTIONS: course difficulty, language, sound, window or fullscreen, resolution, aspect ratio, fps counter |
 | **Pause**           | None                      | Esc: RESUME or MAIN MENU                                                                                 |
+| **Ranking name**    | Chosen with the wheel     | Typed on the keyboard                                                                                    |
 | **Resolution**      | 512×384, as the original  | 512×384 or 1024×768 (1X or 2X)                                                                           |
 | **Aspect ratio**    | 4:3, as the original      | 4:3, 16:10, 16:9 or 21:9 (the 3D scene widens; the HUD stays in the centre)                              |
 | **TEST MODE**       | F2                        | None (TEST, SERVICE and COIN are ignored)                                                                |
@@ -136,16 +137,17 @@ takes a little longer, because of the force-feedback wheel test.
 
 | Action                                                 | Keyboard                                      | Gamepad              |
 | ------------------------------------------------------ | --------------------------------------------- | -------------------- |
-| Steer                                                  | ← / →                                         | Left stick           |
-| Accelerator                                            | ↑                                             | R2 (or A)            |
-| Brake                                                  | ↓                                             | L2 (or B)            |
+| Steer                                                  | ← / → or A / D                                | Left stick           |
+| Accelerator                                            | ↑ or W                                        | R2 (or A)            |
+| Brake                                                  | ↓ or S                                        | L2 (or B)            |
 | Handbrake (GTI Club 2 JAB, Thrill Drive 2 JAA and AAA) | Space                                         | X                    |
-| Shift up / down                                        | A / Z                                         | R1 / L1              |
+| Shift up / down                                        | E / Q                                         | R1 / L1              |
 | Insert coin (classic)                                  | 5                                             | Back                 |
 | Start                                                  | 1                                             | Start                |
 | Test / Service (classic)                               | F2 / 9                                        | —                    |
-| Menus (enhanced)                                       | Arrows, Enter or 1, Backspace                 | D-pad, A or Start, B |
+| Menus (enhanced)                                       | Arrows or WASD, Enter or 1, Backspace         | D-pad, A or Start, B |
 | Pause (enhanced)                                       | Esc                                           | Guide                |
+| Ranking name (enhanced)                                | Type it; Backspace, Enter ends; ← / → browse  | D-pad ← / →, then R2 |
 | Fullscreen                                             | F11                                           | —                    |
 | Quit                                                   | Esc (enhanced: Esc in the main menu, or QUIT) | —                    |
 
@@ -248,6 +250,10 @@ The environment variables for debugging are described in
 - **Pause:** Esc, or the gamepad's Guide button, pauses a game, with RESUME and MAIN MENU. MAIN
   MENU brings the game back to the attract mode in a few seconds, behind a loading screen. In the
   attract menu, Esc goes back from a submenu, and quits from the main menu.
+- **Ranking name:** when a result enters the rankings, type the initials on the keyboard
+  instead of turning the wheel. Backspace deletes, Enter ends the name early. Left and right
+  still browse the letters, and the accelerator (or START) takes the one shown, so a gamepad
+  works too (D-pad left and right, then R2 or A).
 - **Separate saves:** the enhanced mode keeps its own NVRAM, `<executable>_enhanced_nvram.bin`,
   so it never changes the classic mode's settings. Delete that file to set it up again.
 - **Fast boot:** the game boots at full speed, muted, behind a LOADING screen, until the

@@ -66,7 +66,12 @@ The profile fields:
   - `font`: the game font for the menus. `file` is in `work/<id>/fs/`. `pages` lists the offsets
     of A8 textures in that file (`width` × `page_height`), stacked vertically into one atlas.
     `sizes.large|medium|small` each give a `cell` grid, a `scale` and `rows` as
-    `[y, characters]`, where a space marks an unused cell.
+    `[y, characters]`, where a space marks an unused cell;
+  - `name_entry`: the rankings' name entry (section 5a). `chars` are the characters of the
+    game's wheel from index 0, followed by DEL and END; `index_reg` is the register holding the
+    wheel index at the `name_index` hook, `index_field` (optional) a 16-bit copy of it at
+    `offset` from register `reg`, and `confirm_reg` the result of the confirmation check at the
+    `name_confirm` hook.
 
 `recomp.py` turns the profile into `generated/<id>/game_config.h` (`GAME_*` macros). The runtime
 is compiled once per game against it; there is no runtime game switch. The other TD2 versions
@@ -326,12 +331,14 @@ The modules use the PowerOpen/AIX ABI: function pointers are descriptors `{code,
 
 | Action | Keyboard | Gamepad |
 |---|---|---|
-| Steer | ← → | left stick |
-| Accelerator / brake | ↑ / ↓ | R2 / L2 (or A / B) |
-| Shift up / down | A / Z | R1 / L1 |
+| Steer | ← → or A D | left stick |
+| Accelerator / brake | ↑ / ↓ or W / S | R2 / L2 (or A / B) |
+| Shift up / down | E / Q | R1 / L1 |
 | Coin / Start | 5 / 1 | Back / Start |
 | Test / Service | F2 / 9 | — |
 | Fullscreen / Quit | F11 / Esc | — |
+
+In the enhanced mode the rankings name is typed on the keyboard (section 5a).
 
 ### Memory map (from MAME)
 
@@ -427,6 +434,9 @@ An optional layer on top of the faithful port, in development. Everything is gat
   leaving TEST MODE through GAME MODE. So on leaving OPTIONS with changes, the guest thread
   writes the staged fields, fixes the checksum, saves the NVRAM file and asks for a restart. The
   frontend then leaves its loop, and `main` re-executes the program with the same arguments.
+  macOS does not reactivate the re-executed program, so `main` sets `RT_RESTARTED` and the
+  frontend raises the new window (`SDL_RaiseWindow`, with the `SDL_FORCE_RAISEWINDOW` hint that
+  SDL3, under sdl2-compat, needs to activate the app).
   Headless runs stop instead (`RT_NVRAM_POKE="seconds:addr=value"` pokes bytes for tests).
 - **Fast boot:** until the attract hook first runs (60 emulated seconds at most) and while
   applying settings, `enh_turbo()` makes the frontend skip real-time pacing and drop the audio,
@@ -444,6 +454,35 @@ An optional layer on top of the faithful port, in development. Everything is gat
     seconds, a few real ones. While it runs, the enhanced layer owns IN3 and IN4
     (`enh_inputs_owned()`), and the frontend does not overwrite them.
   - If the attract mode is not back within 60 s, the program restarts instead.
+- **Rankings name entry:** on a cabinet the steering wheel picks each initial and a pedal
+  confirms it. In the enhanced mode the keyboard types it (`SDL_TEXTINPUT`, so the keyboard
+  layout is followed; SDL's text input is on only during the entry, since on macOS it opens the
+  accent picker on a held letter key, e.g. WASD while driving); Backspace is DEL, Enter is END, Left/Right step through the wheel, and the
+  game's own confirmation (a pedal) still takes the letter shown, which keeps a gamepad usable.
+  - Two hooks per game. `name_index` sits where the game has turned the wheel position into an
+    index on its wheel of characters; the hook replaces it with the chosen index (on the first
+    call of an entry it adopts the game's, so the entry starts on the same letter).
+    `name_confirm` sits on the result of the confirmation check (a pedal past 75%, or a button
+    bit at `0x82C`), and the hook makes it succeed once per typed key. The game then does what
+    it does on a cabinet: stores the letter and moves on, DEL steps back, END fills the rest
+    with spaces, and the third letter ends the entry.
+  - The frontend queues the keys (`enh_name_type`, `enh_name_step`), and the guest thread takes
+    one typed key per call. The entry counts as active while `name_index` ran in the last 10
+    frames; meanwhile printable keys, Left/Right, Backspace and Enter do not reach the game
+    (WASD, E/Q, Space and 1 would otherwise steer, shift, brake or press START), and the steering is held at
+    the centre.
+  - Thrill Drive 2 (EBB, JAA, AAA: same addresses): wheel `A–Z 0–9 . space DEL END` (40
+    entries, clamped). `0xB5874` maps the steering to the index, which leaves it in r4 at its
+    exit `0xB59C4` and keeps it at `r31+0x34`, where the wheel on screen is drawn from (the hook
+    writes both). The confirmation is r3 at `0xB510C`, after the pedal check `0xB59E4`. The entry
+    (`0xB4FC8`) runs after the RESULT when the score ranks in the top 25.
+  - GTI Club 2: wheel `A–Z 0–9 . & ? ! space DEL END` (43 entries; the index wraps around). The
+    routine is `0x8388C` (EAA `+0x24`): the index is in r24 at `0x839B4` (EAA `0x839D8`), the
+    confirmation in r3 at `0x839F8` (EAA `0x83A1C`), after the pedal check `0x84350`. It is part
+    of the ranking screen (`0x832CC`, mode 0), and asks for a name when the race result flag
+    (`+0x18` of the structure at TOC `0x6EC`) is set.
+  - Tested headless on Thrill Drive 2 EBB (a forced ranking, `RT_ENH_MENU` `name=` actions);
+    GTI Club 2 needs a finished race, which scripted inputs cannot drive.
 - **Texts:** English and Italian (`k_text`), chosen by the profile's `language` field. The menus
   switch as soon as the option changes. The fonts have no accented letters, so the Italian texts
   avoid them. A value too wide for its row falls back to the small font.
@@ -452,7 +491,8 @@ An optional layer on top of the faithful port, in development. Everything is gat
   pictures would undercount static screens and fades. It is drawn with the small game font, on
   top of everything, also in play.
   - Frames dumped with `--frames` in enhanced mode include the overlay.
-    `RT_ENH_MENU="seconds:up|down|ok|back,…"` drives the menu in headless tests, and
+    `RT_ENH_MENU="seconds:up|down|ok|back,…"` drives the menu in headless tests (`name=TEXT`
+    types in the name entry, `<` for DEL and `>` for END), and
     `RT_ENH_LOG=1` logs the attract/game transitions.
 
 ## 5b. Research: frame rate and rendering resolution

@@ -365,6 +365,7 @@ int main(int argc, char **argv) {
     if (frontend_run(scale) == 2) {      /* enhanced mode: new game settings, reboot the game */
         hw_shutdown();
         fflush(NULL);
+        setenv("RT_RESTARTED", "1", 1);  /* the frontend raises the new window */
         execv(g_exe, argv);
         fprintf(stderr, "restart failed: %s\n", g_exe);
     }

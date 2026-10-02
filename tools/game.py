@@ -135,6 +135,24 @@ VALUE_SETS = {
 }
 
 
+def name_entry_config(ne):
+    """GAME_ENH_NAME_*: the ranking's name entry, typed on the keyboard in the enhanced mode
+    (runtime/enhanced.c). `chars` are the characters of the game's wheel from index 0, followed
+    by DEL and END; at the "name_index" hook register `index_reg` holds the index the game took
+    from the steering wheel, and `index_field` (optional) is a 16-bit copy of it at an offset
+    from a register; at the "name_confirm" hook `confirm_reg` holds the confirmation check."""
+    if not ne:
+        return ["#define GAME_ENH_NAME_CHARS NULL", "#define GAME_ENH_NAME_INDEX_REG 0",
+                "#define GAME_ENH_NAME_FIELD_REG -1", "#define GAME_ENH_NAME_FIELD_OFF 0",
+                "#define GAME_ENH_NAME_CONFIRM_REG 0"]
+    field = ne.get('index_field') or {}
+    return [f"#define GAME_ENH_NAME_CHARS {c_str(ne['chars'])}",
+            f"#define GAME_ENH_NAME_INDEX_REG {ne['index_reg']}",
+            f"#define GAME_ENH_NAME_FIELD_REG {field.get('reg', -1)}",
+            f"#define GAME_ENH_NAME_FIELD_OFF 0x{int(field.get('offset', '0'), 16):x}u",
+            f"#define GAME_ENH_NAME_CONFIRM_REG {ne['confirm_reg']}"]
+
+
 def game_options_config(opts):
     """GAME_ENH_GAME_OPTIONS: the TEST MODE settings the enhanced-mode OPTIONS pages edit in the
     NVRAM. Each field is `bits` wide at `shift` in the byte (size 1) or big-endian word (size 2)
@@ -204,6 +222,7 @@ def write_config_header(g, out):
         *[f"#define GAME_ENH_WIDE_{k.upper()} 0x{int((enh.get('widescreen') or {}).get(k, '0'), 16):x}u"
           for k in ('proj_matrix', 'proj_frustum', 'proj_slot', 'viewport')],
         game_options_config(enh.get('game_options')),
+        *name_entry_config(enh.get('name_entry')),
         # TEST MODE main menu index of GAME MODE: the pause menu's "main menu" returns to the attract through it
         f"#define GAME_ENH_TEST_GAME_MODE {enh.get('test_menu_game_mode', -1)}",
         "#define GAME_ENH_BLANK_STRINGS {" + "".join(f"{{0x{int(b['addr'], 16):08x}u, {c_str(b['text'])}}}, " for b in blanks)
