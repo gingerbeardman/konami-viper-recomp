@@ -110,3 +110,12 @@ static inline uint32_t le_bus_write(uint32_t old, int k, int size, uint32_t v) {
     old &= ~(0xffu << (8 * k));
     return old | ((v & 0xff) << (8 * k));
 }
+
+/* Controller settings and sensor access stay on the frontend thread. */
+int frontend_gyro_enabled(void);
+int frontend_gyro_available(void);
+int frontend_gyro_sensitivity(void);
+void frontend_gyro_set_enabled(int on);
+void frontend_gyro_set_sensitivity(int percent);
+void frontend_gyro_recenter(void);
+void enh_controller_settings_changed(void);

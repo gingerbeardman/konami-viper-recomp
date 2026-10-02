@@ -293,6 +293,8 @@ static void settings_load(void) {
             if (!strcmp(key, "fullscreen")) g_set.fullscreen = v != 0;
             else if (!strcmp(key, "show_fps")) g_set.show_fps = v != 0;
             else if (!strcmp(key, "render_scale")) g_set.scale = v < 1 ? 1 : v > 2 ? 2 : v;
+            else if (!strcmp(key, "gyro")) frontend_gyro_set_enabled(v != 0);
+            else if (!strcmp(key, "gyro_sensitivity")) frontend_gyro_set_sensitivity(v);
             else if (!strcmp(key, "aspect")) g_set.aspect = v < 0 || v >= N_ASPECTS ? 0 : v;
         }
     fclose(f);
@@ -304,8 +306,11 @@ static void settings_save(void) {
     fprintf(f, "# " GAME_TITLE ", enhanced mode: port settings\n");
     fprintf(f, "fullscreen = %d\nshow_fps = %d\nrender_scale = %d\n", g_set.fullscreen, g_set.show_fps, g_set.scale);
     fprintf(f, "# 0 = 4:3, 1 = 16:10, 2 = 16:9, 3 = 21:9\naspect = %d\n", g_set.aspect);
+    fprintf(f, "gyro = %d\ngyro_sensitivity = %d\n", frontend_gyro_enabled(), frontend_gyro_sensitivity());
     fclose(f);
 }
+
+void enh_controller_settings_changed(void) { if (g_enhanced) settings_save(); }
 
 int enh_want_fullscreen(void) { return g_enhanced && g_set.fullscreen; }
 void enh_set_fullscreen(int on) { if (g_enhanced && g_set.fullscreen != !!on) { g_set.fullscreen = !!on; settings_save(); } }
@@ -513,7 +518,7 @@ static void options_read(void) {
  * letters, so the Italian texts avoid them. */
 enum { T_START, T_OPTIONS, T_CREDITS, T_QUIT, T_GAME, T_SOUND, T_DISPLAY, T_BACK, T_WINDOW, T_FULLSCREEN,
        T_SHOW_FPS, T_OFF, T_ON, T_LOADING, T_APPLYING, T_ORIGINAL_GAME, T_RECOMPILATION, T_VOODOO,
-       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_RESOLUTION, T_ASPECT, T_COUNT };
+       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_RESOLUTION, T_ASPECT, T_CONTROLS, T_GYRO, T_SENSITIVITY, T_RECENTER, T_COUNT };
 static const char *const k_text[T_COUNT][2] = {
     { "START GAME", "INIZIA PARTITA" }, { "OPTIONS", "OPZIONI" }, { "CREDITS", "RICONOSCIMENTI" },
     { "QUIT", "ESCI" }, { "GAME", "GIOCO" }, { "SOUND", "AUDIO" }, { "DISPLAY", "SCHERMO" },
@@ -524,6 +529,8 @@ static const char *const k_text[T_COUNT][2] = {
     { "PRESS START TO GO BACK", "PREMI START PER TORNARE" }, { "PAUSE", "PAUSA" },
     { "RESUME", "RIPRENDI" }, { "MAIN MENU", "MENU PRINCIPALE" }, { "RESOLUTION", "RISOLUZIONE" },
     { "ASPECT RATIO", "FORMATO" },
+    { "CONTROLS", "COMANDI" }, { "GYRO STEERING", "STERZO GIROSCOPIO" },
+    { "SENSITIVITY", "SENSIBILITA" }, { "RECENTER", "RICENTRA" },
 };
 static const char *const k_aspect_name[N_ASPECTS] = { "4:3", "16:10", "16:9", "21:9" };
 
@@ -539,7 +546,7 @@ static int menu_language(void) {
  * the overlay; the guest thread updates the attract state. Plain ints are enough: each field
  * has a single writer. */
 enum { SCREEN_MAIN, SCREEN_OPTIONS, SCREEN_PAGE, SCREEN_CREDITS };
-enum { PAGE_GAME, PAGE_SOUND, PAGE_DISPLAY, N_PAGES };
+enum { PAGE_GAME, PAGE_SOUND, PAGE_DISPLAY, PAGE_CONTROLS, N_PAGES };
 static const int k_main_items[] = { T_START, T_OPTIONS, T_CREDITS, T_QUIT };
 #define N_MAIN_ITEMS 4
 #define MENU_GRACE_FRAMES 300      /* the Konami logo gap in the attract loop lasts about 4 s */
@@ -552,6 +559,7 @@ static volatile int g_starting;            /* START GAME chosen, waiting for the
 static volatile uint64_t g_starting_frame;
 static volatile int g_apply;               /* 1: write the staged options, 2: written, restart */
 static volatile int g_paused, g_pause_cursor;
+static int g_pause_controls, g_controls_cursor;
 static volatile int g_returning;           /* MAIN MENU from the pause: back to the attract */
 static uint64_t g_return_t0;
 static volatile int g_booted;              /* the attract hook has run once since the start */
@@ -580,7 +588,7 @@ int enh_inputs_owned(void) { return g_returning; }   /* the return script drives
 /* Esc from the frontend: 1 if the enhanced mode handled it (pause, or back in a submenu) */
 int enh_escape(void) {
     if (!g_enhanced || !g_font || g_apply || g_returning || !g_booted) return 0;
-    if (g_paused) { g_paused = 0; return 1; }
+    if (g_paused) { if (g_pause_controls) g_pause_controls = 0; else g_paused = 0; return 1; }
     if (enh_menu_active()) {
         if (g_screen == SCREEN_MAIN) return 0;      /* the main menu: Esc quits, as before */
         enh_menu_action(ENH_BACK);
@@ -589,15 +597,41 @@ int enh_escape(void) {
     if (enh_turbo() || g_starting) return 1;
     g_paused = 1;
     g_pause_cursor = 0;
+    g_pause_controls = 0;
     return 1;
 }
 
+static void controls_change(int row, int dir) {
+    if (row == 0) frontend_gyro_set_enabled(!frontend_gyro_enabled());
+    else if (row == 1) frontend_gyro_set_sensitivity(frontend_gyro_sensitivity() + dir * 10);
+    else if (row == 2) frontend_gyro_recenter();
+    if (row != 2) settings_save();
+}
+
 static void pause_action(int action) {
+    if (g_pause_controls) {
+        switch (action) {
+        case ENH_UP: g_controls_cursor = (g_controls_cursor + 3) % 4; break;
+        case ENH_DOWN: g_controls_cursor = (g_controls_cursor + 1) % 4; break;
+        case ENH_BACK: g_pause_controls = 0; break;
+        case ENH_OK:
+            if (g_controls_cursor == 3) { g_pause_controls = 0; break; }
+            controls_change(g_controls_cursor, 1);
+            break;
+        case ENH_LEFT: case ENH_RIGHT:
+            if (g_controls_cursor < 2) controls_change(g_controls_cursor, action == ENH_LEFT ? -1 : 1);
+            break;
+        default: break;
+        }
+        return;
+    }
     switch (action) {
-    case ENH_UP: case ENH_DOWN: g_pause_cursor ^= 1; break;
+    case ENH_UP: g_pause_cursor = (g_pause_cursor + 2) % 3; break;
+    case ENH_DOWN: g_pause_cursor = (g_pause_cursor + 1) % 3; break;
     case ENH_BACK: g_paused = 0; break;
     case ENH_OK:
         if (g_pause_cursor == 0) g_paused = 0;
+        else if (g_pause_cursor == 1) { g_pause_controls = 1; g_controls_cursor = 0; }
         else if (GAME_ENH_TEST_GAME_MODE >= 0) { g_returning = 1; g_return_t0 = 0; g_paused = 0; }
         else { g_apply = 2; g_paused = 0; }            /* no known route: reboot the game */
         break;
@@ -616,6 +650,10 @@ int enh_quit_requested(void) { return g_quit; }
 /* the rows of an options page: game options of that page, or the port options (DISPLAY) */
 static int page_rows(int page, int *rows) {
     int n = 0;
+    if (page == PAGE_CONTROLS) {
+        rows[n++] = -5; rows[n++] = -6; rows[n++] = -7;
+        return n;
+    }
     if (page == PAGE_DISPLAY) {
         rows[n++] = -1;
         rows[n++] = -3;
@@ -629,6 +667,7 @@ static int page_rows(int page, int *rows) {
 }
 
 static void page_change(int row, int dir) {
+    if (row <= -5 && row >= -7) { controls_change(-row - 5, dir); return; }
     if (row == -1) { g_set.fullscreen = !g_set.fullscreen; settings_save(); return; }
     if (row == -2) { g_set.show_fps = !g_set.show_fps; settings_save(); return; }
     if (row == -3) { g_set.scale = g_set.scale == 1 ? 2 : 1; voodoo_set_scale(g_set.scale); settings_save(); return; }
@@ -655,7 +694,7 @@ void enh_menu_action(int action) {
         case ENH_BACK: g_screen = SCREEN_OPTIONS; break;
         case ENH_LEFT: case ENH_RIGHT: case ENH_OK:
             if (g_page_cursor == n) { if (action == ENH_OK) g_screen = SCREEN_OPTIONS; }
-            else page_change(rows[g_page_cursor], action == ENH_LEFT ? -1 : 1);
+            else if (rows[g_page_cursor] != -7 || action == ENH_OK) page_change(rows[g_page_cursor], action == ENH_LEFT ? -1 : 1);
             break;
         default: break;
         }
@@ -745,6 +784,26 @@ static void menu_tick(void) {
 
 static void draw_menu(uint32_t *fb, int w, int h);
 
+static void draw_controls(uint32_t *fb, int w, int h, int cursor) {
+    const int labels[] = { T_GYRO, T_SENSITIVITY, T_RECENTER, T_BACK };
+    const int z = FONT_MEDIUM, step = font_height(z) + 8;
+    dim_rect(fb, w, h, 0, 0, w, h, 190);
+    draw_centered(fb, w, h, FONT_LARGE, 24, T(T_CONTROLS), 0xffd800);
+    for (int i = 0; i < 4; i++) {
+        char value[32] = "";
+        if (i == 0) snprintf(value, sizeof value, "%s", T(frontend_gyro_enabled() ? T_ON : T_OFF));
+        if (i == 1) snprintf(value, sizeof value, "%.1fX", frontend_gyro_sensitivity() / 100.0);
+        uint32_t col = i == cursor ? 0xffd800 : 0xffffff;
+        int y = 90 + i * step;
+        draw_text(fb, w, h, z, 40, y, T(labels[i]), col);
+        draw_text(fb, w, h, z, w - 40 - text_width(z, value), y, value, col);
+    }
+    draw_centered(fb, w, h, FONT_SMALL, 290,
+        frontend_gyro_available() ? "HIGHER MEANS LESS TILT" : "NO GYRO CONTROLLER CONNECTED", 0xc0c0c0);
+    draw_centered(fb, w, h, FONT_SMALL, 320, "R3: TOGGLE   L3: RECENTER", 0xc0c0c0);
+}
+
+
 void enh_draw_overlay(uint32_t *fb, int w, int h) {
     if (!g_enhanced) return;
     g_fbw = w;
@@ -757,15 +816,21 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
         draw_centered(fb, w, h, FONT_MEDIUM, h / 2 - font_height(FONT_MEDIUM) / 2, T(g_apply == 1 || g_apply == 2 ? T_APPLYING : T_LOADING), 0xffffff);
         return;
     }
-    if (g_paused) {
+    if (g_paused && !g_pause_controls) {
         const int z = FONT_MEDIUM, step = font_height(z) + 8;
-        static const int items[2] = { T_RESUME, T_MAIN_MENU };
+        static const int items[3] = { T_RESUME, T_CONTROLS, T_MAIN_MENU };
         dim_rect(fb, w, h, 0, 0, w, h, 160);
         draw_centered(fb, w, h, FONT_LARGE, h / 2 - 90, T(T_PAUSE), 0xffd800);
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < 3; i++)
             draw_centered(fb, w, h, z, h / 2 - 10 + i * step, T(items[i]), i == g_pause_cursor ? 0xffd800 : 0xffffff);
     }
+    if (g_paused && g_pause_controls) draw_controls(fb, w, h, g_controls_cursor);
     if (enh_menu_active()) draw_menu(fb, w, h);
+    if (g_font && frontend_gyro_enabled() && !g_paused && !enh_menu_active()) {
+        char buf[48];
+        snprintf(buf, sizeof buf, "GYRO %s  %.1fX", frontend_gyro_available() ? "ON" : "UNAVAILABLE", frontend_gyro_sensitivity() / 100.0);
+        draw_text(fb, w, h, FONT_SMALL, 8, 6, buf, 0x40ff40);
+    }
     if (g_set.show_fps && g_font) {                 /* on top of everything, also in play */
         char buf[16];
         snprintf(buf, sizeof buf, "%d FPS", g_fps);
@@ -790,14 +855,15 @@ static void draw_menu(uint32_t *fb, int w, int h) {
         for (int i = 0; i < N_MAIN_ITEMS; i++)
             draw_text(fb, w, h, z, left + pad, y0 + pad + i * step, T(k_main_items[i]), i == g_cursor ? yellow : white);
     } else if (g_screen == SCREEN_OPTIONS) {
-        static const int items[N_PAGES + 1] = { T_GAME, T_SOUND, T_DISPLAY, T_BACK };
+        static const int items[N_PAGES + 1] = { T_GAME, T_SOUND, T_DISPLAY, T_CONTROLS, T_BACK };
         const int z = FONT_MEDIUM, step = font_height(z) + 8;
         dim_rect(fb, w, h, 0, 0, w, h, 190);
         draw_centered(fb, w, h, FONT_LARGE, 36, T(T_OPTIONS), yellow);
         for (int i = 0; i <= N_PAGES; i++)
-            draw_centered(fb, w, h, z, 120 + i * step + (i == N_PAGES ? step / 2 : 0), T(items[i]), i == g_opt_cursor ? yellow : white);
+            draw_centered(fb, w, h, z, 95 + i * step + (i == N_PAGES ? step / 2 : 0), T(items[i]), i == g_opt_cursor ? yellow : white);
     } else if (g_screen == SCREEN_PAGE) {
-        static const int titles[N_PAGES] = { T_GAME, T_SOUND, T_DISPLAY };
+        if (g_page == PAGE_CONTROLS) { draw_controls(fb, w, h, g_page_cursor); return; }
+        static const int titles[N_PAGES] = { T_GAME, T_SOUND, T_DISPLAY, T_CONTROLS };
         const int z = FONT_MEDIUM, step = font_height(z) + 4, left = 40, right = w - 40;
         int rows[MAX_GAME_OPTIONS + 2], n = page_rows(g_page, rows);
         dim_rect(fb, w, h, 0, 0, w, h, 190);

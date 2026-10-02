@@ -184,6 +184,36 @@ static ControllerGyro g_gyro;
 static SDL_JoystickID g_gyro_pad = -1;
 static int g_gyro_available;
 
+int frontend_gyro_enabled(void) { return g_gyro_enabled; }
+int frontend_gyro_sensitivity(void) {
+    return (int)lround(3500.0 / (g_gyro_range * 180 / 3.141592653589793));
+}
+void frontend_gyro_set_sensitivity(int percent) {
+    percent = SDL_clamp(percent, 40, 350);
+    g_gyro_range = (3500.0 / percent) * 3.141592653589793 / 180;
+}
+void frontend_gyro_recenter(void) { g_gyro.ready = 0; }
+void frontend_gyro_set_enabled(int on) {
+    g_gyro_enabled = !!on;
+    g_gyro.ready = 0;
+    g_gyro_pad = -1;
+    g_gyro_available = 0;
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    if (!on && g_pad) {
+        SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_GYRO, SDL_FALSE);
+        SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_ACCEL, SDL_FALSE);
+    }
+#endif
+}
+int frontend_gyro_available(void) {
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    return g_pad && SDL_GameControllerHasSensor(g_pad, SDL_SENSOR_GYRO) &&
+           SDL_GameControllerHasSensor(g_pad, SDL_SENSOR_ACCEL);
+#else
+    return 0;
+#endif
+}
+
 static double gyro_steering(double dt) {
 #if SDL_VERSION_ATLEAST(2, 0, 14)
     if (!g_gyro_enabled || !g_pad || !SDL_GameControllerGetAttached(g_pad)) return 0;
@@ -357,7 +387,7 @@ int frontend_run(int scale) {
     }
 
     const char *gyro = getenv("RT_GYRO");
-    g_gyro_enabled = gyro && !strcmp(gyro, "1");
+    if (gyro) frontend_gyro_set_enabled(!strcmp(gyro, "1"));
     const char *range = getenv("RT_GYRO_RANGE");
     if (range) {
         char *end;
@@ -452,15 +482,8 @@ int frontend_run(int scale) {
             case SDL_CONTROLLERBUTTONDOWN:
                 if (g_gyro_active && g_pad && ev.cbutton.which == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad)) &&
                     ev.cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSTICK) {
-                    g_gyro_enabled = !g_gyro_enabled;
-                    g_gyro.ready = 0;
-                    g_gyro_pad = -1;
-#if SDL_VERSION_ATLEAST(2, 0, 14)
-                    if (!g_gyro_enabled) {
-                        SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_GYRO, SDL_FALSE);
-                        SDL_GameControllerSetSensorEnabled(g_pad, SDL_SENSOR_ACCEL, SDL_FALSE);
-                    }
-#endif
+                    frontend_gyro_set_enabled(!g_gyro_enabled);
+                    enh_controller_settings_changed();
                     rt_log("gyro steering: %s (right-stick click toggles; left-stick click recenters)\n",
                            g_gyro_enabled ? "on" : "off");
                     break;

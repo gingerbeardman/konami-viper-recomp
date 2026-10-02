@@ -392,3 +392,11 @@ listed in [CHANGELOG.md](CHANGELOG.md).
     by BSD-3-Clause.
   - MAME is used here as a hardware reference.
 - The software is provided "as is", without warranty of any kind.
+
+Enhanced mode exposes gyro controls in **Options → Controls** and **Pause → Controls**.
+Use the D-pad or arrow keys to choose **Gyro Steering**, **Sensitivity**, or **Recenter**;
+Left/Right adjusts the selected setting, and A/Enter confirms. Sensitivity defaults to
+1.0× (35° to full lock); higher values need less tilt. The on-screen gyro indicator
+shows the current sensitivity while driving. Gyro and sensitivity are saved per game.
+R3 toggles gyro and L3 recenters without opening a menu. Recenter from Pause takes
+the controller's neutral position when driving resumes.
