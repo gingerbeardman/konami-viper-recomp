@@ -37,7 +37,7 @@ static const char *g_rumble_backend = "SDL";
 static int send_controller_rumble(SDL_GameController *pad, Uint16 low, Uint16 high, Uint32 duration) {
     const char *backend = getenv("RT_RUMBLE_BACKEND");
     if (SDL_NumJoysticks() == 1 && SDL_GameControllerGetType(pad) == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO &&
-        (!backend || strcmp(backend, "sdl"))) {
+        (backend && !strcmp(backend, "apple"))) {
         int result = controller_haptics_rumble((float)SDL_max(low, high) / 65535.0f, duration / 1000.0);
         if (result > 0) { g_rumble_backend = "Apple"; return 0; }
         if (result < 0) { g_rumble_backend = "Apple retry"; return SDL_SetError("Apple controller haptics temporarily unavailable"); }
@@ -150,7 +150,12 @@ static SDL_JoystickID g_pad_id = -1;
 static int g_input_focus = 1;
 static int g_controller_log;
 static Uint32 g_controller_log_tick;
-static double g_stick_deadzone = 0.10, g_stick_curve = 1.5, g_trigger_deadzone = 0.03;
+static double g_stick_deadzone = 0.10, g_stick_curve = 3.0, g_trigger_deadzone = 0.03;
+int frontend_stick_response(void) { return (int)lround(g_stick_curve) - 1; }
+void frontend_set_stick_response(int response) {
+    g_stick_curve = response >= 0 && response <= 2 ? response + 1.0 : 3.0;
+}
+
 
 static double controller_option(const char *name, double fallback, double lo, double hi) {
     const char *value = getenv(name);
@@ -212,12 +217,18 @@ static Uint32 g_rumble_test_started;
 
 static void test_rumble(void) {
     if (!g_pad) { rt_log("rumble test: no controller connected\n"); return; }
+    if (g_rumble_testing) return; /* let the current pulse finish */
     g_rumble_test_started = SDL_GetTicks();
+    if (controller_rumble_pulse(&g_rumble, g_pad, g_rumble_gain, g_rumble_test_started) < 0) {
+        rt_log("rumble test failed: %s\n", SDL_GetError());
+        return;
+    }
     g_rumble_testing = 1;
     g_rumble_trace = 1;
     g_rumble_trace_started = g_rumble_test_started;
     g_rumble_trace_tick = g_rumble_test_started - 1000;
-    rt_log("rumble test: one second at %.1fx strength\n", frontend_rumble_multiplier() / 100.0);
+    rt_log("rumble test: single 1000 ms pulse at %.1fx strength (output=%u)\n",
+           frontend_rumble_multiplier() / 100.0, g_rumble.strength);
 }
 
 /* Guest publishes motor commands; SDL calls stay on the host main thread. */
@@ -233,8 +244,8 @@ static void update_rumble(int active) {
     if (g_rumble_testing && (!window || (Uint32)(now - g_rumble_test_started) >= 1000))
         g_rumble_testing = 0;
     uint8_t motor = atomic_load_explicit(&g_motor_output, memory_order_relaxed);
-    controller_rumble_update(&g_rumble, g_pad, g_rumble_testing ? 0x8f : motor,
-        g_rumble_gain, g_rumble_testing || active, now);
+    if (!g_rumble_testing)
+        controller_rumble_update(&g_rumble, g_pad, motor, g_rumble_gain, active, now);
     if (g_rumble_trace && (Uint32)(now - g_rumble_trace_started) >= 30000) g_rumble_trace = 0;
     if ((g_rumble_trace || g_controller_log) && (Uint32)(now - g_rumble_trace_tick) >= 1000) {
         g_rumble_trace_tick = now;
@@ -334,6 +345,12 @@ static double gyro_steering(double dt) {
 }
 
 
+double frontend_stick_position(void) {
+    return g_pad && g_input_focus ? controller_axis(
+        SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_LEFTX), 0, 1) : 0;
+}
+double frontend_steering_position(void) { return g_analog[0] / (double)ANALOG_RANGE; }
+
 static void apply_inputs(double dt) {
     /* Menu confirmation can consume a pedal button's down event. These controls
      * represent held state, so reconcile them with the device every frame. */
@@ -366,7 +383,7 @@ static void apply_inputs(double dt) {
     }
     /* signed positions for the differential ADC: steering -200..+200, pedals released=-200 */
     if (enh_name_entry_active()) steer = 0;   /* the letters come from the keyboard */
-    g_analog[0] = (int16_t)(steer * ANALOG_RANGE);
+    g_analog[0] = (int16_t)lround(steer * ANALOG_RANGE);
     if (g_controller_log && g_pad && (Uint32)(SDL_GetTicks() - g_controller_log_tick) >= 100) {
         g_controller_log_tick = SDL_GetTicks();
         rt_log("controller: left_x=%d steering_adc=%d gas=%.3f brake=%.3f\n",
@@ -484,7 +501,8 @@ void nvram_save(void);
 
 int frontend_run(int scale) {
 #ifdef VIPER_NATIVE_HAPTICS
-    controller_haptics_init();
+    const char *rumble_backend = getenv("RT_RUMBLE_BACKEND");
+    if (rumble_backend && !strcmp(rumble_backend, "apple")) controller_haptics_init();
 #endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         rt_log("SDL_Init failed: %s\n", SDL_GetError());
@@ -553,7 +571,7 @@ int frontend_run(int scale) {
     else rt_log("audio: %s\n", SDL_GetError());
 
     g_stick_deadzone = controller_option("RT_STICK_DEADZONE", 0.10, 0.0, 0.5);
-    g_stick_curve = controller_option("RT_STICK_CURVE", 1.5, 1.0, 3.0);
+    g_stick_curve = controller_option("RT_STICK_CURVE", g_stick_curve, 1.0, 3.0);
     g_trigger_deadzone = controller_option("RT_TRIGGER_DEADZONE", 0.03, 0.0, 0.5);
     open_pad();
 

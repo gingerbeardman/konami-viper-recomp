@@ -126,3 +126,9 @@ void frontend_set_rumble_multiplier(int percent);
 void frontend_set_settings_path(const char *path); /* companion .window file, both game modes */
 
 int enh_texture_filter(void); /* 0 original, 1 nearest, 2 bilinear */
+
+double frontend_stick_position(void); /* raw normalized left stick */
+double frontend_steering_position(void); /* actual steering sent to guest */
+
+int frontend_stick_response(void); /* 0 linear, 1 soft, 2 extra soft */
+void frontend_set_stick_response(int response);

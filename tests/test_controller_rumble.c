@@ -22,9 +22,9 @@ int main(void) {
     assert(controller_motor_strength(0x8f,2) == 65535);
     assert(controller_motor_strength(0x8f,100) == 65535);
     assert(controller_motor_strength(0x8f,NAN) == 0);
-    /* The recorded race forces (3..5) should exceed the old 10..17% output. */
-    assert(controller_motor_strength(0x83,.5) > 14000);
-    assert(controller_motor_strength(0x85,.5) > 18000);
+    /* Default gain preserves proportional torque, without boosting weak forces. */
+    assert(controller_motor_strength(0x83,.5) == 6554);
+    assert(controller_motor_strength(0x85,.5) == 10923);
     Uint16 previous = 0;
     for (int torque=1; torque<=15; torque++) {
         Uint16 strength = controller_motor_strength((uint8_t)(0x80 | torque),.5);
@@ -86,6 +86,19 @@ int main(void) {
     count = calls;
     controller_rumble_update(&state,pad,0x8f,1,1,40);
     assert(calls == count + 1 && last_duration == 100); /* tick wrap and keepalive */
+    /* Repeated isolated tests send one full-duration command at equal strength. */
+    for (int pulse=0; pulse<5; ++pulse) {
+        Uint32 now=6000 + pulse*2000;
+        count=calls;
+        assert(controller_rumble_pulse(&state,pad,.5,now)==0);
+        assert(calls==count+1 && last_low==32768 && last_high==32768 && last_duration==1000);
+        controller_rumble_update(&state,pad,0,0,0,now+1000);
+        assert(last_low==0);
+    }
+    assert(controller_rumble_pulse(&state,pad,0,16000)==0 && last_low==0);
+    fail=1;
+    assert(controller_rumble_pulse(&state,pad,.5,17000)<0);
+    fail=0;
     SDL_GameControllerClose(pad);
     SDL_JoystickDetachVirtual(index);
     SDL_Quit();

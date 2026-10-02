@@ -26,22 +26,24 @@ void rt_log(const char *s,...) {(void)s;}
 uint8_t *hw_nvram(void) { static uint8_t nv[8192]; return nv; }
 uint64_t rt_now(void) {return 0;}
 int main(int argc, char **argv) {
- assert(argc==2);
- g_enhanced=1;g_font=(uint8_t*)1;g_booted=1;g_frame=g_attract_frame=100;
+ assert(argc==2); g_enhanced=1; g_font=(uint8_t*)1; g_booted=1;
  snprintf(g_settings_path,sizeof g_settings_path,"%s",argv[1]);
- g_screen=SCREEN_PAGE;g_page=PAGE_DISPLAY;g_page_cursor=0;
- int rows[MAX_GAME_OPTIONS+2];int count=page_rows(PAGE_DISPLAY,rows);
- int filter_row=-1;for(int i=0;i<count;i++) if(rows[i]==-10) filter_row=i;
- assert(filter_row>=0 && g_set.texture_filter==0);
- for(int i=0;i<filter_row;i++) enh_menu_action(ENH_DOWN);
- enh_menu_action(ENH_RIGHT);assert(g_set.texture_filter==1 && applied_filter==1 && enh_texture_filter()==1);
- enh_menu_action(ENH_RIGHT);assert(g_set.texture_filter==2 && applied_filter==2);
- enh_menu_action(ENH_RIGHT);assert(g_set.texture_filter==0 && applied_filter==0);
- enh_menu_action(ENH_LEFT);assert(g_set.texture_filter==2 && applied_filter==2);
- g_set.texture_filter=0;settings_load();assert(g_set.texture_filter==2);
- FILE *f=fopen(g_settings_path,"w");assert(f);fputs("texture_filter = 99\n",f);fclose(f);
- settings_load();assert(g_set.texture_filter==0);
- g_enhanced=0;g_set.texture_filter=1;assert(enh_texture_filter()==0);
+ assert(frontend_stick_response()==2);
+ g_frame=g_attract_frame=100;g_screen=SCREEN_PAGE;g_page=PAGE_CONTROLS;
+ int rows[MAX_GAME_OPTIONS+2], n=page_rows(PAGE_CONTROLS,rows);
+ int cursor=n>1 ? n : 0; /* last item in combined Controls; first when standalone */
+ g_page_cursor=cursor;
+ enh_menu_action(ENH_LEFT);assert(frontend_stick_response()==1);
+ enh_menu_action(ENH_LEFT);assert(frontend_stick_response()==0);
+ enh_menu_action(ENH_LEFT);assert(frontend_stick_response()==2);
+ enh_menu_action(ENH_RIGHT);assert(frontend_stick_response()==0);
+ frontend_set_stick_response(2);settings_load();assert(frontend_stick_response()==0);
+ FILE *f=fopen(g_settings_path,"w");assert(f);fputs("stick_response = 99\n",f);fclose(f);
+ settings_load();assert(frontend_stick_response()==2);
+ g_attract_frame=0;g_frame=500;assert(enh_escape());
+ enh_menu_action(ENH_DOWN);enh_menu_action(ENH_OK);assert(g_pause_controls);
+ g_controls_cursor=cursor;enh_menu_action(ENH_LEFT);assert(frontend_stick_response()==1);
+ enh_menu_action(ENH_BACK);assert(!g_pause_controls && g_paused);
  remove(g_settings_path);
- puts("texture filter menu cycling, live application and persistence: passed");
+ puts("stick response menu, pause, persistence and invalid settings: passed");
 }

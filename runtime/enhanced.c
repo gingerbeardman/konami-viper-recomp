@@ -292,6 +292,7 @@ static void settings_load(void) {
     while (fgets(line, sizeof line, f))
         if (sscanf(line, " %63[a-z_] = %d", key, &v) == 2) {
             if (!strcmp(key, "fullscreen")) g_set.fullscreen = v != 0;
+            else if (!strcmp(key, "stick_response")) frontend_set_stick_response(v);
             else if (!strcmp(key, "show_fps")) g_set.show_fps = v != 0;
             else if (!strcmp(key, "render_scale")) g_set.scale = v < 1 ? 1 : v > 2 ? 2 : v;
             else if (!strcmp(key, "texture_filter")) g_set.texture_filter = v >= 0 && v <= 2 ? v : 0;
@@ -308,6 +309,7 @@ static void settings_save(void) {
     FILE *f = fopen(g_settings_path, "w");
     if (!f) { rt_log("enhanced: cannot write %s\n", g_settings_path); return; }
     fprintf(f, "# " GAME_TITLE ", enhanced mode: port settings\n");
+    fprintf(f, "stick_response = %d\n", frontend_stick_response());
     fprintf(f, "fullscreen = %d\nshow_fps = %d\nrender_scale = %d\n", g_set.fullscreen, g_set.show_fps, g_set.scale);
     fprintf(f, "# 0 = 4:3, 1 = 16:10, 2 = 16:9, 3 = 21:9\naspect = %d\n", g_set.aspect);
     fprintf(f, "gyro = %d\ngyro_sensitivity = %d\n", frontend_gyro_enabled(), frontend_gyro_sensitivity());
@@ -527,7 +529,7 @@ static void options_read(void) {
  * letters, so the Italian texts avoid them. */
 enum { T_START, T_OPTIONS, T_CREDITS, T_QUIT, T_GAME, T_SOUND, T_DISPLAY, T_BACK, T_WINDOW, T_FULLSCREEN,
        T_SHOW_FPS, T_OFF, T_ON, T_LOADING, T_APPLYING, T_ORIGINAL_GAME, T_RECOMPILATION, T_VOODOO,
-       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_RESOLUTION, T_ASPECT, T_CONTROLS, T_GYRO, T_RECENTER, T_SHOW_GYRO, T_RUMBLE, T_TEXTURE_FILTER, T_COUNT };
+       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_RESOLUTION, T_ASPECT, T_STICK_RESPONSE, T_CONTROLS, T_GYRO, T_RECENTER, T_SHOW_GYRO, T_RUMBLE, T_TEXTURE_FILTER, T_COUNT };
 static const char *const k_text[T_COUNT][2] = {
     { "START GAME", "INIZIA PARTITA" }, { "OPTIONS", "OPZIONI" }, { "CREDITS", "RICONOSCIMENTI" },
     { "QUIT", "ESCI" }, { "GAME", "GIOCO" }, { "SOUND", "AUDIO" }, { "DISPLAY", "SCHERMO" },
@@ -538,13 +540,15 @@ static const char *const k_text[T_COUNT][2] = {
     { "PRESS START TO GO BACK", "PREMI START PER TORNARE" }, { "PAUSE", "PAUSA" },
     { "RESUME", "RIPRENDI" }, { "MAIN MENU", "MENU PRINCIPALE" }, { "RESOLUTION", "RISOLUZIONE" },
     { "ASPECT RATIO", "FORMATO" },
+    { "STICK RESPONSE", "RISPOSTA STICK" },
     { "CONTROLS", "COMANDI" }, { "GYRO SENSITIVITY", "STERZO GIROSCOPIO" },
     { "RECENTER GYRO", "RICENTRA" },
-    { "SHOW GYRO METER", "MOSTRA IN GIOCO" },
+    { "SHOW STEERING METER", "MOSTRA IN GIOCO" },
     { "RUMBLE STRENGTH", "VIBRAZIONE" },
     { "TEXTURE FILTER", "FILTRO TEXTURE" },
 };
 static const char *const k_texture_filter_name[] = { "ORIGINAL", "NEAREST", "BILINEAR" };
+static const char *const k_stick_response_name[] = { "LINEAR", "SOFT", "EXTRA SOFT" };
 static const char *const k_aspect_name[N_ASPECTS] = { "4:3", "16:10", "16:9", "21:9" };
 
 static int menu_language(void) {
@@ -626,23 +630,24 @@ static void controls_change(int row, int dir) {
     } else if (row == 1) g_set.show_gyro = !g_set.show_gyro;
     else if (row == 2) frontend_gyro_recenter();
     else if (row == 3) frontend_set_rumble_multiplier(frontend_rumble_multiplier() + dir * 50);
+    else if (row == 4) frontend_set_stick_response((frontend_stick_response() + dir + 3) % 3);
     if (row != 2) settings_save();
 }
 
-static const int k_controls_order[] = { -1, 3, 0, 1, 2 }; /* Back, rumble, gyro, overlay, recenter */
+static const int k_controls_order[] = { -1, 3, 0, 1, 2, 4 }; /* Back, rumble, gyro, overlay, recenter, stick response */
 
 static void pause_action(int action) {
     if (g_pause_controls) {
         switch (action) {
-        case ENH_UP: g_controls_cursor = (g_controls_cursor + 4) % 5; break;
-        case ENH_DOWN: g_controls_cursor = (g_controls_cursor + 1) % 5; break;
+        case ENH_UP: g_controls_cursor = (g_controls_cursor + 5) % 6; break;
+        case ENH_DOWN: g_controls_cursor = (g_controls_cursor + 1) % 6; break;
         case ENH_BACK: g_pause_controls = 0; break;
         case ENH_OK:
             if (g_controls_cursor == 0) { g_pause_controls = 0; break; }
             controls_change(k_controls_order[g_controls_cursor], 1);
             break;
         case ENH_LEFT: case ENH_RIGHT:
-            if (g_controls_cursor > 0 && g_controls_cursor < 4) controls_change(k_controls_order[g_controls_cursor], action == ENH_LEFT ? -1 : 1);
+            if (g_controls_cursor > 0 && g_controls_cursor != 4) controls_change(k_controls_order[g_controls_cursor], action == ENH_LEFT ? -1 : 1);
             break;
         default: break;
         }
@@ -674,7 +679,7 @@ int enh_quit_requested(void) { return g_quit; }
 static int page_rows(int page, int *rows) {
     int n = 0;
     if (page == PAGE_CONTROLS) {
-        rows[n++] = -5; rows[n++] = -6; rows[n++] = -7; rows[n++] = -8;
+        rows[n++] = -5; rows[n++] = -6; rows[n++] = -7; rows[n++] = -8; rows[n++] = -9;
         return n;
     }
     if (page == PAGE_DISPLAY) {
@@ -834,17 +839,18 @@ static void meter_rect(uint32_t *fb, int x0, int y0, int x1, int y1, uint32_t co
 }
 
 static void draw_controls(uint32_t *fb, int w, int h, int cursor) {
-    const int labels[] = { T_BACK, T_RUMBLE, T_GYRO, T_SHOW_GYRO, T_RECENTER };
-    const int positions[] = { 68, 112, 156, 188, 220 };
+    const int labels[] = { T_BACK, T_RUMBLE, T_GYRO, T_SHOW_GYRO, T_RECENTER, T_STICK_RESPONSE };
+    const int positions[] = { 68, 112, 156, 188, 220, 252 };
     const int z = FONT_MEDIUM;
     dim_rect(fb, w, h, 0, 0, w, h, 190);
     draw_centered(fb, w, h, FONT_LARGE, 24, T(T_CONTROLS), 0xffd800);
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         char value[32] = "";
         if (i == 2) {
             if (frontend_gyro_enabled()) snprintf(value, sizeof value, "%.1fX", frontend_gyro_sensitivity() / 100.0);
             else snprintf(value, sizeof value, "%s", T(T_OFF));
         }
+        if (i == 5) snprintf(value, sizeof value, "%s", k_stick_response_name[frontend_stick_response()]);
         if (i == 3) snprintf(value, sizeof value, "%s", T(g_set.show_gyro ? T_ON : T_OFF));
         if (i == 1) {
             if (frontend_rumble_multiplier()) snprintf(value, sizeof value, "%.1fX", frontend_rumble_multiplier() / 100.0);
@@ -868,8 +874,8 @@ static void draw_controls(uint32_t *fb, int w, int h, int cursor) {
     draw_text(fb, w, h, FONT_SMALL, w - 40 - text_width(FONT_SMALL, "R"), y - 11, "R", 0xc0c0c0);
     const char *status = !frontend_gyro_available() ? "NO GYRO CONTROLLER CONNECTED" :
         !frontend_gyro_enabled() ? "GYRO OFF" : !ready ? "HOLD CONTROLLER UPRIGHT" : "HIGHER SENSITIVITY NEEDS LESS TILT";
-    draw_centered(fb, w, h, FONT_SMALL, 260, status, 0xc0c0c0);
-    draw_centered(fb, w, h, FONT_SMALL, 291, "L3: RECENTER   R3: TOGGLE", 0xc0c0c0);
+    draw_centered(fb, w, h, FONT_SMALL, 282, status, 0xc0c0c0);
+    draw_centered(fb, w, h, FONT_SMALL, 310, "L3: RECENTER   R3: TOGGLE", 0xc0c0c0);
 }
 
 
@@ -895,16 +901,18 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
     }
     if (g_paused && g_pause_controls) draw_controls(fb, w, h, g_controls_cursor);
     if (enh_menu_active()) draw_menu(fb, w, h);
-    if (g_set.show_gyro && frontend_gyro_enabled() && frontend_gyro_ready() &&
+    if (g_set.show_gyro &&
         g_booted && !g_paused && !enh_menu_active() && !g_starting &&
         !enh_in_attract() && !enh_name_entry_active()) {
         /* Compact, text-free live meter, centred in the current viewport. */
         const int centre = w / 2, half = 60, y = h - 20;
-        int marker = centre + (int)lround(fmax(-1, fmin(1, frontend_gyro_position())) * half);
+        int marker = centre + (int)lround(fmax(-1, fmin(1, frontend_steering_position())) * half);
         meter_rect(fb, centre - half, y - 1, centre + half, y + 1, 0x909090);
         meter_rect(fb, marker < centre ? marker : centre, y - 1,
                    marker > centre ? marker : centre, y + 1, 0x40ff40);
         meter_rect(fb, centre - 1, y - 5, centre + 1, y + 5, 0xffffff);
+        int raw_marker = centre + (int)lround(fmax(-1, fmin(1, frontend_stick_position())) * half);
+        meter_rect(fb, raw_marker - 1, y - 7, raw_marker + 1, y - 3, 0x40dfff);
         meter_rect(fb, marker - 2, y - 4, marker + 2, y + 4, 0xffd800);
     }
     if (g_set.show_fps && g_font) {                 /* on top of everything, also in play */

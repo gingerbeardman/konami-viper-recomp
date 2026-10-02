@@ -173,7 +173,7 @@ Optional environment settings (also work in classic mode):
 | Variable | Default | Range | Effect |
 | --- | --- | --- | --- |
 | `RT_STICK_DEADZONE` | `0.10` | 0–0.5 | Centre deadzone, rescaled to retain full travel |
-| `RT_STICK_CURVE` | `1.5` | 1–3 | Steering exponent; 1 is linear |
+| `RT_STICK_CURVE` | `3.0` | 1–3 | Steering exponent; 3 is cubic ease-in, 1 is linear |
 | `RT_TRIGGER_DEADZONE` | `0.03` | 0–0.5 | Trigger deadzone |
 
 For example: `RT_STICK_CURVE=1 RT_STICK_DEADZONE=0.08 ./td2`.
@@ -394,7 +394,7 @@ listed in [CHANGELOG.md](CHANGELOG.md).
 - The software is provided "as is", without warranty of any kind.
 
 Enhanced mode exposes gyro controls in **Options → Controls** and **Pause → Controls**.
-Use the D-pad or arrow keys to choose **Gyro Sensitivity**, **Show Gyro Meter**, or **Recenter Gyro**;
+Use the D-pad or arrow keys to choose **Gyro Sensitivity**, **Show Steering Meter**, or **Recenter Gyro**;
 Left/Right adjusts the selected setting, and A/Enter confirms. Sensitivity defaults to
 1.0× (35° to full lock); higher values need less tilt. The Controls menu shows the current sensitivity and a live steering meter.
 Gyro and sensitivity are saved per game.
@@ -415,14 +415,16 @@ updating while paused so sensitivity and recentering can be checked before resum
 The log includes the raw left-stick axis and the steering ADC sent to the game;
 use partial stick travel to check for saturation before or after mapping.
 
-In **Controls**, enable **Show Gyro Meter** for a compact live gyro meter at the bottom
-centre while driving. It defaults to off and is saved per game. The meter is hidden
-when gyro is disabled or unavailable; the full preview remains in Controls.
+In **Controls**, enable **Show Steering Meter** for a compact live gyro meter at the bottom
+centre while driving. It defaults to off and is saved per game. The cyan marker shows raw stick position; yellow shows steering sent to the game.
+It also works with gyro off; the Controls preview remains a gyro tilt meter.
 
-On macOS, a single connected Switch Pro uses GameController/CoreHaptics for rumble,
-while SDL still handles input and sensors. Other controllers and ambiguous multiple-pad
-setups retain SDL rumble. `RT_RUMBLE_BACKEND=sdl` forces SDL output for comparison.
-Native effects use the same short durations and stop on pause/focus loss/disconnect.
+SDL handles rumble by default on all platforms, including Switch Pro controllers.
+On macOS, `RT_RUMBLE_BACKEND=apple` explicitly selects the experimental
+GameController/CoreHaptics route for one unambiguously matched Switch Pro;
+other controllers and ambiguous multiple-pad setups retain SDL routing.
+`RT_RUMBLE_BACKEND=sdl` also selects the default SDL route.
+Effects stop on pause, focus loss and disconnect.
 
 **Options → Controls** and **Pause → Controls** include a saved **Rumble Strength** multiplier,
 from 0.0× (off) to 4.0× in 0.5× steps. 1.0× retains the default strength; boosting
@@ -447,10 +449,9 @@ reconnection. The Apple backend checks that its engine is started before each ef
 including the first effect after pause. Native failures retain native routing while
 recovering; unavailable native devices still use SDL.
 
-Cabinet torque uses a square-root response curve before the rumble multiplier,
-boosting weak driving forces without adding vibration when the game sends zero.
-At the default strength, torque 3–5 now maps to about 22–29% intensity instead of
-10–17%. Full-force output and the Capture/F8 test are unchanged.
+Cabinet torque maps linearly to rumble before the user's strength multiplier.
+At the default strength, torque 3–5 maps to about 10–17% intensity; full torque
+maps to 50%. Zero remains silent. Capture/F8 tests full torque at the selected strength.
 
 **Options → Display → Texture Filter** controls enlarged texture sampling:
 **Original** follows the game's choice (default), **Nearest** keeps hard texel edges,
@@ -462,3 +463,8 @@ crisp; Original and Bilinear retain bilinear final scaling.
 Rumble strength changes are limited to 20 Hz as well as steady-effect refreshes.
 Stop commands remain immediate, and restarting waits one update interval to avoid
 a burst of output commands after pause or focus changes.
+
+**Controls → Stick Response** selects Linear, Soft (quadratic), or Extra Soft
+(cubic, default). Changes apply immediately and are saved per game. All responses
+retain full lock. `RT_STICK_CURVE`, if set, overrides the saved response at launch;
+changing the menu setting then takes effect immediately.

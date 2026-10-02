@@ -19,10 +19,8 @@ typedef struct {
 
 static inline Uint16 controller_motor_strength(uint8_t motor, double gain) {
     if (!(motor & 0x80) || !isfinite(gain) || gain <= 0) return 0;
-    /* Wheel resistance is easy to feel at low torque; gamepad vibration is not.
-     * Lift weak forces while preserving zero, ordering and the full-force endpoint.
-     * Apply the user's gain afterwards so the multiplier remains proportional. */
-    double force = sqrt((motor & 15) / 15.0);
+    /* Preserve proportional cabinet torque, then apply the user's gain. */
+    double force = (motor & 15) / 15.0;
     return (Uint16)lround(fmin(65535.0, force * 65535.0 * fmin(gain, 2.0)));
 }
 
@@ -51,4 +49,18 @@ static void controller_rumble_update(ControllerRumble *state, SDL_GameController
     state->failed = 0;
     state->strength = strength;
     state->refreshed = now;
+}
+
+/* Diagnostic pulse: one finite effect, without the race loop's refreshes. */
+static int controller_rumble_pulse(ControllerRumble *state, SDL_GameController *pad,
+                                    double gain, Uint32 now) {
+    if (!pad) return -1;
+    Uint16 strength = controller_motor_strength(0x8f, gain);
+    if (CONTROLLER_RUMBLE_SEND(pad, strength, strength, strength ? 1000 : 0) < 0)
+        return -1;
+    *state = (ControllerRumble){
+        .id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad)),
+        .strength = strength, .refreshed = now, .sent = 1
+    };
+    return 0;
 }

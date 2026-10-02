@@ -1,5 +1,11 @@
 #include "../runtime/enhanced.c"
 #include <assert.h>
+static int stick_response=2;
+int frontend_stick_response(void) { return stick_response; }
+void frontend_set_stick_response(int v) { stick_response = v>=0 && v<=2 ? v : 2; }
+static double stick_position=.5, steering_position=.25;
+double frontend_stick_position(void) { return stick_position; }
+double frontend_steering_position(void) { return steering_position; }
 static int enabled, sensitivity=100, recentered;
 uint8_t *g_ram;
 static int rumble=100;
@@ -33,7 +39,7 @@ int main(int argc, char **argv) {
  enh_menu_action(ENH_LEFT); assert(sensitivity==100);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_RIGHT); assert(g_set.show_gyro);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(recentered==1);
- enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(!g_pause_controls&&g_paused);
+ enh_menu_action(ENH_DOWN); enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(!g_pause_controls&&g_paused);
  enh_menu_action(ENH_BACK); assert(!g_paused);
  enabled=0;sensitivity=50;g_set.show_gyro=0;rumble=100;settings_load();assert(enabled&&sensitivity==100&&g_set.show_gyro&&rumble==150);
  remove(g_settings_path);
@@ -49,17 +55,21 @@ int main(int argc, char **argv) {
  enh_menu_action(ENH_DOWN);enh_menu_action(ENH_DOWN);
  enh_menu_action(ENH_LEFT);assert(recentered==1);
  enh_menu_action(ENH_OK);assert(recentered==2);
- enh_menu_action(ENH_DOWN);enh_menu_action(ENH_OK);assert(g_screen==SCREEN_OPTIONS);
+ enh_menu_action(ENH_DOWN);enh_menu_action(ENH_DOWN);enh_menu_action(ENH_OK);assert(g_screen==SCREEN_OPTIONS);
  remove(g_settings_path);
- /* The gameplay meter is opt-in, at the bottom, and absent when gyro is off. */
+ /* The shared gameplay meter shows raw stick and output even with gyro off. */
  g_attract_frame=0; g_frame=500; enabled=1;
  uint32_t frame[512*384]={0};
  enh_draw_overlay(frame,512,384);
- assert(frame[364*512+286]==0xffffd800u); /* halfway-right marker */
+ assert(frame[364*512+271]==0xffffd800u);
+ assert(frame[358*512+286]==0xff40dfffu);
  assert(frame[100*512+256]==0);
  g_set.show_gyro=0; memset(frame,0,sizeof frame); enh_draw_overlay(frame,512,384);
- assert(frame[364*512+286]==0);
+ assert(frame[364*512+271]==0 && frame[358*512+286]==0);
  g_set.show_gyro=1; enabled=0; enh_draw_overlay(frame,512,384);
- assert(frame[364*512+286]==0);
+ assert(frame[364*512+271]==0xffffd800u);
+ stick_position=-.5; steering_position=-.25;
+ memset(frame,0,sizeof frame); enh_draw_overlay(frame,512,384);
+ assert(frame[364*512+241]==0xffffd800u && frame[358*512+226]==0xff40dfffu);
  puts("gyro menu navigation and settings persistence: passed");
 }

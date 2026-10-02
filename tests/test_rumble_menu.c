@@ -1,5 +1,10 @@
 #include "../runtime/enhanced.c"
 #include <assert.h>
+static int stick_response=2;
+int frontend_stick_response(void) { return stick_response; }
+void frontend_set_stick_response(int v) { stick_response = v>=0 && v<=2 ? v : 2; }
+double frontend_stick_position(void) { return .5; }
+double frontend_steering_position(void) { return .25; }
 static int multiplier=100;
 int frontend_gyro_enabled(void) {return 0;}
 int frontend_gyro_sensitivity(void) {return 100;}
