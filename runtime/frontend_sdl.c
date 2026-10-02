@@ -318,6 +318,13 @@ static double gyro_steering(double dt) {
 
 
 static void apply_inputs(double dt) {
+    /* Menu confirmation can consume a pedal button's down event. These controls
+     * represent held state, so reconcile them with the device every frame. */
+    int pad_active = g_pad && g_input_focus;
+    hold(&ctl.gas, SRC_PAD, pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_A));
+    hold(&ctl.brake, SRC_PAD, pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_B));
+    hold(&ctl.handbrake, SRC_PAD, pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_X));
+
     /* keyboard steering: ramp towards target */
     double target = !!ctl.steer_right - !!ctl.steer_left;
     double speed = 4.0 * SDL_min(dt, 0.05);

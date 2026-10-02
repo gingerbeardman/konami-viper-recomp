@@ -5,12 +5,12 @@
 uint8_t g_in[8];
 int16_t g_analog[4];
 int g_enhanced;
-static int menu_active;
+static int menu_active, paused;
 uint64_t rt_now(void) { return 0; }
 void rt_log(const char *fmt, ...) { (void)fmt; }
 void nvram_save(void) {}
 int enh_turbo(void) { return 0; }
-int enh_paused(void) { return 0; }
+int enh_paused(void) { return paused; }
 int enh_start_held(void) { return 0; }
 int enh_inputs_owned(void) { return 0; }
 int enh_menu_active(void) { return menu_active; }
@@ -30,6 +30,11 @@ uint64_t voodoo_get_frame(uint32_t *f, int n, int *w, int *h) { (void)f; (void)n
 
 static void axis(SDL_GameControllerAxis a, Sint16 value) {
     assert(SDL_JoystickSetVirtualAxis(SDL_GameControllerGetJoystick(g_pad), a, value) == 0);
+    SDL_JoystickUpdate();
+}
+
+static void button(SDL_GameControllerButton b, int down) {
+    assert(SDL_JoystickSetVirtualButton(SDL_GameControllerGetJoystick(g_pad), b, down) == 0);
     SDL_JoystickUpdate();
 }
 
@@ -61,6 +66,21 @@ int main(void) {
     assert(g_pad);
     assert(pad_matches(g_pad_id));
     assert(!pad_matches(g_pad_id + 1));
+    /* A press consumed by Pause/Resume must still count as held accelerator. */
+    axis(SDL_CONTROLLER_AXIS_TRIGGERLEFT, -32768);
+    axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, -32768);
+    button(SDL_CONTROLLER_BUTTON_A, 1); pad_button(SDL_CONTROLLER_BUTTON_A, 1);
+    apply_inputs(.016); assert(g_analog[1]==200);
+    paused=1;apply_inputs(.016);
+    paused=0;apply_inputs(.016);assert(g_analog[1]==200);
+    paused=1;
+    button(SDL_CONTROLLER_BUTTON_A, 0);pad_button(SDL_CONTROLLER_BUTTON_A, 0);
+    button(SDL_CONTROLLER_BUTTON_A, 1); /* menu handles this press, so no pad_button down */
+    paused=0;apply_inputs(.016);assert(g_analog[1]==200);
+    button(SDL_CONTROLLER_BUTTON_A, 0);apply_inputs(.016);assert(g_analog[1]==-200);
+    button(SDL_CONTROLLER_BUTTON_B, 1);paused=1;apply_inputs(.016);
+    paused=0;apply_inputs(.016);assert(g_analog[2]==200);
+    button(SDL_CONTROLLER_BUTTON_B, 0);apply_inputs(.016);assert(g_analog[2]==-200);
     /* SDL's virtual joystick maps -32768..32767 to controller trigger 0..32767. */
     axis(SDL_CONTROLLER_AXIS_TRIGGERLEFT, -32768);
     axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, -32768);
@@ -80,11 +100,11 @@ int main(void) {
     axis(SDL_CONTROLLER_AXIS_RIGHTY, 0);
     axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, 0);
     key(SDLK_w, 1); apply_inputs(.016); assert(g_analog[1] == 200);
-    pad_button(SDL_CONTROLLER_BUTTON_A, 1);
+    button(SDL_CONTROLLER_BUTTON_A, 1); pad_button(SDL_CONTROLLER_BUTTON_A, 1);
     key(SDLK_w, 0); apply_inputs(.016); assert(g_analog[1] == 200);
     key(SDLK_w, 1); close_pad(); apply_inputs(.016); assert(g_analog[1] == 200);
     key(SDLK_w, 0); apply_inputs(.016); assert(g_analog[1] == -200);
-    open_pad(); axis(SDL_CONTROLLER_AXIS_RIGHTY, -32768);
+    open_pad(); button(SDL_CONTROLLER_BUTTON_A, 0);axis(SDL_CONTROLLER_AXIS_RIGHTY, -32768);
     g_input_focus = 0; apply_inputs(.016); assert(g_analog[1] == -200);
     g_input_focus = 1; menu_active = 1; apply_inputs(.016); assert(g_analog[1] == -200);
     close_pad();
