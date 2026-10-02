@@ -58,8 +58,11 @@ void enh_on_frame(const uint32_t *frame, int w, int h);
 int enh_in_attract(void);
 enum { ENH_UP, ENH_DOWN, ENH_LEFT, ENH_RIGHT, ENH_OK, ENH_BACK };
 void enh_init(const char *work, const char *settings); /* fonts, port settings */
+int enh_texture_filter(void); /* 0 original, 1 nearest */
 int enh_want_fullscreen(void);
 void enh_set_fullscreen(int on);
+int enh_want_window(int *r);                           /* both modes: x, y, w, h; 0 if none */
+void enh_set_window(const int *r);
 int enh_menu_active(void);                             /* attract menu on screen */
 void enh_menu_action(int action);
 int enh_start_held(void);                              /* START GAME: hold START for the game */
@@ -74,11 +77,14 @@ int enh_inputs_owned(void);                            /* the enhanced layer dri
 int enh_name_entry_active(void);                       /* rankings name entry: letters from the keyboard */
 int enh_name_type(int ch);                             /* a letter, '\b' DEL, '\r' END; 1 if accepted */
 void enh_name_step(int dir);                           /* previous (-1) / next (+1) letter on the wheel */
+int enh_wheel_select_active(void);                     /* a choice from the wheel (course, transmission): */
+void enh_wheel_select_step(int dir);                   /* Left/Right step (-1/+1, left to right) */
+double enh_wheel_select_pos(void);                     /* and the wheel is held here (-1..1) */
 void hw_shutdown(void);
 void nvram_save(void);
 void rt_pace_vblank(void);
 void audio_frontend_push(const uint8_t *blk);
-int frontend_run(int scale);
+int frontend_run(int scale, int scale_explicit);     /* --scale given: its size, not the saved one */
 void frontend_set_motor(uint8_t command); /* guest -> host, atomic cabinet motor output */
 uint32_t hw_read(uint32_t ea, int size);
 void hw_write(uint32_t ea, int size, uint32_t v);
@@ -92,6 +98,8 @@ void voodoo_lfb_write(uint32_t off, uint32_t v, uint32_t mask);
 uint32_t voodoo_io_read(uint32_t off);
 void voodoo_io_write(uint32_t off, uint32_t v, uint32_t mask);
 uint64_t voodoo_get_frame(uint32_t *dst, int max_pixels, int *w, int *h);
+const uint8_t *voodoo_vram(uint32_t *size);          /* VRAM, to read (no sync with the renderer) */
+uint8_t *voodoo_vram_for_write(void);                /* VRAM, to write: waits for the renderer */
 void voodoo_stats(void);
 void rt_eat_cycles(uint32_t n);
 

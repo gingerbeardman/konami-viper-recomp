@@ -25,3 +25,5 @@ int main(int argc,char **argv) {
  enh_menu_action(ENH_RIGHT);assert(multiplier==50);
  remove(g_settings_path);puts("rumble menu navigation, range and saved multiplier: passed");
 }
+
+void voodoo_set_texture_filter(int n) { (void)n; }

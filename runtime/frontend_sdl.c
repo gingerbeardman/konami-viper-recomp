@@ -10,7 +10,9 @@
  *   E  shift up   Q  shift down   5  coin   1  start   F2  test   9  service
  *   (enhanced mode: test, service and coin are not passed to the game: TEST MODE cannot be
  *   opened, and the game is on free play. In the rankings' name entry the keyboard types the
- *   letters, Backspace deletes, Enter ends, Left/Right and the D-pad step through the letters)
+ *   letters, Backspace deletes, Enter ends, Left/Right and the D-pad step through the letters;
+ *   in the course select (and GTI Club 2's transmission select) Left/Right, A/D, the D-pad
+ *   and the stick step through the choices, and the wheel stays on the chosen one)
  *   Gamepad: left stick = steering, R2/L2 = gas/brake, R1/L1 = shift up/down,
  *            X = handbrake, Start = start, Back = coin
  *   F11 fullscreen, Esc quit
@@ -24,6 +26,7 @@ static int send_controller_rumble(SDL_GameController *pad, Uint16 low, Uint16 hi
 #define CONTROLLER_RUMBLE_SEND send_controller_rumble
 #endif
 #include "controller_rumble.h"
+#include "window_state.h"
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -197,12 +200,13 @@ static void update_rumble(int active) {
 
 static void apply_inputs(double dt) {
     /* keyboard steering: ramp towards target */
-    double target = !!ctl.steer_right - !!ctl.steer_left;
+    int wsel = enh_wheel_select_active();
+    double target = wsel ? enh_wheel_select_pos() : !!ctl.steer_right - !!ctl.steer_left;
     double speed = 4.0 * dt;
     if (ctl.steer < target) ctl.steer = SDL_min(target, ctl.steer + speed);
     else if (ctl.steer > target) ctl.steer = SDL_max(target, ctl.steer - speed);
     double steer = ctl.steer;
-    if (g_pad && abs(ctl.pad_steer) > 3000) steer = ctl.pad_steer / 32767.0;
+    if (g_pad && abs(ctl.pad_steer) > 3000 && !wsel) steer = ctl.pad_steer / 32767.0;
     /* signed positions for the differential ADC (hw.c): steering -200..+200, pedals -200 (released)..+200 */
     int gas = ctl.gas ? 255 : 0, brake = ctl.brake ? 255 : 0;
     if (g_pad) {
@@ -305,7 +309,16 @@ static void pad_button(int b, int down) {
 /* ------------------------------------------------------------------ main loop */
 void nvram_save(void);
 
-int frontend_run(int scale) {
+/* the normal window only: fullscreen, maximized and minimized bounds are not kept */
+static void save_window(SDL_Window *win) {
+    if (SDL_GetWindowFlags(win) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED)) return;
+    int r[4];
+    SDL_GetWindowPosition(win, &r[0], &r[1]);
+    SDL_GetWindowSize(win, &r[2], &r[3]);
+    enh_set_window(r);
+}
+
+int frontend_run(int scale, int scale_explicit) {
 #ifdef VIPER_NATIVE_HAPTICS
     const char *rumble_backend = getenv("RT_RUMBLE_BACKEND");
     if (rumble_backend && !strcmp(rumble_backend, "apple")) controller_haptics_init();
@@ -322,8 +335,32 @@ int frontend_run(int scale) {
         else rt_log("RT_RUMBLE: expected 0..2; keeping current setting\n");
     }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
-    SDL_Window *win = SDL_CreateWindow(g_enhanced ? GAME_TITLE " - enhanced" : GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                       512 * scale, 384 * scale, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    /* the window of the last run (port settings), fitted to the displays connected now; an
+     * explicit --scale keeps only its position (not after an enhanced-mode restart, which runs
+     * again with the same arguments and continues the session) */
+    SDL_Rect window_rect = { SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 512 * scale, 384 * scale };
+    int saved[4];
+    if (enh_want_window(saved)) {
+        window_rect.x = saved[0];
+        window_rect.y = saved[1];
+        if (!scale_explicit || getenv("RT_RESTARTED")) { window_rect.w = saved[2]; window_rect.h = saved[3]; }
+        int count = SDL_GetNumVideoDisplays(), usable = 0;
+        SDL_Rect *displays = count > 0 ? calloc((size_t)count, sizeof *displays) : NULL;
+        if (displays) {
+            for (int i = 0; i < count; i++)
+                if (SDL_GetDisplayUsableBounds(i, &displays[usable]) == 0 || SDL_GetDisplayBounds(i, &displays[usable]) == 0)
+                    usable++;
+            window_state_fit(&window_rect, displays, usable);
+            free(displays);
+        }
+    }
+    SDL_Window *win = SDL_CreateWindow(g_enhanced ? GAME_TITLE " - enhanced" : GAME_TITLE,
+        window_rect.x, window_rect.y, window_rect.w, window_rect.h,
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    if (!win) { rt_log("SDL_CreateWindow failed: %s\n", SDL_GetError()); SDL_Quit(); return -1; }
+    SDL_SetWindowMinimumSize(win, 320, 240);
+    int window_dirty = 0;               /* moved or resized: saved 0.5 s after the last change */
+    Uint32 window_changed = 0;
     if (getenv("RT_RESTARTED")) {       /* enhanced mode, after a restart: macOS does not reactivate */
         unsetenv("RT_RESTARTED");       /* the re-executed program, so take the focus back */
         SDL_SetHint("SDL_FORCE_RAISEWINDOW", "1");
@@ -333,6 +370,7 @@ int frontend_run(int scale) {
     SDL_RenderSetLogicalSize(ren, 512, 384);
     SDL_Texture *tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 512, 384);
     int tw = 512, th = 384;
+    int window_filter_applied = SDL_ScaleModeLinear;   /* the textures are made linear (the hint) */
 
     SDL_AudioSpec want = {0}, have;
     want.freq = 44100;
@@ -372,6 +410,12 @@ int frontend_run(int scale) {
         while (SDL_PollEvent(&ev)) {
             switch (ev.type) {
             case SDL_QUIT: running = 0; break;
+            case SDL_WINDOWEVENT:
+                if (ev.window.event == SDL_WINDOWEVENT_MOVED || ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                    window_dirty = 1;
+                    window_changed = SDL_GetTicks();
+                }
+                break;
             case SDL_KEYDOWN:
                 if (ev.key.keysym.sym == SDLK_F8) { if (!ev.key.repeat) test_rumble(); break; }
                 if ((enh_menu_active() || enh_paused()) && menu_key(ev.key.keysym.sym) >= 0) {
@@ -384,8 +428,14 @@ int frontend_run(int scale) {
                     SDL_SetWindowFullscreen(win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
                     enh_set_fullscreen(!fs);    /* enhanced mode: remembered in the settings */
                     fs_applied = !fs;
-                } else if (!(enh_name_entry_active() && !enh_paused() && name_key(ev.key.keysym.sym)))
+                } else if (!(enh_name_entry_active() && !enh_paused() && name_key(ev.key.keysym.sym))) {
+                    if (!ev.key.repeat && !enh_paused() && enh_wheel_select_active()) {
+                        SDL_Keycode k = ev.key.keysym.sym;
+                        if (k == SDLK_LEFT || k == SDLK_a) enh_wheel_select_step(-1);
+                        else if (k == SDLK_RIGHT || k == SDLK_d) enh_wheel_select_step(1);
+                    }
                     key(ev.key.keysym.sym, 1);
+                }
                 break;
             case SDL_KEYUP: key(ev.key.keysym.sym, 0); break;
             case SDL_TEXTINPUT:
@@ -408,7 +458,14 @@ int frontend_run(int scale) {
                 }
                 break;
             case SDL_CONTROLLERAXISMOTION:
-                if (ev.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX) ctl.pad_steer = ev.caxis.value;
+                if (ev.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX) {
+                    /* wheel selects: pushing the stick to one side steps once */
+                    static int zone;
+                    int z = ev.caxis.value < -16000 ? -1 : ev.caxis.value > 16000 ? 1 : 0;
+                    if (z && z != zone && !enh_paused()) enh_wheel_select_step(z);
+                    zone = z;
+                    ctl.pad_steer = ev.caxis.value;
+                }
                 else if (ev.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) ctl.pad_gas = ev.caxis.value;
                 else if (ev.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) ctl.pad_brake = ev.caxis.value;
                 break;
@@ -420,10 +477,15 @@ int frontend_run(int scale) {
                 }
 #endif
                 if ((enh_menu_active() || enh_paused()) && menu_button(ev.cbutton.button) >= 0) enh_menu_action(menu_button(ev.cbutton.button));
-                else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) enh_escape();
+                else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) {
+                    if (!enh_escape()) running = 0;  /* Home: pause/back in play, quit from main menu. */
+                }
                 else if (enh_name_entry_active() && !enh_paused() && (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ||
                                                                        ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT))
                     enh_name_step(ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? -1 : 1);
+                else if (enh_wheel_select_active() && !enh_paused() && (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ||
+                                                                          ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT))
+                    enh_wheel_select_step(ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? -1 : 1);
                 else pad_button(ev.cbutton.button, 1);
                 break;
             case SDL_CONTROLLERBUTTONUP: pad_button(ev.cbutton.button, 0); break;
@@ -446,14 +508,16 @@ int frontend_run(int scale) {
             last_frame = cnt;
             voodoo_get_frame(raw, 2048 * 2048, &w, &h);
             if (w != tw || h != th) {
-                /* a new aspect ratio (enhanced mode, widescreen): the window keeps its height */
+                /* a new aspect ratio (enhanced mode, widescreen): the window keeps its height,
+                 * unless it already has that ratio (a window restored from the settings) */
                 if ((long)w * th != (long)h * tw && !(SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP)) {
                     int ww, wh;
                     SDL_GetWindowSize(win, &ww, &wh);
-                    SDL_SetWindowSize(win, (int)((long)wh * w / h), wh);
+                    if ((long)w * wh != (long)h * ww) SDL_SetWindowSize(win, (int)((long)wh * w / h), wh);
                 }
                 SDL_DestroyTexture(tex);
                 tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+                window_filter_applied = SDL_ScaleModeLinear;
                 SDL_RenderSetLogicalSize(ren, w, h);
                 tw = w; th = h;
             }
@@ -467,11 +531,21 @@ int frontend_run(int scale) {
         }
         SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
         SDL_RenderClear(ren);
+        int window_filter = enh_texture_filter() ? SDL_ScaleModeNearest : SDL_ScaleModeLinear;
+        if (window_filter != window_filter_applied) {
+            SDL_SetTextureScaleMode(tex, (SDL_ScaleMode)window_filter);
+            window_filter_applied = window_filter;
+        }
         SDL_RenderCopy(ren, tex, NULL, NULL);
         SDL_RenderPresent(ren);       /* vsync paces this loop */
+        if (window_dirty && (Uint32)(SDL_GetTicks() - window_changed) >= 500) {
+            save_window(win);
+            window_dirty = 0;
+        }
     }
     g_rumble_testing = 0;
     update_rumble(0);
+    if (window_dirty) save_window(win);
     nvram_save();
     if (g_pad) SDL_GameControllerClose(g_pad);
     if (g_audio) SDL_CloseAudioDevice(g_audio);
