@@ -22,9 +22,9 @@ int main(void) {
     assert(controller_motor_strength(0x8f,2) == 65535);
     assert(controller_motor_strength(0x8f,100) == 65535);
     assert(controller_motor_strength(0x8f,NAN) == 0);
-    /* The recorded race forces (3..5) should exceed the old 10..17% output. */
-    assert(controller_motor_strength(0x83,.5) > 14000);
-    assert(controller_motor_strength(0x85,.5) > 18000);
+    /* Default gain preserves proportional torque, without boosting weak forces. */
+    assert(controller_motor_strength(0x83,.5) == 6554);
+    assert(controller_motor_strength(0x85,.5) == 10923);
     Uint16 previous = 0;
     for (int torque=1; torque<=15; torque++) {
         Uint16 strength = controller_motor_strength((uint8_t)(0x80 | torque),.5);

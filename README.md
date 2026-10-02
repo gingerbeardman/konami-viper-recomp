@@ -376,10 +376,9 @@ reconnection. The Apple backend checks that its engine is started before each ef
 including the first effect after pause. Native failures retain native routing while
 recovering; unavailable native devices still use SDL.
 
-Cabinet torque uses a square-root response curve before the rumble multiplier,
-boosting weak driving forces without adding vibration when the game sends zero.
-At the default strength, torque 3–5 now maps to about 22–29% intensity instead of
-10–17%. Full-force output and the Capture/F8 test are unchanged.
+Cabinet torque maps linearly to rumble before the user's strength multiplier.
+At the default strength, torque 3–5 maps to about 10–17% intensity; full torque
+maps to 50%. Zero remains silent. Capture/F8 tests full torque at the selected strength.
 
 Capture/F8 also records 30 seconds of game motor commands, output strength and
 routing diagnostics, to distinguish weak game forces from controller failures.
