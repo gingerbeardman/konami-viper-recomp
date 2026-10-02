@@ -392,9 +392,10 @@ static void apply_inputs(double dt) {
             int lower = !!(ctl.shift_down & ~SRC_PAD) ||
                 (pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER));
             explorer_adjust((float)((gas - brake) * 40 * step), (float)((raise - lower) * 12 * step));
-        }
+            explorer_look((float)steer);
+        } else explorer_look(0);
         steer = gas = brake = 0;  /* drone controls must not drive the car */
-    }
+    } else explorer_look(0);
     /* signed positions for the differential ADC: steering -200..+200, pedals released=-200 */
     if (enh_name_entry_active()) steer = 0;   /* the letters come from the keyboard */
     g_analog[0] = (int16_t)lround(steer * ANALOG_RANGE);

@@ -7,6 +7,7 @@ Start a game and choose a course, then press **F6** to toggle the drone tour. Yo
 
 - **Accelerator / brake** (A / B, triggers, or Up / Down): hold to increase/decrease cruise speed; release to keep it steady.
 - **Left / right shoulder** (L / R, or Q / E): lower/raise the drone; release to hold height. Steering and gyro do not change drone height.
+- **Steering stick / gyro** (or Left / Right): look up to 90 degrees left/right of the route heading. Centre the input to look forward again.
 - **[ / ]**: decrease/increase speed, from stationary to 160 metres/second (default 40).
 - **− / =**: lower/raise the drone, 3–60 metres above the road (default 12).
 - **F6** again: return to the normal camera.
