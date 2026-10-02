@@ -12,6 +12,7 @@ typedef struct {
     SDL_JoystickID id;
     Uint16 strength;
     Uint32 refreshed;
+    int sent;
     int failed;
     Uint32 retry_at;
 } ControllerRumble;
@@ -34,8 +35,10 @@ static void controller_rumble_update(ControllerRumble *state, SDL_GameController
     if (!pad) return;
     if (state->failed && (Sint32)(now - state->retry_at) < 0) return;
     Uint16 strength = active ? controller_motor_strength(motor, gain) : 0;
-    /* Effects expire even if the window stalls. Refresh at 20 Hz, stop immediately. */
-    if (!state->failed && strength == state->strength && (!strength || (Uint32)(now - state->refreshed) < 50)) return;
+    /* Rate-limit changing strengths too: rapid Switch Bluetooth output can
+     * disconnect the controller. Stops remain immediate; resume waits one interval. */
+    if (!state->failed && !strength && !state->strength) return;
+    if (strength && state->sent && (Uint32)(now - state->refreshed) < 50) return;
 #if SDL_VERSION_ATLEAST(2, 0, 9)
     if (CONTROLLER_RUMBLE_SEND(pad, strength, strength, strength ? 100 : 0) < 0) {
         if (!state->failed) SDL_Log("Controller rumble failed; retrying: %s", SDL_GetError());
@@ -44,6 +47,7 @@ static void controller_rumble_update(ControllerRumble *state, SDL_GameController
         return;
     }
 #endif
+    state->sent = 1;
     state->failed = 0;
     state->strength = strength;
     state->refreshed = now;
