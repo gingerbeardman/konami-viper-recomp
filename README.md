@@ -168,7 +168,7 @@ Optional environment settings (also work in classic mode):
 | Variable | Default | Range | Effect |
 | --- | --- | --- | --- |
 | `RT_STICK_DEADZONE` | `0.10` | 0–0.5 | Centre deadzone, rescaled to retain full travel |
-| `RT_STICK_CURVE` | `1.5` | 1–3 | Steering exponent; 1 is linear |
+| `RT_STICK_CURVE` | `2.0` | 1–3 | Steering exponent; 2 is quadratic ease-in, 1 is linear |
 | `RT_TRIGGER_DEADZONE` | `0.03` | 0–0.5 | Trigger deadzone |
 
 For example: `RT_STICK_CURVE=1 RT_STICK_DEADZONE=0.08 ./td2`.

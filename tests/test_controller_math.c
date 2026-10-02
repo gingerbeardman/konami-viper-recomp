@@ -3,16 +3,19 @@
 #include <stdio.h>
 
 int main(void) {
-    assert(controller_axis(-32768, .1, 1.5) == -1);
-    assert(controller_axis(32767, .1, 1.5) == 1);
-    assert(controller_axis(0, .1, 1.5) == 0);
-    assert(controller_axis(3276, .1, 1.5) == 0);
-    assert(controller_axis(-3276, .1, 1.5) == 0);
-    assert(controller_axis(3277, .1, 1.5) < .00001);
-    assert(controller_axis(16384, .1, 1.5) < controller_axis(16384, .1, 1));
+    assert(controller_axis(-32768, .1, 2.0) == -1);
+    assert(controller_axis(32767, .1, 2.0) == 1);
+    assert(controller_axis(0, .1, 2.0) == 0);
+    assert(controller_axis(3276, .1, 2.0) == 0);
+    assert(controller_axis(-3276, .1, 2.0) == 0);
+    assert(controller_axis(3277, .1, 2.0) < .00001);
+    assert(controller_axis(16384, .1, 2.0) < controller_axis(16384, .1, 1));
+    /* Half of the usable stick travel gives one quarter steering. */
+    assert(fabs(controller_axis(18022, .1, 2.0) - .25) < .0001);
+    assert(fabs(controller_axis(-18022, .1, 2.0) + .25) < .0001);
     double previous = -1;
     for (int raw = -32768; raw <= 32767; raw++) {
-        double v = controller_axis(raw, .1, 1.5);
+        double v = controller_axis(raw, .1, 2.0);
         assert(v >= previous && v >= -1 && v <= 1);
         previous = v;
     }

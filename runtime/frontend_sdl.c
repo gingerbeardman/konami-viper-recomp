@@ -121,7 +121,7 @@ static int g_menu_repeat_button = -1;
 static Uint32 g_menu_repeat_at;
 static int g_controller_log;
 static Uint32 g_controller_log_tick;
-static double g_stick_deadzone = 0.10, g_stick_curve = 1.5, g_trigger_deadzone = 0.03;
+static double g_stick_deadzone = 0.10, g_stick_curve = 2.0, g_trigger_deadzone = 0.03;
 
 static double controller_option(const char *name, double fallback, double lo, double hi) {
     const char *value = getenv(name);
@@ -336,7 +336,7 @@ int frontend_run(int scale) {
     else rt_log("audio: %s\n", SDL_GetError());
 
     g_stick_deadzone = controller_option("RT_STICK_DEADZONE", 0.10, 0.0, 0.5);
-    g_stick_curve = controller_option("RT_STICK_CURVE", 1.5, 1.0, 3.0);
+    g_stick_curve = controller_option("RT_STICK_CURVE", 2.0, 1.0, 3.0);
     g_trigger_deadzone = controller_option("RT_TRIGGER_DEADZONE", 0.03, 0.0, 0.5);
     open_pad();
 
