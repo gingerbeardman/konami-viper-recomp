@@ -121,6 +121,8 @@ static void hold(int *f, int src, int down) { *f = down ? *f | src : *f & ~src; 
 static SDL_GameController *g_pad;
 static SDL_JoystickID g_pad_id = -1;
 static int g_input_focus = 1;
+static int g_controller_log;
+static Uint32 g_controller_log_tick;
 static double g_stick_deadzone = 0.10, g_stick_curve = 1.5, g_trigger_deadzone = 0.03;
 
 static double controller_option(const char *name, double fallback, double lo, double hi) {
@@ -309,6 +311,11 @@ static void apply_inputs(double dt) {
     /* signed positions for the differential ADC: steering -200..+200, pedals released=-200 */
     if (enh_name_entry_active()) steer = 0;   /* the letters come from the keyboard */
     g_analog[0] = (int16_t)(steer * ANALOG_RANGE);
+    if (g_controller_log && g_pad && (Uint32)(SDL_GetTicks() - g_controller_log_tick) >= 100) {
+        g_controller_log_tick = SDL_GetTicks();
+        rt_log("controller: left_x=%d steering_adc=%d gas=%.3f brake=%.3f\n",
+               SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_LEFTX), g_analog[0], gas, brake);
+    }
     g_analog[1] = (int16_t)(-ANALOG_RANGE + gas * 2 * ANALOG_RANGE);
     g_analog[2] = (int16_t)(-ANALOG_RANGE + brake * 2 * ANALOG_RANGE);
     if (GAME_HAS_HANDBRAKE) g_analog[3] = (int16_t)(ctl.handbrake ? ANALOG_RANGE : -ANALOG_RANGE);
@@ -488,6 +495,13 @@ int frontend_run(int scale) {
                 break;
             case SDL_KEYDOWN:
                 if (ev.key.keysym.sym == SDLK_F8) { if (!ev.key.repeat) test_rumble(); break; }
+                if (ev.key.keysym.sym == SDLK_F9) {
+                    if (!ev.key.repeat) {
+                        g_controller_log = !g_controller_log;
+                        rt_log("controller input logging: %s\n", g_controller_log ? "on" : "off");
+                    }
+                    break;
+                }
                 if ((enh_menu_active() || enh_paused()) && menu_key(ev.key.keysym.sym) >= 0) {
                     if (!ev.key.repeat) enh_menu_action(menu_key(ev.key.keysym.sym));
                 } else if (ev.key.keysym.sym == SDLK_ESCAPE) {

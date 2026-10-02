@@ -411,3 +411,6 @@ back out of an options page, and quit from the main menu. In Pause, choose
 A / Start still confirms menu choices. In original arcade mode, Home / Esc quits.
 The Controls menu has a live gyro steering meter with a centre mark; it continues
 updating while paused so sensitivity and recentering can be checked before resuming.
+**F9** toggles controller input logging (10 samples/second) to diagnose steering.
+The log includes the raw left-stick axis and the steering ADC sent to the game;
+use partial stick travel to check for saturation before or after mapping.

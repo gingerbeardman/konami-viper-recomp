@@ -49,6 +49,12 @@ int main(void) {
     assert(g_analog[0] == 0 && g_analog[1] == -200 && g_analog[2] == -200);
     axis(SDL_CONTROLLER_AXIS_LEFTX, -32768); apply_inputs(.016); assert(g_analog[0] == -200);
     axis(SDL_CONTROLLER_AXIS_LEFTX, 32767); apply_inputs(.016); assert(g_analog[0] == 200);
+    /* Partial travel must survive the real input path as distinct ADC values. */
+    axis(SDL_CONTROLLER_AXIS_LEFTX, 8192); apply_inputs(.016); int quarter = g_analog[0];
+    axis(SDL_CONTROLLER_AXIS_LEFTX, 16384); apply_inputs(.016); int half = g_analog[0];
+    axis(SDL_CONTROLLER_AXIS_LEFTX, 24576); apply_inputs(.016); int three_quarters = g_analog[0];
+    assert(quarter > 0 && half > quarter && three_quarters > half && three_quarters < 200);
+    axis(SDL_CONTROLLER_AXIS_LEFTX, -16384); apply_inputs(.016); assert(abs(g_analog[0] + half) <= 1);
     axis(SDL_CONTROLLER_AXIS_LEFTX, 3000); apply_inputs(.016); assert(g_analog[0] == 0);
     axis(SDL_CONTROLLER_AXIS_RIGHTY, -32768); apply_inputs(.016); assert(g_analog[1] == 200 && g_analog[2] == -200);
     axis(SDL_CONTROLLER_AXIS_RIGHTY, 32767); apply_inputs(.016); assert(g_analog[2] == 200 && g_analog[1] == -200);
