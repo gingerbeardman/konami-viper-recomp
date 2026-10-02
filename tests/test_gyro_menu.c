@@ -64,3 +64,5 @@ int main(int argc, char **argv) {
  assert(frame[364*512+241]==0xffffd800u && frame[358*512+226]==0xff40dfffu);
  puts("gyro menu navigation and settings persistence: passed");
 }
+
+void voodoo_set_texture_filter(int n) { (void)n; }

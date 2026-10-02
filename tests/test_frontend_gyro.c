@@ -67,3 +67,10 @@ int main(void) {
     g_pad=NULL;
     puts("live paused gyro preview, sensitivity, recenter and suppression: passed");
 }
+
+int enh_want_window(int *r) { (void)r; return 0; }
+void enh_set_window(const int *r) { (void)r; }
+int enh_texture_filter(void) { return 0; }
+int enh_wheel_select_active(void) { return 0; }
+void enh_wheel_select_step(int dir) { (void)dir; }
+double enh_wheel_select_pos(void) { return 0; }
