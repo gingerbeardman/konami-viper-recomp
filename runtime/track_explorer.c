@@ -14,7 +14,8 @@ static int count;
 static float length, distance, altitude;
 static uint32_t root, last_tick;
 static uint64_t last_frame, last_cycles;
-static atomic_int requested, active, speed = 40, height = 12;
+static atomic_int requested, active;
+static _Atomic float speed = 40, height = 12;
 
 void explorer_toggle(void) { atomic_fetch_xor(&requested, 1); }
 void explorer_on_frame(uint64_t frame) {
@@ -23,8 +24,8 @@ void explorer_on_frame(uint64_t frame) {
     }
 }
 int explorer_active(void) { return atomic_load(&active); }
-void explorer_adjust(int s, int h) {
-    int v = atomic_load(&speed) + s;
+void explorer_adjust(float s, float h) {
+    float v = atomic_load(&speed) + s;
     atomic_store(&speed, v < 0 ? 0 : v > 160 ? 160 : v);
     v = atomic_load(&height) + h;
     atomic_store(&height, v < 3 ? 3 : v > 60 ? 60 : v);

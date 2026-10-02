@@ -382,6 +382,15 @@ static void apply_inputs(double dt) {
         brake = fmax(brake, fmax(pedals, controller_trigger(
             SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT), g_trigger_deadzone)));
     }
+    if (explorer_active()) {
+        if (g_input_focus && !enh_paused() && !enh_menu_active() && !enh_inputs_owned()) {
+            /* Hold pedals to change cruise speed, steer to change clearance.
+             * Release holds the setting; route navigation stays automatic. */
+            double step = fmax(0, fmin(dt, .05));
+            explorer_adjust((float)((gas - brake) * 40 * step), (float)(steer * 12 * step));
+        }
+        steer = gas = brake = 0;  /* drone controls must not drive the car */
+    }
     /* signed positions for the differential ADC: steering -200..+200, pedals released=-200 */
     if (enh_name_entry_active()) steer = 0;   /* the letters come from the keyboard */
     g_analog[0] = (int16_t)lround(steer * ANALOG_RANGE);
