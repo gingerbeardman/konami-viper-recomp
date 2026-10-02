@@ -190,6 +190,22 @@ synthesize collision effects. Rumble stops when unfocused, paused, in an enhance
 during automatic setup, or on normal exit. Short effects expire if the frontend stalls.
 Controllers without rumble support continue to work normally. Requires SDL 2.0.9+ for rumble.
 
+### Gyro steering
+
+Opt in with `RT_GYRO=1 ./gticlub2` (or any game executable). A controller exposing both
+SDL gyro and accelerometer sensors, such as Nintendo Switch Pro, can steer by rolling it
+like a small steering wheel. Hold it comfortably in front of you as play begins; that pose
+becomes centre. Click the left stick to recenter. A two-degree deadzone suppresses small
+movements, and 35 degrees of roll gives full steering lock. Use `RT_GYRO_RANGE=45` to change
+the full-lock angle (10–90 degrees).
+
+The gyro is corrected towards gravity to limit drift; hold the controller like a wheel,
+not flat on a table. Gravity correction is suspended during strong acceleration or when
+the controller is flat. Keyboard steering and the left stick remain available and override
+tilt when used. Sensors recenter after pause, menus, focus changes, or a long frame stall.
+Unsupported controllers fall back to the existing controls. Requires SDL 2.0.14+ for sensors;
+gyro remains off by default.
+
 ## Required files
 
 The layout of `roms/` is the same as a MAME rompath. You only need `kviper/` plus the folders of
