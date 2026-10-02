@@ -366,3 +366,8 @@ use partial stick travel to check for saturation before or after mapping.
 Hold Left/Right to repeat menu value adjustments (400 ms delay, then 80 ms intervals
 on controllers; normal keyboard repeat). Confirm never repeats. Held pedal buttons
 are reconciled with the controller each frame, including after pause/resume.
+
+**Controls → Stick Response** selects Linear, Soft (quadratic), or Extra Soft
+(cubic, default). Changes apply immediately and are saved per game. All responses
+retain full lock. `RT_STICK_CURVE`, if set, overrides the saved response at launch;
+changing the menu setting then takes effect immediately.

@@ -122,6 +122,11 @@ static Uint32 g_menu_repeat_at;
 static int g_controller_log;
 static Uint32 g_controller_log_tick;
 static double g_stick_deadzone = 0.10, g_stick_curve = 3.0, g_trigger_deadzone = 0.03;
+int frontend_stick_response(void) { return (int)lround(g_stick_curve) - 1; }
+void frontend_set_stick_response(int response) {
+    g_stick_curve = response >= 0 && response <= 2 ? response + 1.0 : 3.0;
+}
+
 
 static double controller_option(const char *name, double fallback, double lo, double hi) {
     const char *value = getenv(name);
@@ -336,7 +341,7 @@ int frontend_run(int scale) {
     else rt_log("audio: %s\n", SDL_GetError());
 
     g_stick_deadzone = controller_option("RT_STICK_DEADZONE", 0.10, 0.0, 0.5);
-    g_stick_curve = controller_option("RT_STICK_CURVE", 3.0, 1.0, 3.0);
+    g_stick_curve = controller_option("RT_STICK_CURVE", g_stick_curve, 1.0, 3.0);
     g_trigger_deadzone = controller_option("RT_TRIGGER_DEADZONE", 0.03, 0.0, 0.5);
     open_pad();
 

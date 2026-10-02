@@ -106,6 +106,13 @@ int main(void) {
     open_pad(); button(SDL_CONTROLLER_BUTTON_A, 0);axis(SDL_CONTROLLER_AXIS_RIGHTY, -32768);
     g_input_focus = 0; apply_inputs(.016); assert(g_analog[1] == -200);
     g_input_focus = 1; menu_active = 1; apply_inputs(.016); assert(g_analog[1] == -200);
+    menu_active=0;
+    frontend_set_stick_response(0); assert(frontend_stick_response()==0);
+    axis(SDL_CONTROLLER_AXIS_LEFTX,16384); apply_inputs(.016); int linear=g_analog[0];
+    frontend_set_stick_response(1); apply_inputs(.016); int soft=g_analog[0];
+    frontend_set_stick_response(2); apply_inputs(.016); int extra_soft=g_analog[0];
+    assert(linear>soft && soft>extra_soft && extra_soft>0);
+    frontend_set_stick_response(99); assert(frontend_stick_response()==2);
     close_pad();
     assert(SDL_JoystickDetachVirtual(index) == 0);
     SDL_Quit();
