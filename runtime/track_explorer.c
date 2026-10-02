@@ -15,7 +15,7 @@ static float length, distance, altitude;
 static uint32_t root, last_tick;
 static uint64_t last_frame, last_cycles;
 static atomic_int requested, active;
-static _Atomic float speed = 40, height = 12, look;
+static _Atomic float speed = 40, height = 12, look, pitch;
 
 void explorer_toggle(void) { atomic_fetch_xor(&requested, 1); }
 void explorer_on_frame(uint64_t frame) {
@@ -28,6 +28,9 @@ float explorer_speed(void) { return atomic_load(&speed); }
 float explorer_height(void) { return atomic_load(&height); }
 void explorer_look(float steering) {
     atomic_store(&look, isfinite(steering) ? fmaxf(-1, fminf(1, steering)) : 0);
+}
+void explorer_pitch(float tilt) {
+    atomic_store(&pitch, isfinite(tilt) ? fmaxf(-1, fminf(1, tilt)) : 0);
 }
 void explorer_adjust(float s, float h) {
     float v = atomic_load(&speed) + s;
@@ -124,7 +127,8 @@ void explorer_camera(PPCContext *c, uint64_t frame) {
     altitude += (floor + atomic_load(&height) - altitude) * fminf(1, dt * 4);
     float target_y = ground(c, target, floor) + 2;
     STF32(0x8c1cf8, eye.x); STF32(0x8c1cfc, altitude); STF32(0x8c1d00, eye.z);
-    STF32(0x8c1d04, atan2f(target_y-altitude, hypotf(target.x-eye.x, target.z-eye.z)));
+    STF32(0x8c1d04, atan2f(target_y-altitude, hypotf(target.x-eye.x, target.z-eye.z)) +
+                          atomic_load(&pitch) * 0.78539816339f);
     /* The camera looks along local -Z, opposite the road heading convention. */
     STF32(0x8c1d08, atan2f(eye.x-target.x, eye.z-target.z) - atomic_load(&look) * 1.57079632679f);
     STF32(0x8c1d0c, 0);

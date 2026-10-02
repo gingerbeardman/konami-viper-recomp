@@ -261,7 +261,8 @@ static void update_rumble(int active) {
 
 static int g_gyro_enabled, g_gyro_active = 1;
 static double g_gyro_range = 35 * 3.141592653589793 / 180;
-static ControllerGyro g_gyro;
+static ControllerGyro g_gyro, g_drone_pitch;
+static double g_drone_pitch_position;
 static SDL_JoystickID g_gyro_pad = -1;
 static int g_gyro_available, g_gyro_suspended;
 static double g_gyro_position;
@@ -278,11 +279,11 @@ void frontend_gyro_set_sensitivity(int percent) {
     percent = SDL_clamp(percent, 50, 350);
     g_gyro_range = (3500.0 / percent) * 3.141592653589793 / 180;
 }
-void frontend_gyro_recenter(void) { g_gyro.ready = 0; g_gyro_position = 0; }
+void frontend_gyro_recenter(void) { g_gyro.ready = 0; g_drone_pitch.ready = 0; g_gyro_position = 0; }
 void frontend_gyro_set_enabled(int on) {
     g_gyro_enabled = !!on;
     g_gyro_position = 0;
-    g_gyro.ready = 0;
+    g_gyro.ready = 0; g_drone_pitch.ready = 0;
     g_gyro_pad = -1;
     g_gyro_available = 0;
 #if SDL_VERSION_ATLEAST(2, 0, 14)
@@ -304,11 +305,14 @@ int frontend_gyro_available(void) {
 static double gyro_steering(double dt) {
 #if SDL_VERSION_ATLEAST(2, 0, 14)
     g_gyro_position = 0;
+    g_drone_pitch_position = 0;
+    if (!explorer_active()) g_drone_pitch.ready = 0;
     if (!g_gyro_enabled || !g_pad || !SDL_GameControllerGetAttached(g_pad)) return 0;
     SDL_JoystickID id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad));
     if (id != g_gyro_pad) {
         g_gyro_pad = id;
         g_gyro = (ControllerGyro){0};
+        g_drone_pitch = (ControllerGyro){0};
         g_gyro_available = SDL_GameControllerHasSensor(g_pad, SDL_SENSOR_GYRO) &&
                            SDL_GameControllerHasSensor(g_pad, SDL_SENSOR_ACCEL);
         if (g_gyro_available) {
@@ -323,19 +327,23 @@ static double gyro_steering(double dt) {
     }
     if (!g_gyro_available) return 0;
     if (!g_gyro_active || enh_turbo() || enh_inputs_owned()) {
-        g_gyro.ready = 0;
+        g_gyro.ready = 0; g_drone_pitch.ready = 0;
         return 0;
     }
     /* Keep the preview live in menus without steering the guest. Recenter on
      * entering/leaving a menu so resuming never inherits a paused tilt. */
     int suspended = enh_menu_active() || enh_paused();
-    if (suspended != g_gyro_suspended) { g_gyro.ready = 0; g_gyro_suspended = suspended; }
+    if (suspended != g_gyro_suspended) { g_gyro.ready = 0; g_drone_pitch.ready = 0; g_gyro_suspended = suspended; }
     float accel[3], gyro[3];
     if (SDL_GameControllerGetSensorData(g_pad, SDL_SENSOR_ACCEL, accel, 3) < 0 ||
         SDL_GameControllerGetSensorData(g_pad, SDL_SENSOR_GYRO, gyro, 3) < 0) {
-        g_gyro.ready = 0;
+        g_gyro.ready = 0; g_drone_pitch.ready = 0;
         return 0;
     }
+    if (!explorer_active()) g_drone_pitch.ready = 0;
+    if (explorer_active() && !suspended)
+        g_drone_pitch_position = controller_gyro_pitch_step(&g_drone_pitch, accel, gyro, dt,
+                                  SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSTICK));
     g_gyro_position = controller_gyro_step(&g_gyro, accel, gyro, dt, g_gyro_range,
                                SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSTICK));
     return suspended ? 0 : g_gyro_position;
@@ -393,9 +401,10 @@ static void apply_inputs(double dt) {
                 (pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER));
             explorer_adjust((float)((gas - brake) * 40 * step), (float)((raise - lower) * 12 * step));
             explorer_look((float)steer);
-        } else explorer_look(0);
+            explorer_pitch((float)g_drone_pitch_position);
+        } else { explorer_look(0); explorer_pitch(0); }
         steer = gas = brake = 0;  /* drone controls must not drive the car */
-    } else explorer_look(0);
+    } else { explorer_look(0); explorer_pitch(0); }
     /* signed positions for the differential ADC: steering -200..+200, pedals released=-200 */
     if (enh_name_entry_active()) steer = 0;   /* the letters come from the keyboard */
     g_analog[0] = (int16_t)lround(steer * ANALOG_RANGE);

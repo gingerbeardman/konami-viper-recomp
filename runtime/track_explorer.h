@@ -9,4 +9,5 @@ float explorer_speed(void);  /* metres per second */
 float explorer_height(void); /* selected clearance in metres */
 void explorer_adjust(float speed, float height);
 void explorer_look(float steering); /* -1..1 maps to -90..90 degrees */
+void explorer_pitch(float tilt); /* -1..1 maps to -45..45 degrees */
 void explorer_on_frame(uint64_t frame);

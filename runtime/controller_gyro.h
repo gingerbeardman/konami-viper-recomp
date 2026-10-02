@@ -36,3 +36,15 @@ static double controller_gyro_step(ControllerGyro *state, const float accel[3], 
     double magnitude = fmax(0, fabs(delta) - deadzone) / fmax(full_scale - deadzone, deadzone);
     return copysign(fmin(magnitude, 1), delta);
 }
+
+/* Pitch relative to the held neutral pose. Project angular velocity onto the
+ * horizontal right axis so rolling the controller does not become look-up/down. */
+static double controller_gyro_pitch_step(ControllerGyro *state, const float accel[3],
+                                         const float gyro[3], double dt, int recenter) {
+    double horizontal = hypot(accel[0], accel[1]);
+    float projected_accel[3] = {accel[2], (float)horizontal, 0};
+    double rate = horizontal > 3 ? (gyro[0] * accel[1] - gyro[1] * accel[0]) / horizontal : gyro[0];
+    float projected_gyro[3] = {0, 0, (float)-rate};
+    return controller_gyro_step(state, projected_accel, projected_gyro, dt,
+                                45 * 3.141592653589793 / 180, recenter);
+}
