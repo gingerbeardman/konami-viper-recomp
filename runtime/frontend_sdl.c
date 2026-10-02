@@ -280,6 +280,7 @@ int frontend_run(int scale, int scale_explicit) {
     SDL_RenderSetLogicalSize(ren, 512, 384);
     SDL_Texture *tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 512, 384);
     int tw = 512, th = 384;
+    int window_filter_applied = SDL_ScaleModeLinear;   /* the textures are made linear (the hint) */
 
     SDL_AudioSpec want = {0}, have;
     want.freq = 44100;
@@ -405,6 +406,7 @@ int frontend_run(int scale, int scale_explicit) {
                 }
                 SDL_DestroyTexture(tex);
                 tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+                window_filter_applied = SDL_ScaleModeLinear;
                 SDL_RenderSetLogicalSize(ren, w, h);
                 tw = w; th = h;
             }
@@ -418,6 +420,11 @@ int frontend_run(int scale, int scale_explicit) {
         }
         SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
         SDL_RenderClear(ren);
+        int window_filter = enh_texture_filter() ? SDL_ScaleModeNearest : SDL_ScaleModeLinear;
+        if (window_filter != window_filter_applied) {
+            SDL_SetTextureScaleMode(tex, (SDL_ScaleMode)window_filter);
+            window_filter_applied = window_filter;
+        }
         SDL_RenderCopy(ren, tex, NULL, NULL);
         SDL_RenderPresent(ren);       /* vsync paces this loop */
         if (window_dirty && (Uint32)(SDL_GetTicks() - window_changed) >= 500) {
