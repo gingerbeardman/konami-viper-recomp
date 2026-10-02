@@ -203,6 +203,13 @@ static double gyro_steering(double dt) {
 }
 
 
+double frontend_stick_position(void) {
+    if (!g_pad || !SDL_GetKeyboardFocus()) return 0;
+    int raw=SDL_GameControllerGetAxis(g_pad,SDL_CONTROLLER_AXIS_LEFTX);
+    return raw < 0 ? raw/32768.0 : raw/32767.0;
+}
+double frontend_steering_position(void) { return g_analog[0] / (double)ANALOG_RANGE; }
+
 static void apply_inputs(double dt) {
     /* keyboard steering: ramp towards target */
     double target = !!ctl.steer_right - !!ctl.steer_left;

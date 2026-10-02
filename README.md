@@ -373,3 +373,7 @@ when gyro is disabled or unavailable; the full preview remains in Controls.
 **Gyro Sensitivity** combines enablement and sensitivity: Left/Right adjusts the multiplier,
 and Left below 0.5× turns it off. Right from Off restores the last sensitivity.
 R3 still toggles gyro directly; the footer places L3 Recenter before R3 Toggle.
+
+**Show Steering Meter** keeps the compact bottom-centre HUD and displays raw left
+stick position in cyan above the bar, with actual steering output in yellow. It
+also works with gyro disabled; the Controls preview remains a gyro tilt meter.

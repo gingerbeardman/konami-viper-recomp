@@ -533,7 +533,7 @@ static const char *const k_text[T_COUNT][2] = {
     { "ASPECT RATIO", "FORMATO" },
     { "CONTROLS", "COMANDI" }, { "GYRO SENSITIVITY", "STERZO GIROSCOPIO" },
     { "RECENTER GYRO", "RICENTRA" },
-    { "SHOW GYRO METER", "MOSTRA IN GIOCO" },
+    { "SHOW STEERING METER", "MOSTRA IN GIOCO" },
 };
 static const char *const k_aspect_name[N_ASPECTS] = { "4:3", "16:10", "16:9", "21:9" };
 
@@ -872,16 +872,18 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
     }
     if (g_paused && g_pause_controls) draw_controls(fb, w, h, g_controls_cursor);
     if (enh_menu_active()) draw_menu(fb, w, h);
-    if (g_set.show_gyro && frontend_gyro_enabled() && frontend_gyro_ready() &&
+    if (g_set.show_gyro &&
         g_booted && !g_paused && !enh_menu_active() && !g_starting &&
         !enh_in_attract() && !enh_name_entry_active()) {
         /* Compact, text-free live meter, centred in the current viewport. */
         const int centre = w / 2, half = 60, y = h - 20;
-        int marker = centre + (int)lround(fmax(-1, fmin(1, frontend_gyro_position())) * half);
+        int marker = centre + (int)lround(fmax(-1, fmin(1, frontend_steering_position())) * half);
         meter_rect(fb, centre - half, y - 1, centre + half, y + 1, 0x909090);
         meter_rect(fb, marker < centre ? marker : centre, y - 1,
                    marker > centre ? marker : centre, y + 1, 0x40ff40);
         meter_rect(fb, centre - 1, y - 5, centre + 1, y + 5, 0xffffff);
+        int raw_marker = centre + (int)lround(fmax(-1, fmin(1, frontend_stick_position())) * half);
+        meter_rect(fb, raw_marker - 1, y - 7, raw_marker + 1, y - 3, 0x40dfff);
         meter_rect(fb, marker - 2, y - 4, marker + 2, y + 4, 0xffd800);
     }
     if (g_set.show_fps && g_font) {                 /* on top of everything, also in play */

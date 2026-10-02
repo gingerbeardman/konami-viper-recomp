@@ -120,3 +120,6 @@ void frontend_gyro_recenter(void);
 void enh_controller_settings_changed(void);
 double frontend_gyro_position(void); /* normalized steering, also live while paused */
 int frontend_gyro_ready(void);
+
+double frontend_stick_position(void); /* raw normalized left stick */
+double frontend_steering_position(void); /* actual steering sent to guest */
