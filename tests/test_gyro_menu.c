@@ -1,3 +1,4 @@
+#include "fixtures/track_explorer_stubs.h"
 #include "../runtime/enhanced.c"
 #include <assert.h>
 static double stick_position=.5, steering_position=.25;

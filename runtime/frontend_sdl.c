@@ -18,6 +18,7 @@
  *   F11 fullscreen, Esc quit
  */
 #include "runtime.h"
+#include "track_explorer.h"
 #include "game_config.h"
 #include "controller_gyro.h"
 #include <SDL.h>
@@ -121,7 +122,8 @@ static void hold(int *f, int src, int down) { *f = down ? *f | src : *f & ~src; 
 static SDL_GameController *g_pad;
 static int g_gyro_enabled, g_gyro_active = 1;
 static double g_gyro_range = 35 * 3.141592653589793 / 180;
-static ControllerGyro g_gyro;
+static ControllerGyro g_gyro, g_drone_pitch;
+static double g_drone_pitch_position;
 static SDL_JoystickID g_gyro_pad = -1;
 static int g_gyro_available, g_gyro_suspended;
 static double g_gyro_position;
@@ -138,11 +140,11 @@ void frontend_gyro_set_sensitivity(int percent) {
     percent = SDL_clamp(percent, 50, 350);
     g_gyro_range = (3500.0 / percent) * 3.141592653589793 / 180;
 }
-void frontend_gyro_recenter(void) { g_gyro.ready = 0; g_gyro_position = 0; }
+void frontend_gyro_recenter(void) { g_gyro.ready = 0; g_drone_pitch.ready = 0; g_gyro_position = 0; }
 void frontend_gyro_set_enabled(int on) {
     g_gyro_enabled = !!on;
     g_gyro_position = 0;
-    g_gyro.ready = 0;
+    g_gyro.ready = 0; g_drone_pitch.ready = 0;
     g_gyro_pad = -1;
     g_gyro_available = 0;
 #if SDL_VERSION_ATLEAST(2, 0, 14)
@@ -164,11 +166,14 @@ int frontend_gyro_available(void) {
 static double gyro_steering(double dt) {
 #if SDL_VERSION_ATLEAST(2, 0, 14)
     g_gyro_position = 0;
+    g_drone_pitch_position = 0;
+    if (!explorer_active()) g_drone_pitch.ready = 0;
     if (!g_gyro_enabled || !g_pad || !SDL_GameControllerGetAttached(g_pad)) return 0;
     SDL_JoystickID id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad));
     if (id != g_gyro_pad) {
         g_gyro_pad = id;
         g_gyro = (ControllerGyro){0};
+        g_drone_pitch = (ControllerGyro){0};
         g_gyro_available = SDL_GameControllerHasSensor(g_pad, SDL_SENSOR_GYRO) &&
                            SDL_GameControllerHasSensor(g_pad, SDL_SENSOR_ACCEL);
         if (g_gyro_available) {
@@ -183,19 +188,23 @@ static double gyro_steering(double dt) {
     }
     if (!g_gyro_available) return 0;
     if (!g_gyro_active || enh_turbo() || enh_inputs_owned()) {
-        g_gyro.ready = 0;
+        g_gyro.ready = 0; g_drone_pitch.ready = 0;
         return 0;
     }
     /* Keep the preview live in menus without steering the guest. Recenter on
      * entering/leaving a menu so resuming never inherits a paused tilt. */
     int suspended = enh_menu_active() || enh_paused();
-    if (suspended != g_gyro_suspended) { g_gyro.ready = 0; g_gyro_suspended = suspended; }
+    if (suspended != g_gyro_suspended) { g_gyro.ready = 0; g_drone_pitch.ready = 0; g_gyro_suspended = suspended; }
     float accel[3], gyro[3];
     if (SDL_GameControllerGetSensorData(g_pad, SDL_SENSOR_ACCEL, accel, 3) < 0 ||
         SDL_GameControllerGetSensorData(g_pad, SDL_SENSOR_GYRO, gyro, 3) < 0) {
-        g_gyro.ready = 0;
+        g_gyro.ready = 0; g_drone_pitch.ready = 0;
         return 0;
     }
+    if (!explorer_active()) g_drone_pitch.ready = 0;
+    if (explorer_active() && !suspended)
+        g_drone_pitch_position = controller_gyro_pitch_step(&g_drone_pitch, accel, gyro, dt,
+                                  SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSTICK));
     g_gyro_position = controller_gyro_step(&g_gyro, accel, gyro, dt, g_gyro_range,
                                SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSTICK));
     return suspended ? 0 : g_gyro_position;
@@ -230,6 +239,24 @@ static void apply_inputs(double dt) {
         if (ctl.pad_gas > 1000) gas = ctl.pad_gas * 255 / 32767;
         if (ctl.pad_brake > 1000) brake = ctl.pad_brake * 255 / 32767;
     }
+    if (explorer_active()) {
+        explorer_drive(0, 0);
+        if (SDL_GetKeyboardFocus() && !enh_paused() && !enh_menu_active() && !enh_inputs_owned()) {
+            /* Tour adjusts cruise settings; free roam moves only while held. */
+            double step = fmax(0, fmin(dt, .05));
+            int pad_active = g_pad && SDL_GameControllerGetAttached(g_pad);
+            int raise = !!(ctl.shift_up & ~SRC_PAD) ||
+                (pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER));
+            int lower = !!(ctl.shift_down & ~SRC_PAD) ||
+                (pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER));
+            if (explorer_free()) explorer_drive((float)((gas - brake) / 255.0), (float)(raise - lower));
+            else explorer_adjust((float)((gas - brake) / 255.0 * 40 * step), (float)((raise - lower) * 12 * step));
+            explorer_look((float)steer);
+            explorer_pitch((float)g_drone_pitch_position);
+        } else { explorer_look(0); explorer_pitch(0); }
+        steer = gas = brake = 0;  /* drone controls must not drive the car */
+    } else { explorer_look(0); explorer_pitch(0); explorer_drive(0, 0); }
+    /* signed positions for the differential ADC: steering -200..+200, pedals released=-200 */
     if (enh_name_entry_active()) steer = 0;   /* the letters come from the keyboard */
     g_analog[0] = (int16_t)(steer * ANALOG_RANGE);
     g_analog[1] = (int16_t)(-ANALOG_RANGE + gas * 2 * ANALOG_RANGE / 255);
@@ -240,8 +267,8 @@ static void apply_inputs(double dt) {
     if (ctl.test && !g_enhanced) in3 &= ~0x02;
     if (ctl.coin && !g_enhanced) in3 &= ~0x04;
     if (ctl.start || enh_start_held()) in3 &= ~0x10;
-    if (ctl.shift_down) in3 &= ~0x40;
-    if (ctl.shift_up) in4 &= ~0x01;
+    if (ctl.shift_down && !explorer_active()) in3 &= ~0x40;
+    if (ctl.shift_up && !explorer_active()) in4 &= ~0x01;
     if (enh_inputs_owned()) return;     /* the enhanced layer is driving TEST MODE */
     if (enh_menu_active()) {            /* the menu owns the controls: the attract gets nothing */
         in3 = enh_start_held() ? 0xef : 0xff;
@@ -437,6 +464,15 @@ int frontend_run(int scale, int scale_explicit) {
                 }
                 break;
             case SDL_KEYDOWN:
+#ifdef GAME_ENH_HOOK_EXPLORER_CAMERA
+                if (g_enhanced && ev.key.keysym.sym == SDLK_F6) { if (!ev.key.repeat) explorer_toggle(); break; }
+                if (g_enhanced && ev.key.keysym.sym == SDLK_F7) { if (!ev.key.repeat) explorer_free_toggle(); break; }
+#endif
+                if (explorer_active()) {
+                    SDL_Keycode k = ev.key.keysym.sym;
+                    if (k == SDLK_LEFTBRACKET || k == SDLK_RIGHTBRACKET) { explorer_adjust(k == SDLK_LEFTBRACKET ? -10 : 10, 0); break; }
+                    if (!explorer_free() && (k == SDLK_MINUS || k == SDLK_EQUALS)) { explorer_adjust(0, k == SDLK_MINUS ? -2 : 2); break; }
+                }
                 if ((enh_menu_active() || enh_paused()) && menu_key(ev.key.keysym.sym) >= 0) {
                     if (!ev.key.repeat) enh_menu_action(menu_key(ev.key.keysym.sym));
                 } else if (ev.key.keysym.sym == SDLK_ESCAPE) {

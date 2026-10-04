@@ -19,6 +19,7 @@
  *   - widescreen: where the gl library keeps that state.
  */
 #include "runtime.h"
+#include "track_explorer.h"
 #include "game_config.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -196,7 +197,7 @@ static void wheel_select_hook(int w) {
 
 typedef struct { uint32_t addr; const char *name; } Hook;
 static const Hook k_hooks[] = GAME_ENH_HOOKS;
-enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_WHEEL_SELECT };
+enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_EXPLORER_CAMERA, HOOK_EXPLORER_RACE, HOOK_WHEEL_SELECT };
 #define NHOOKS (sizeof k_hooks / sizeof k_hooks[0])
 
 /* the kind of the hook at pc, and for a wheel select its entry in k_wsel (*arg); the names are
@@ -205,7 +206,7 @@ static int hook_kind(uint32_t pc, int *arg) {
     static signed char kind[NHOOKS], karg[NHOOKS];
     static int resolved;
     if (!resolved) {
-        static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm" };
+        static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm", "explorer_camera", "explorer_race" };
         for (size_t i = 0; k_hooks[i].name; i++) {
             for (int k = 1; k < (int)(sizeof names / sizeof names[0]); k++)
                 if (!strcmp(k_hooks[i].name, names[k])) kind[i] = (signed char)k;
@@ -222,6 +223,8 @@ static int hook_kind(uint32_t pc, int *arg) {
 void rt_hook(PPCContext *c, uint32_t pc) {
     int arg = 0;
     switch (hook_kind(pc, &arg)) {
+    case HOOK_EXPLORER_CAMERA: if (g_enhanced) explorer_camera(c, g_frame); break;
+    case HOOK_EXPLORER_RACE: if (g_enhanced) explorer_race(c); break;
     case HOOK_NAME_INDEX: if (g_enhanced) name_index_hook(c); break;
     case HOOK_NAME_CONFIRM: if (g_enhanced) name_confirm_hook(c); break;
     case HOOK_WHEEL_SELECT: if (g_enhanced) wheel_select_hook(arg); break;
@@ -362,6 +365,7 @@ static int count_game_options(void);
 void enh_on_frame(const uint32_t *buf, int w, int h) {
     if (!g_enhanced) return;
     g_frame++;
+    explorer_on_frame(g_frame);
     fps_tick(buf, w, h);
     if (g_enh_log < 0) g_enh_log = getenv("RT_ENH_LOG") != NULL;
     int attract = g_attract_frame && g_frame - g_attract_frame <= ATTRACT_GRACE_FRAMES;
@@ -1010,6 +1014,14 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
         draw_centered(fb, w, h, FONT_MEDIUM, h / 2 - font_height(FONT_MEDIUM) / 2, T(g_apply == 1 || g_apply == 2 ? T_APPLYING : T_LOADING), 0xffffff);
         return;
     }
+    if (explorer_active()) {
+        char status[80];
+        snprintf(status, sizeof status, explorer_free() ?
+                 "F7 EXIT  F6 DRONE  %.0f KM/H  %.0f M" :
+                 "F6 EXIT  F7 FREE ROAM  %.0f KM/H  %.0f M",
+                 explorer_speed() * 3.6f, explorer_height());
+        draw_centered(fb, w, h, FONT_SMALL, h - font_height(FONT_SMALL) - 20, status, 0xffd800);
+    }
     if (g_paused && !g_pause_controls) {
         const int z = FONT_MEDIUM, step = font_height(z) + 8;
         static const int items[3] = { T_RESUME, T_CONTROLS, T_MAIN_MENU };
@@ -1115,6 +1127,8 @@ static void scripted_menu(void) {
         double t = strtod(next, &colon);
         if (*colon != ':' || (double)rt_now() / CPU_HZ < t) return;
         const char *a = colon + 1;
+        if (!strncmp(a, "free", 4)) { explorer_free_toggle(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
+        if (!strncmp(a, "drone", 5)) { explorer_toggle(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
         if (!strncmp(a, "esc", 3)) { enh_escape(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
         if (!strncmp(a, "name=", 5)) {
             for (a += 5; *a && *a != ','; a++) enh_name_type(*a == '<' ? '\b' : *a == '>' ? '\r' : *a);

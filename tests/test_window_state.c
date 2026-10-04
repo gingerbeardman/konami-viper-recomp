@@ -1,3 +1,4 @@
+#include "fixtures/track_explorer_stubs.h"
 /* The saved window: fitting to the displays (window_state.h) and the port settings that keep it
  * (enhanced.c, one file per mode). No ROMs: game_config.h comes from a profile. */
 #include "window_state.h"

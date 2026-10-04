@@ -1,3 +1,4 @@
+#include "fixtures/track_explorer_stubs.h"
 /* Real frontend sampling with deterministic sensor data; no controller or ROMs needed. */
 #include <SDL.h>
 #include <assert.h>

@@ -153,6 +153,14 @@ takes a little longer, because of the force-feedback wheel test.
 
 ---
 
+### Exploration cameras (GTI Club 2 JAB, enhanced mode)
+
+Press **F6** for a road-following drone tour or **F7** for manual free roam.
+Press the other mode's key to switch directly, or the current mode's key to exit.
+Pedals control tour speed or free-roam forward/reverse movement; shift shoulders
+control height, and steering/gyro control the view. Free roam never follows the
+track automatically. See [camera controls and limitations](docs/TRACK_EXPLORER.md).
+
 ### Gyro steering
 
 Click the right stick (R3) to toggle gyro on/off, or start with it enabled using
