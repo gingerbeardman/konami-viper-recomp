@@ -56,7 +56,7 @@ void hw_nvram_options_fix(uint8_t *nv);   /* recomputes the TEST MODE option blo
 extern int g_enhanced;
 void enh_on_frame(const uint32_t *frame, int w, int h);
 int enh_in_attract(void);
-enum { ENH_UP, ENH_DOWN, ENH_LEFT, ENH_RIGHT, ENH_OK, ENH_BACK };
+enum { ENH_UP, ENH_DOWN, ENH_LEFT, ENH_RIGHT, ENH_OK, ENH_BACK, ENH_PAGE_UP, ENH_PAGE_DOWN };
 void enh_init(const char *work, const char *settings); /* fonts, port settings */
 int enh_want_fullscreen(void);
 void enh_set_fullscreen(int on);
@@ -64,12 +64,19 @@ int enh_menu_active(void);                             /* attract menu on screen
 void enh_menu_action(int action);
 int enh_start_held(void);                              /* START GAME: hold START for the game */
 int enh_quit_requested(void);
+void enh_track_debug_toggle(void);
+int enh_track_debug_step(int direction);
+int enh_track_debug_position_text(char *text,size_t size);
+int enh_track_debug_heading_text(char *text,size_t size);
 void enh_draw_overlay(uint32_t *fb, int w, int h);     /* menu over a 0xAARRGGBB frame */
 int enh_turbo(void);                                   /* boot/apply: run unpaced, muted */
 int enh_restart_requested(void);                       /* new settings written: restart */
 void enh_set_headless(int on);
 int enh_escape(void);                                  /* Esc: pause / back; 0 = not handled */
+void enh_focus_lost(void);                             /* pause an active race, never toggle */
 int enh_paused(void);
+int enh_mirrored(void);
+int enh_mirror_projection(void);
 int enh_inputs_owned(void);                            /* the enhanced layer drives IN3/IN4 */
 int enh_name_entry_active(void);                       /* rankings name entry: letters from the keyboard */
 int enh_name_type(int ch);                             /* a letter, '\b' DEL, '\r' END; 1 if accepted */
@@ -113,6 +120,7 @@ static inline uint32_t le_bus_write(uint32_t old, int k, int size, uint32_t v) {
 
 /* Controller settings and sensor access stay on the frontend thread. */
 int frontend_gyro_enabled(void);
+int frontend_shift_up_held(void); /* physical held state when opening pause */
 int frontend_gyro_available(void);
 int frontend_gyro_sensitivity(void);
 void frontend_gyro_set_enabled(int on);
@@ -132,3 +140,5 @@ double frontend_steering_position(void); /* actual steering sent to guest */
 
 int frontend_stick_response(void); /* 0 linear, 1 soft, 2 extra soft */
 void frontend_set_stick_response(int response);
+int frontend_switch_trigger_layout(void); /* 0: ZL brake, 1: ZL handbrake; ZR always gas */
+void frontend_set_switch_trigger_layout(int layout);

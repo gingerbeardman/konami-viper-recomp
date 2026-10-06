@@ -1,0 +1,5 @@
+name,description,car,transmission,course,cp1,cp2,collisions,collision_types,gold,silver,bronze,gatex,gatez,gatew,rolling,rolling_speed,collision_delay
+FIRST TURN,REACH CP1 AS QUICKLY AS POSSIBLE,1,at,town,0,1,unlimited,all,17,19,21,,,,0,0,0.75
+DON'T TOUCH THE SIDES,REACH CP5 WITHOUT COLLISIONS,1,at,town,4,5,0,all,,,,,,,75,108,0.75
+POINT TO POINT,REACH CP7 AS QUICKLY AS POSSIBLE,1,at,town,6,7,unlimited,all,17,19,21,,,,75,108,0.75
+CATCH THE BUS,DRIVE BEHIND BOTH BUS STOPS,1,at,town,9,10,unlimited,all,,,,927;1004,-11;11,kerb;kerb,75,108,0.75

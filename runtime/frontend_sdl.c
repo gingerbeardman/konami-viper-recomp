@@ -13,6 +13,8 @@
  *   letters, Backspace deletes, Enter ends, Left/Right and the D-pad step through the letters)
  *   Gamepad: left stick = steering, R2/L2 = gas/brake, R1/L1 = shift up/down,
  *            X = handbrake, Start = start, Back = coin
+ *   Switch: optional ZL = handbrake; ZR = gas, L/R = shift down/up,
+ *           + = pause in enhanced play, - = view change
  *   F11 fullscreen, Esc quit
  */
 #include "runtime.h"
@@ -152,6 +154,11 @@ static int g_input_focus = 1;
 static int g_controller_log;
 static Uint32 g_controller_log_tick;
 static double g_stick_deadzone = 0.10, g_stick_curve = 3.0, g_trigger_deadzone = 0.03;
+static int g_switch_trigger_layout = 1;
+int frontend_switch_trigger_layout(void) { return g_switch_trigger_layout; }
+void frontend_set_switch_trigger_layout(int layout) {
+    g_switch_trigger_layout = layout == 0 ? 0 : 1;
+}
 int frontend_stick_response(void) { return (int)lround(g_stick_curve) - 1; }
 void frontend_set_stick_response(int response) {
     g_stick_curve = response >= 0 && response <= 2 ? response + 1.0 : 3.0;
@@ -171,10 +178,40 @@ static double controller_option(const char *name, double fallback, double lo, do
 }
 
 static int pad_matches(SDL_JoystickID id) { return g_pad && id == g_pad_id; }
+static int switch_pad(void) {
+    if (!g_pad) return 0;
+    SDL_GameControllerType type = SDL_GameControllerGetType(g_pad);
+    if (type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO) return 1;
+#if SDL_VERSION_ATLEAST(2, 0, 22)
+    if (type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT ||
+        type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT ||
+        type == SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_PAIR) return 1;
+#endif
+    return 0;
+}
+int frontend_shift_up_held(void) {
+    return g_input_focus && ((ctl.shift_up & ~SRC_PAD) ||
+        (g_pad && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)));
+}
 
 static void update_rumble(int active);
 static int g_rumble_testing;
 static int g_menu_repeat_button = -1;
+/* Check actual window flags as well as focus events: some SDL backends do not
+ * deliver every focus transition. Retry while inactive if play begins there. */
+static void input_focus(int focused) {
+    if (!focused) {
+        enh_focus_lost();
+        g_menu_repeat_button = -1;
+        if (g_input_focus) memset(&ctl, 0, sizeof ctl);
+    }
+    g_input_focus = !!focused;
+}
+
+static void window_focus(Uint32 flags) {
+    input_focus((flags & SDL_WINDOW_INPUT_FOCUS) &&
+                !(flags & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN)));
+}
 static Uint32 g_menu_repeat_at;
 
 static void close_pad(void) {
@@ -326,7 +363,7 @@ static double gyro_steering(double dt) {
         rt_log("gyro steering: %s (click left stick to recenter)\n", g_gyro_available ? "enabled" : "unavailable; using stick");
     }
     if (!g_gyro_available) return 0;
-    if (!g_gyro_active || enh_turbo() || enh_inputs_owned()) {
+    if (!g_gyro_active || enh_turbo()) {
         g_gyro.ready = 0; g_drone_pitch.ready = 0;
         return 0;
     }
@@ -346,7 +383,9 @@ static double gyro_steering(double dt) {
                                   SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSTICK));
     g_gyro_position = controller_gyro_step(&g_gyro, accel, gyro, dt, g_gyro_range,
                                SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSTICK));
-    return suspended ? 0 : g_gyro_position;
+    /* Auto-drive owns the ADC, but sensor tracking must retain its centre so
+     * a held steering tilt survives the handover. */
+    return suspended || enh_inputs_owned() ? 0 : g_gyro_position;
 #else
     (void)dt;
     return 0;
@@ -379,32 +418,42 @@ static void apply_inputs(double dt) {
     /* Take the strongest pedal source: a slightly pressed trigger must not reduce a
      * fully held key/button. Right-stick Y supplies proportional pedals on Switch Pro. */
     double gas = ctl.gas ? 1.0 : 0.0, brake = ctl.brake ? 1.0 : 0.0;
+    double handbrake = ctl.handbrake ? 1.0 : 0.0;
     if (g_pad && g_input_focus) {
         double stick = controller_axis(SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_LEFTX),
                                        g_stick_deadzone, g_stick_curve);
         if (stick != 0) steer = stick;
         double pedals = controller_axis(SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_RIGHTY),
                                         g_stick_deadzone, 1.0);
-        gas = fmax(gas, fmax(-pedals, controller_trigger(
-            SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT), g_trigger_deadzone)));
-        brake = fmax(brake, fmax(pedals, controller_trigger(
-            SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT), g_trigger_deadzone)));
+        double left_trigger = controller_trigger(
+            SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT), g_trigger_deadzone);
+        double right_trigger = controller_trigger(
+            SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT), g_trigger_deadzone);
+        gas = fmax(gas, fmax(-pedals, right_trigger));
+        brake = fmax(brake, pedals);
+        if (GAME_HAS_HANDBRAKE && switch_pad() && g_switch_trigger_layout) {
+            handbrake = fmax(handbrake, left_trigger);
+        } else {
+            brake = fmax(brake, left_trigger);
+        }
     }
     if (explorer_active()) {
+        explorer_drive(0, 0);
         if (g_input_focus && !enh_paused() && !enh_menu_active() && !enh_inputs_owned()) {
-            /* Hold pedals to change cruise speed, shoulders to change clearance.
-             * Release holds the setting; route navigation stays automatic. */
+            /* Tour adjusts cruise settings; free roam moves only while held. */
             double step = fmax(0, fmin(dt, .05));
             int raise = !!(ctl.shift_up & ~SRC_PAD) ||
                 (pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER));
             int lower = !!(ctl.shift_down & ~SRC_PAD) ||
                 (pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER));
-            explorer_adjust((float)((gas - brake) * 40 * step), (float)((raise - lower) * 12 * step));
+            if (explorer_free()) explorer_drive((float)(gas - brake), (float)(raise - lower));
+            else explorer_adjust((float)((gas - brake) * 40 * step), (float)((raise - lower) * 12 * step));
             explorer_look((float)steer);
             explorer_pitch((float)g_drone_pitch_position);
         } else { explorer_look(0); explorer_pitch(0); }
         steer = gas = brake = 0;  /* drone controls must not drive the car */
-    } else { explorer_look(0); explorer_pitch(0); }
+    } else { explorer_look(0); explorer_pitch(0); explorer_drive(0, 0); }
+    if (enh_inputs_owned()) return;     /* preserve controls driven by the enhanced layer */
     /* signed positions for the differential ADC: steering -200..+200, pedals released=-200 */
     if (enh_name_entry_active()) steer = 0;   /* the letters come from the keyboard */
     g_analog[0] = (int16_t)lround(steer * ANALOG_RANGE);
@@ -415,7 +464,7 @@ static void apply_inputs(double dt) {
     }
     g_analog[1] = (int16_t)(-ANALOG_RANGE + gas * 2 * ANALOG_RANGE);
     g_analog[2] = (int16_t)(-ANALOG_RANGE + brake * 2 * ANALOG_RANGE);
-    if (GAME_HAS_HANDBRAKE) g_analog[3] = (int16_t)(ctl.handbrake ? ANALOG_RANGE : -ANALOG_RANGE);
+    if (GAME_HAS_HANDBRAKE) g_analog[3] = (int16_t)(-ANALOG_RANGE + handbrake * 2 * ANALOG_RANGE);
     uint8_t in3 = 0xff, in4 = 0xff;
     if (ctl.service && !g_enhanced) in3 &= ~0x01;
     if (ctl.test && !g_enhanced) in3 &= ~0x02;
@@ -423,7 +472,6 @@ static void apply_inputs(double dt) {
     if (ctl.start || enh_start_held()) in3 &= ~0x10;
     if (ctl.shift_down && !explorer_active()) in3 &= ~0x40;
     if (ctl.shift_up && !explorer_active()) in4 &= ~0x01;
-    if (enh_inputs_owned()) return;     /* the enhanced layer is driving TEST MODE */
     if (enh_menu_active()) {            /* the menu owns the controls: the attract gets nothing */
         in3 = enh_start_held() ? 0xef : 0xff;
         in4 = 0xff;
@@ -442,6 +490,8 @@ static int menu_key(SDL_Keycode k) {
     case SDLK_RIGHT: case SDLK_d: return ENH_RIGHT;
     case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_1: return ENH_OK;
     case SDLK_BACKSPACE: return ENH_BACK;
+    case SDLK_q: case SDLK_PAGEUP: return ENH_PAGE_UP;
+    case SDLK_e: case SDLK_PAGEDOWN: return ENH_PAGE_DOWN;
     default: return -1;
     }
 }
@@ -454,14 +504,19 @@ static int menu_button(int b) {
     case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return ENH_RIGHT;
     case SDL_CONTROLLER_BUTTON_A: case SDL_CONTROLLER_BUTTON_START: return ENH_OK;
     case SDL_CONTROLLER_BUTTON_B: return ENH_BACK;
+    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: return ENH_PAGE_UP;
+    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: return ENH_PAGE_DOWN;
     default: return -1;
     }
 }
 
-/* Repeat only value adjustments; confirmation must never repeat into another page. */
+/* Repeat navigation and value adjustments, never confirmation or cancellation. */
+static int menu_action_repeats(int action) {
+    return action==ENH_UP || action==ENH_DOWN || action==ENH_LEFT || action==ENH_RIGHT;
+}
 static void menu_pad_press(int button, Uint32 now) {
     int action = menu_button(button);
-    g_menu_repeat_button = (action == ENH_LEFT || action == ENH_RIGHT) ? button : -1;
+    g_menu_repeat_button = menu_action_repeats(action) ? button : -1;
     g_menu_repeat_at = now + 400;
     enh_menu_action(action);
 }
@@ -511,13 +566,25 @@ static void pad_button(int b, int down) {
     switch (b) {
     case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: hold(&ctl.shift_up, SRC_PAD, down); break;
     case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: hold(&ctl.shift_down, SRC_PAD, down); break;
-    case SDL_CONTROLLER_BUTTON_START: hold(&ctl.start, SRC_PAD, down); break;
-    case SDL_CONTROLLER_BUTTON_BACK: hold(&ctl.coin, SRC_PAD, down); break;
+    case SDL_CONTROLLER_BUTTON_START:
+        if (!(g_enhanced && switch_pad())) hold(&ctl.start, SRC_PAD, down);
+        break;
+    case SDL_CONTROLLER_BUTTON_BACK:
+        hold(switch_pad() ? &ctl.start : &ctl.coin, SRC_PAD, down);
+        break;
     case SDL_CONTROLLER_BUTTON_A: hold(&ctl.gas, SRC_PAD, down); break;
     case SDL_CONTROLLER_BUTTON_B: hold(&ctl.brake, SRC_PAD, down); break;
     case SDL_CONTROLLER_BUTTON_X: hold(&ctl.handbrake, SRC_PAD, down); break;
     default: break;
     }
+}
+
+static int pad_pause_press(int button) {
+    if (g_enhanced && switch_pad() && button == SDL_CONTROLLER_BUTTON_START && !enh_menu_active() && !enh_paused()) {
+        enh_escape();
+        return 1;
+    }
+    return 0;
 }
 
 /* ------------------------------------------------------------------ main loop */
@@ -624,20 +691,31 @@ int frontend_run(int scale) {
             case SDL_QUIT: running = 0; break;
             case SDL_WINDOWEVENT:
                 if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
-                    g_input_focus = 0;
-                    g_menu_repeat_button = -1;
-                    memset(&ctl, 0, sizeof ctl);
-                } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) g_input_focus = 1;
+                    input_focus(0);
+                } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) input_focus(1);
                 break;
             case SDL_KEYDOWN:
+                if(g_enhanced && ev.key.keysym.sym==SDLK_c && (ev.key.keysym.mod&KMOD_GUI)) {
+                    char position[64];
+                    int copied=(ev.key.keysym.mod&KMOD_ALT) ?
+                        enh_track_debug_heading_text(position,sizeof position) :
+                        enh_track_debug_position_text(position,sizeof position);
+                    if(copied) {
+                        if(!ev.key.repeat && SDL_SetClipboardText(position)!=0)
+                            rt_log("track debug: could not copy: %s\n",SDL_GetError());
+                        break;
+                    }
+                }
 #ifdef GAME_ENH_HOOK_EXPLORER_CAMERA
                 if (g_enhanced && ev.key.keysym.sym == SDLK_F6) { if (!ev.key.repeat) explorer_toggle(); break; }
+                if (g_enhanced && ev.key.keysym.sym == SDLK_F7) { if (!ev.key.repeat) explorer_free_toggle(); break; }
 #endif
                 if (explorer_active()) {
                     SDL_Keycode k = ev.key.keysym.sym;
                     if (k == SDLK_LEFTBRACKET || k == SDLK_RIGHTBRACKET) { explorer_adjust(k == SDLK_LEFTBRACKET ? -10 : 10, 0); break; }
-                    if (k == SDLK_MINUS || k == SDLK_EQUALS) { explorer_adjust(0, k == SDLK_MINUS ? -2 : 2); break; }
+                    if (!explorer_free() && (k == SDLK_MINUS || k == SDLK_EQUALS)) { explorer_adjust(0, k == SDLK_MINUS ? -2 : 2); break; }
                 }
+                if (g_enhanced && ev.key.keysym.sym == SDLK_F10) { if (!ev.key.repeat) enh_track_debug_toggle(); break; }
                 if (ev.key.keysym.sym == SDLK_F8) { if (!ev.key.repeat) test_rumble(); break; }
                 if (ev.key.keysym.sym == SDLK_F9) {
                     if (!ev.key.repeat) {
@@ -646,10 +724,12 @@ int frontend_run(int scale) {
                     }
                     break;
                 }
+                if(g_enhanced && (ev.key.keysym.sym==SDLK_UP || ev.key.keysym.sym==SDLK_DOWN) &&
+                   enh_track_debug_step(ev.key.keysym.sym==SDLK_UP ? 1 : -1)) break;
                 if ((enh_menu_active() || enh_paused()) && menu_key(ev.key.keysym.sym) >= 0) {
                     int action = menu_key(ev.key.keysym.sym);
                     g_menu_repeat_button = -1;
-                    if (!ev.key.repeat || action == ENH_LEFT || action == ENH_RIGHT) enh_menu_action(action);
+                    if (!ev.key.repeat || menu_action_repeats(action)) enh_menu_action(action);
                 } else if (ev.key.keysym.sym == SDLK_ESCAPE) {
                     if (!ev.key.repeat && !enh_escape()) running = 0;   /* enhanced: pause / back */
                 }
@@ -687,6 +767,9 @@ int frontend_run(int scale) {
                     test_rumble(); break;  /* Switch Capture: test the transport independently of game FFB. */
                 }
 #endif
+                if (pad_pause_press(ev.cbutton.button)) break;
+                if(g_enhanced && (ev.cbutton.button==SDL_CONTROLLER_BUTTON_DPAD_UP || ev.cbutton.button==SDL_CONTROLLER_BUTTON_DPAD_DOWN) &&
+                   enh_track_debug_step(ev.cbutton.button==SDL_CONTROLLER_BUTTON_DPAD_UP ? 1 : -1)) break;
                 if ((enh_menu_active() || enh_paused()) && menu_button(ev.cbutton.button) >= 0) menu_pad_press(ev.cbutton.button, SDL_GetTicks());
                 else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) {
                     if (!enh_escape()) running = 0;  /* Home: pause/back in play, quit from main menu. */
@@ -705,6 +788,7 @@ int frontend_run(int scale) {
             default: break;
             }
         }
+        window_focus(SDL_GetWindowFlags(win));
         menu_pad_repeat(SDL_GetTicks());
         update_rumble((SDL_GetWindowFlags(win) & SDL_WINDOW_INPUT_FOCUS) &&
                       !enh_paused() && !enh_menu_active() && !enh_turbo() && !enh_inputs_owned());

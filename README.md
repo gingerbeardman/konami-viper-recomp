@@ -68,6 +68,14 @@ menus.
 
 More about the enhanced mode in [Enhanced mode in detail](#enhanced-mode-in-detail).
 
+### Mission mode (GTI Club 2 JAB)
+
+In enhanced mode, **MISSIONS** starts short section challenges with an assigned course, car, and
+transmission. Choosers and race-start countdowns are skipped. Complete ordered road gates within the time and contact limits, then retry with the
+same selections. The four Town missions cover checkpoint sprints, a clean section, and driving behind
+both bus stops. All use car 1 with automatic transmission.
+See [Mission mode](docs/MISSION_MODE.md) for controls, current limits and validation.
+
 ## Games
 
 | Game                                      | Version      | `GAME=`      | Executable     | Status          |

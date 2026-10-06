@@ -229,6 +229,7 @@ static uint8_t i2c_read(uint32_t off) {
             if (i2c.addr_latch == 0x1c) return 0x80;          /* single-ended supply monitor: 5.0 V */
             if ((i2c.addr_latch & 3) == 0) ffb_update();
             int pos = g_analog[i2c.addr_latch & 3];
+            if(!(i2c.addr_latch & 3) && enh_mirrored() && !enh_inputs_owned()) pos=-pos;
             int d = (i2c.addr_latch & 4) ? -pos : pos;        /* CH+ - CH-, or reversed */
             res = (uint8_t)(d < 0 ? 0 : d > 255 ? 255 : d);
             static int i2clog = -1;

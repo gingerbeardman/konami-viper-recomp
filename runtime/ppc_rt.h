@@ -35,6 +35,7 @@ typedef struct PPCContext {
     uint64_t cycles;        /* virtual CPU cycles elapsed (at last sync) */
     uint64_t tb_base;       /* timebase offset (written by mttbl/mttbu) */
     uint64_t dec_event;     /* cycle at which DEC crosses zero */
+    int hook_return;        /* entry hook requests a native function return */
     int unwind;             /* non-zero while unwinding host frames after rfi */
 } PPCContext;
 

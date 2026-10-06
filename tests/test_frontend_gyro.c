@@ -26,6 +26,15 @@ uint8_t g_in[8];
 int16_t g_analog[4];
 int g_enhanced;
 static int menu_active, paused;
+void enh_focus_lost(void) { paused=1; }
+int explorer_active(void) { return 0; }
+int explorer_free(void) { return 0; }
+void explorer_toggle(void) {}
+void explorer_free_toggle(void) {}
+void explorer_drive(float forward, float vertical) { (void)forward; (void)vertical; }
+void explorer_adjust(float speed, float height) { (void)speed; (void)height; }
+void explorer_look(float steering) { (void)steering; }
+void explorer_pitch(float tilt) { (void)tilt; }
 uint64_t rt_now(void) { return 0; }
 void rt_log(const char *fmt, ...) { (void)fmt; }
 void nvram_save(void) {}
@@ -45,6 +54,10 @@ void enh_set_fullscreen(int a) { (void)a; }
 void enh_controller_settings_changed(void) {}
 int enh_quit_requested(void) { return 0; }
 int enh_restart_requested(void) { return 0; }
+void enh_track_debug_toggle(void) {}
+int enh_track_debug_position_text(char *text,size_t size) {(void)text;(void)size;return 0;}
+int enh_track_debug_heading_text(char *text,size_t size) {(void)text;(void)size;return 0;}
+int enh_track_debug_step(int direction) {(void)direction;return 0;}
 void enh_draw_overlay(uint32_t *f, int w, int h) { (void)f; (void)w; (void)h; }
 uint64_t voodoo_get_frame(uint32_t *f, int n, int *w, int *h) { (void)f; (void)n; *w=*h=0; return 0; }
 

@@ -119,6 +119,8 @@
     "The calibration is TD2's script plus the motor-driven steering test (about 50 s, needs RT_FFB_WHEEL, set automatically by the first-run calibration) and the HAND BRAKE step."
   ],
   "enhanced": {
+    "race_restart_style": 1,
+    "practice_text_render": "0x46bc0",
     "setup": {
       "script": "12:3=fd,12.5:3=ff,22.0:4=fe,22.3:4=ff,22.8:4=fe,23.1:4=ff,23.6:4=fe,23.9:4=ff,24.4:4=fe,24.7:4=ff,25.2:4=fe,25.5:4=ff,26.0:4=fe,26.3:4=ff,26.8:4=fe,27.1:4=ff,28.5:3=ef,28.8:3=ff,30.5:3=ef,30.8:3=ff,31.5:4=fe,31.8:4=ff,32.3:4=fe,32.6:4=ff,33.5:3=ef,33.8:3=ff",
       "seconds": 36,
@@ -136,11 +138,53 @@
     ],
     "hooks": {
       "game": {
+        "0x889a4": "race_dispatch",
+        "0xb45b4": "race_countdown",
+        "0xaa6f0": "race_time_bonus",
+        "0xa9c30": "race_laps",
+        "0xa9cc8": "race_lap_clock",
+        "0xa9d2c": "practice_text",
+        "0xa9ed0": "practice_text",
+        "0xa9ee4": "practice_text",
+        "0xaa71c": "practice_checkpoint",
+        "0xaa3cc": "mission_toast",
+        "0xb46fc": "practice_hud",
+        "0xb4700": "practice_hud_end",
         "0x61b4c": "attract",
         "0x839b4": "name_index",
         "0x839f8": "name_confirm",
         "0x8ec84": "explorer_camera",
-        "0xb403c": "explorer_race"
+        "0xb403c": "explorer_race",
+        "0x7bb18": "course_sign_30",
+        "0x7bb70": "course_sign_30",
+        "0x7db0c": "course_sign_31",
+        "0x7db6c": "course_sign_31",
+        "0x7dbb4": "course_sign_12",
+        "0x7dc44": "course_sign_30",
+        "0x7dca0": "course_sign_31",
+        "0x7dce4": "course_sign_30",
+        "0x7df24": "scenery_visibility",
+        "0x7df48": "scenery_cell_distance",
+        "0x7e06c": "scenery_object_distance",
+        "0x5d1e0": "mission_break",
+        "0x5cd5c": "mission_spawn_breakable",
+        "0x56f28": "mission_furniture",
+        "0x56efc": "mission_furniture_contact",
+        "0xa4dd8": "mission_player_contact",
+        "0x5e9e0": "mission_solid",
+        "0x5f5dc": "mission_prop",
+        "0x575e0": "mission_dodge",
+        "0x5a39c": "mission_dog_scare",
+        "0x59668": "mission_dodge_reactive",
+        "0x552ac": "mission_spawn_furniture",
+        "0x5e4f0": "mission_spawn_solid",
+        "0x5f1c4": "mission_spawn_prop",
+        "0xa6c3c": "mission_wrong_voice",
+        "0xaaa60": "mission_wrong_hud",
+        "0x9eb6c": "mission_vehicle_destroy",
+        "0x88c6c": "course_confirm",
+        "0x5e988": "mission_touch",
+        "0x7e2d0": "scenery_model"
       },
       "gl": {
         "0x213f4": "projection",
@@ -393,6 +437,7 @@
       "index_reg": 24,
       "confirm_reg": 3
     },
-    "test_menu_game_mode": 12
+    "test_menu_game_mode": 12,
+    "mission_style": 1
   }
 }

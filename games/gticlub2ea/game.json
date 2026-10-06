@@ -44,6 +44,8 @@
   },
   "status": "boots, attract mode, race and calibration tested headless",
   "enhanced": {
+    "race_restart_style": 1,
+    "practice_text_render": "0x46be4",
     "blank_strings": [
       {
         "addr": "0xbaec0",
@@ -56,12 +58,25 @@
     ],
     "hooks": {
       "game": {
+        "0x889c8": "race_dispatch",
+        "0xb45d8": "race_countdown",
+        "0xaa714": "race_time_bonus",
+        "0xa9c54": "race_laps",
+        "0xa9cec": "race_lap_clock",
+        "0xa9ef4": "practice_text",
+        "0xa9f08": "practice_text",
+        "0xaa740": "practice_checkpoint",
+        "0xb4720": "practice_hud",
+        "0xb4724": "practice_hud_end",
         "0x61b4c": null,
         "0x61b70": "attract",
         "0x839b4": null,
         "0x839f8": null,
         "0x839d8": "name_index",
-        "0x83a1c": "name_confirm"
+        "0x83a1c": "name_confirm",
+        "0x7df48": "scenery_visibility",
+        "0x7df6c": "scenery_cell_distance",
+        "0x7e090": "scenery_object_distance"
       }
     },
     "test_menu_game_mode": 13

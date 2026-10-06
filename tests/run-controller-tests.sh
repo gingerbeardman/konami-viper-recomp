@@ -5,16 +5,28 @@ TEMP_TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_TEST_DIR"' EXIT HUP INT TERM
 ${CC:-cc} -std=c11 -Wall -Wextra -Werror -Iruntime tests/test_controller_math.c -lm -o "$TEMP_TEST_DIR/math"
 "$TEMP_TEST_DIR/math"
-${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -Wall -Wextra -Werror \
-    -Iruntime -Itests/fixtures $(sdl2-config --cflags) tests/test_frontend_input.c \
-    $(sdl2-config --libs) -lm -o "$TEMP_TEST_DIR/input"
-"$TEMP_TEST_DIR/input"
+for has_handbrake in 0 1; do
+    ${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -Wall -Wextra -Werror \
+        -DGAME_HAS_HANDBRAKE=$has_handbrake -Iruntime -Itests/fixtures \
+        $(sdl2-config --cflags) tests/test_frontend_input.c \
+        $(sdl2-config --libs) -lm -o "$TEMP_TEST_DIR/input"
+    "$TEMP_TEST_DIR/input"
+done
+for restart_style in 1 2; do
+    ${CC:-cc} -std=c11 -Wall -Wextra -Werror -Iruntime -DGAME_ENH_RACE_RESTART_STYLE=$restart_style \
+        tests/test_race_restart.c -lm -o "$TEMP_TEST_DIR/restart"
+    "$TEMP_TEST_DIR/restart"
+done
 
 python3 - "$TEMP_TEST_DIR" <<'PYCONFIG'
 import sys
 sys.path.insert(0, 'tools')
 import game
-game.write_config_header(game.load('gticlub2'), sys.argv[1])
+profile = game.load('gticlub2')
+# Controller/menu regression fixtures cover the ordinary race UI. Missions
+# have their own enabled-profile menu and adapter tests.
+profile['enhanced']['mission_style'] = 0
+game.write_config_header(profile, sys.argv[1])
 PYCONFIG
 case $(uname -s) in
     Darwin) GC_SECTIONS=-Wl,-dead_strip ;;

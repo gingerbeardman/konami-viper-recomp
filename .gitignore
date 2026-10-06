@@ -13,7 +13,7 @@ roms/**
 !roms/*/README.txt
 
 # --- Outputs of extraction / recompilation / build ---
-/work/
+/work
 /generated/
 /build/
 /td2
@@ -33,3 +33,6 @@ dispatch_miss.txt
 .DS_Store
 __pycache__/
 /*_settings.ini
+
+# Enhanced mission progress
+/*_settings.ini.missions*

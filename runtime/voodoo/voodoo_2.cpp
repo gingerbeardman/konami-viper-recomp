@@ -397,8 +397,13 @@ u32 command_fifo::packet_type_2(u32 command)
 //  packet_type_3 - handle FIFO packet type 3
 //-------------------------------------------------
 
+extern "C" int enh_mirror_projection(void);
+
 u32 command_fifo::packet_type_3(u32 command)
 {
+    // Guest FIFO execution is synchronous with submission. Perspective reflection
+    // reverses winding; orthographic HUD packets retain their original sign.
+    if (enh_mirror_projection()) command ^= 1u << 24;
 	// Packet type 3: 1 + N words
 	//
 	//   Word  Bits
