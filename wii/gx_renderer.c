@@ -349,12 +349,32 @@ static unsigned height(const WiiVoodooView *v){
  * black side bars (it then shows at its true 4:3 shape; 1:1 keeps square
  * pixels). WII_FORCE_ASPECT 43/169 overrides the console setting. */
 static int OUT_X=0,OUT_Y=0,OUT_W=640,OUT_H=480;
-static void output_box_init(void){
-#ifdef VIPER_WII_LETTERBOX
-    int w=512,h=384;
+#ifdef VIPER_WII_DISPLAY_MULTI
+/* MULTI build: the display mode is chosen at run time (Minus cycles it). */
+enum { DISPLAY_1TO1, DISPLAY_1TO1_NEAREST, DISPLAY_SCALED, DISPLAY_SCALED_SS, DISPLAY_MODES };
+static const char *const display_names[DISPLAY_MODES]={"1:1","1:1 NEAREST","SCALED","SCALED SUPERSAMPLED"};
+static volatile int display_mode=DISPLAY_SCALED;
+static int display_applied=-1;
+void wii_gx_display_cycle(void){display_mode=(display_mode+1)%DISPLAY_MODES;}
+#define DISPLAY_LETTERBOX (display_mode==DISPLAY_1TO1||display_mode==DISPLAY_1TO1_NEAREST)
+#define DISPLAY_NEAREST (display_mode==DISPLAY_1TO1_NEAREST)
+#define DISPLAY_SUPERSAMPLE (display_mode==DISPLAY_SCALED_SS)
 #else
-    int w=640,h=480;
+void wii_gx_display_cycle(void){}
+#ifdef VIPER_WII_LETTERBOX
+#define DISPLAY_LETTERBOX 1
+#else
+#define DISPLAY_LETTERBOX 0
 #endif
+#ifdef VIPER_WII_NEAREST_TEXTURES
+#define DISPLAY_NEAREST 1
+#else
+#define DISPLAY_NEAREST 0
+#endif
+#define DISPLAY_SUPERSAMPLE 1
+#endif
+static void output_box_init(void){
+    int w=DISPLAY_LETTERBOX?512:640,h=DISPLAY_LETTERBOX?384:480;
 #if defined(VIPER_WII_FORCE_ASPECT) && VIPER_WII_FORCE_ASPECT==169
     int wide=1;
 #elif defined(VIPER_WII_FORCE_ASPECT) && VIPER_WII_FORCE_ASPECT==43
@@ -403,10 +423,12 @@ static void projection(const WiiVoodooView *v) {
 static float screen_y(const WiiVoodooView *v,float y) {
     return (v->regs[0x110/4]&(1u<<17))?((v->io[0x10/4]>>18)&4095)+1.0f-y:y;
 }
+static int clip_key_stale;   /* the output box changed: recompute */
 static void clip(const WiiVoodooView *v,int enabled) {
     /* The rectangle depends only on these inputs; GX_SetScissor below is
      * still called so a scissor set elsewhere is always restored. */
     static uint32_t key[6]={~0u,~0u,~0u,~0u,~0u,~0u};static u32 cx0,cy0,cw,ch;
+    if(clip_key_stale){memset(key,0xff,sizeof key);clip_key_stale=0;}
     uint32_t now[6]={v->io[0x98/4],v->io[0xa4/4],v->io[0xac/4],enabled?v->regs[0x118/4]:~0u,
         enabled?v->regs[0x11c/4]:~0u,v->regs[0x110/4]&(1u<<17)};
     if(!memcmp(key,now,sizeof key)){
@@ -890,24 +912,18 @@ WII_HOT_bind_flat_texture static void bind_flat_texture(const WiiVoodooView *v,u
     texture_pin(slot);
 #ifdef VIPER_WII_NATIVE_TEXTURE_SOURCE
     unsigned filter=source->linear?GX_LINEAR:GX_NEAR;
-#ifdef VIPER_WII_NEAREST_TEXTURES
-    filter=GX_NEAR;   /* Option: every game texture point-sampled. */
-#endif
+    if(DISPLAY_NEAREST)filter=GX_NEAR;   /* Option: every game texture point-sampled. */
     GXTexObj tex=wii_gx_texture_resource_acquire(&texture_resources[slot],texture_image,w,h,
         source->clamp_s?GX_CLAMP:GX_REPEAT,source->clamp_t?GX_CLAMP:GX_REPEAT,filter);
 #elif defined(VIPER_WII_NATIVE_TEXTURE_RESOURCE)
     unsigned filter=(r[0]&6)?GX_LINEAR:GX_NEAR;
-#ifdef VIPER_WII_NEAREST_TEXTURES
-    filter=GX_NEAR;   /* Option: every game texture point-sampled. */
-#endif
+    if(DISPLAY_NEAREST)filter=GX_NEAR;   /* Option: every game texture point-sampled. */
     GXTexObj tex=wii_gx_texture_resource_acquire(&texture_resources[slot],texture_image,w,h,
         (r[0]&64)?GX_CLAMP:GX_REPEAT,(r[0]&128)?GX_CLAMP:GX_REPEAT,filter);
 #else
     GXTexObj tex;GX_InitTexObj(&tex,texture_image,w,h,GX_TF_RGBA8,(r[0]&64)?GX_CLAMP:GX_REPEAT,(r[0]&128)?GX_CLAMP:GX_REPEAT,GX_FALSE);
     unsigned filter=(r[0]&6)?GX_LINEAR:GX_NEAR;
-#ifdef VIPER_WII_NEAREST_TEXTURES
-    filter=GX_NEAR;   /* Option: every game texture point-sampled. */
-#endif
+    if(DISPLAY_NEAREST)filter=GX_NEAR;   /* Option: every game texture point-sampled. */
     GX_InitTexObjLOD(&tex,filter,filter,0,0,0,GX_FALSE,GX_FALSE,GX_ANISO_1);
 #endif
 #if defined(VIPER_WII_TEXLOAD_SKIP) && defined(VIPER_WII_NATIVE_TEXTURE_RESOURCE)
@@ -2475,7 +2491,7 @@ static void ss_begin(void){
          * stale values (a wrong vertex size: "Unknown opcode"). */
         GX_SetMisc(GX_MT_DL_SAVE_CTX,0);
     }
-    if((OUT_W|OUT_H)&7)return;   /* tiles must be whole 4x4 texture blocks */
+    if(!DISPLAY_SUPERSAMPLE||((OUT_W|OUT_H)&7))return;   /* tiles must be whole 4x4 texture blocks */
 #ifdef VIPER_WII_SUPERSAMPLE_TRACE
     if(!(++ss_n_begin%25))SS_TRACE("VIPER WII SS heartbeat frame=%u begins=%u thread_aborts=%u resolved=%llu plain=%llu\n",
         render_frame,ss_n_begin,ss_n_abort42,ss_frames,ss_plain);
@@ -2623,6 +2639,26 @@ static void present(void *user,const WiiVoodooView *v,unsigned base) {
     (void)v;gx_wait(4);GX_CopyDisp(framebuffer,GX_FALSE);gx_wait(5);
 #endif
     VIDEO_SetNextFramebuffer(framebuffer);VIDEO_Flush();
+#ifdef VIPER_WII_DISPLAY_CYCLE
+    {static unsigned n;if(!(++n%120)){wii_gx_display_cycle();rt_log("VIPER WII DISPLAY mode=%d frame=%u\n",display_mode,render_frame);}}
+#endif
+#ifdef VIPER_WII_DISPLAY_MULTI
+    if(display_applied!=display_mode){
+        /* A frame boundary: nothing of the old box is recorded or queued. */
+        int first=display_applied<0;
+        display_applied=display_mode;
+        output_box_init();clip_key_stale=1;gx_shadow.proj_w=gx_shadow.proj_h=0;
+        GX_SetViewport(OUT_X,OUT_Y,OUT_W,OUT_H,0,1);
+        TEXLOAD_FORGET();
+#ifdef VIPER_WII_COMBINER_PROGRAM_CACHE
+        wii_combiner_program_invalidate(&combiner_cache);
+#endif
+#ifdef VIPER_WII_NATIVE_TEXTURE_RESOURCE
+        for(unsigned i=0;i<COLOR_CACHE_SLOTS;i++)texture_resources[i].valid=0;   /* filters rebuilt */
+#endif
+        if(!first)wii_menu_notice(display_names[display_mode]);
+    }
+#endif
 #ifdef VIPER_WII_SUPERSAMPLE
     ss_begin();
 #endif

@@ -83,7 +83,11 @@ void wii_input_poll(void){
         float gx=d->gforce.x,gy=d->gforce.y,gz=d->gforce.z;
         float tilt=atan2f(gy,sqrtf(gx*gx+gz*gz))*(180.0f/(float)M_PI);
         if(isfinite(tilt)){
+#ifdef VIPER_WII_DISPLAY_MULTI
+            if(d->btns_d&WPAD_BUTTON_MINUS){void wii_gx_display_cycle(void);wii_gx_display_cycle();}
+#else
             if(d->btns_d&WPAD_BUTTON_MINUS)roll_center=tilt;
+#endif
             float delta=tilt-roll_center,mag=fabsf(delta)-2.5f;
             float frac=mag<=0?0:fminf(1,mag/(45.0f-2.5f));
             s.steer=(int)lroundf((delta>0?-frac:frac)*200);

@@ -67,8 +67,17 @@ static void text(float x,float y,const char *s,int selected){
             (float)(g.x+g.w)/FONT_W,(float)(g.y+32)/FONT_H,color,1);x+=g.w+3;
     }
 }
+static const char *notice;
+static unsigned notice_frames;
+void wii_menu_notice(const char *s){notice=s;notice_frames=60;}   /* the game presents ~30 per second */
+static float text_width(const char *s){
+    float w=0;
+    for(;*s;s++){unsigned ch=(unsigned char)*s;w+=(ch<128&&glyphs[ch].w)?glyphs[ch].w+3:8;}
+    return w;
+}
 void wii_menu_draw(void){
-    if(!wii_enhanced_menu_active())return;
+    int menu=wii_enhanced_menu_active();
+    if(!menu&&!notice_frames)return;
     if(!font)rt_fatal("Wii menu draw before font initialization");
     Mtx44 p;guOrtho(p,0,384,0,512,0,1);GX_LoadProjectionMtx(p,GX_ORTHOGRAPHIC);
     {int bx,by,bw,bh;wii_gx_output_box(&bx,&by,&bw,&bh);   /* the game's box: 1:1/16:9 like the game */
@@ -80,13 +89,22 @@ void wii_menu_draw(void){
     GX_SetFog(GX_FOG_NONE,0,1,0,1,(GXColor){0,0,0,0});
     GX_SetNumTevStages(1);GX_SetVtxDesc(GX_VA_TEX0,GX_NONE);GX_SetNumTexGens(0);
     GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORDNULL,GX_TEXMAP_NULL,GX_COLOR0A0);GX_SetTevOp(GX_TEVSTAGE0,GX_PASSCLR);
-    quad(24,195,260,355,0,0,0,0,(GXColor){0,0,0,179},0);
+    float nw=notice_frames?text_width(notice):0,nx=(512-nw)/2;
+    if(menu)quad(24,195,260,355,0,0,0,0,(GXColor){0,0,0,179},0);
+    if(notice_frames)quad(nx-12,12,nx+nw+12,52,0,0,0,0,(GXColor){0,0,0,179},0);
     GX_LoadTexObj(&texture,GX_TEXMAP0);GX_SetVtxDesc(GX_VA_TEX0,GX_DIRECT);
     GX_SetVtxAttrFmt(GX_VTXFMT0,GX_VA_TEX0,GX_TEX_ST,GX_F32,0);GX_SetNumTexGens(1);
     GX_SetTexCoordGen(GX_TEXCOORD0,GX_TG_MTX2x4,GX_TG_TEX0,GX_IDENTITY);
     GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLOR0A0);GX_SetTevOp(GX_TEVSTAGE0,GX_MODULATE);
-    text(36,199,"START GAME",1);text(36,229,"PLUS OR START",0);text(36,259,"TILT TO STEER",0);
-    text(36,289,"1 GAS B BRAKE",0);text(36,319,"MINUS RECENTER",0);
+    if(menu){
+        text(36,199,"START GAME",1);text(36,229,"PLUS OR START",0);text(36,259,"TILT TO STEER",0);
+#ifdef VIPER_WII_DISPLAY_MULTI
+        text(36,289,"1 GAS B BRAKE",0);text(36,319,"MINUS DISPLAY",0);
+#else
+        text(36,289,"1 GAS B BRAKE",0);text(36,319,"MINUS RECENTER",0);
+#endif
+    }
+    if(notice_frames){text(nx,16,notice,1);notice_frames--;}
     /* The backend re-establishes projection, masks, blend and depth per draw.
      * Restore its untextured vertex descriptor/TEV invariant immediately. */
     GX_SetVtxDesc(GX_VA_TEX0,GX_NONE);GX_SetNumTexGens(0);

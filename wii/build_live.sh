@@ -433,6 +433,13 @@ case "${WII_LIVE_DIRECT_VERSION:-1}" in
     1) flags="$flags -DVIPER_WII_DIRECT_VERSION"; output="$output-dver" ;;
     *) echo 'WII_LIVE_DIRECT_VERSION must be 0 or 1' >&2; exit 2 ;;
 esac
+# MULTI: the display mode cycles at run time with Minus (1:1, 1:1 nearest,
+# scaled, scaled supersampled); replaces the build-time letterbox/nearest.
+case "${WII_LIVE_DISPLAY_MULTI:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DISPLAY_MULTI -DVIPER_WII_SUPERSAMPLE"; output="$output-multi" ;;
+    *) echo 'WII_LIVE_DISPLAY_MULTI must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_LIVE_DENSE_LR:-1}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_DENSE_LR"; output="$output-denselr" ;;

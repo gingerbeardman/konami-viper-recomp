@@ -795,6 +795,12 @@ case "${WII_PERF_AUDIO_DMA_FRAMES:-512}" in
     1024|2048) flags="$flags -DVIPER_WII_AUDIO_DMA_FRAMES=$WII_PERF_AUDIO_DMA_FRAMES"; output="$output-adma$WII_PERF_AUDIO_DMA_FRAMES" ;;
     *) echo 'WII_PERF_AUDIO_DMA_FRAMES must be 512, 1024 or 2048' >&2; exit 2 ;;
 esac
+case "${WII_PERF_DISPLAY_MULTI:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DISPLAY_MULTI -DVIPER_WII_SUPERSAMPLE"; output="$output-multi" ;;
+    2) flags="$flags -DVIPER_WII_DISPLAY_MULTI -DVIPER_WII_SUPERSAMPLE -DVIPER_WII_DISPLAY_CYCLE"; output="$output-multicycle" ;;
+    *) echo 'WII_PERF_DISPLAY_MULTI must be 0, 1 or 2' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;
