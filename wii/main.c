@@ -604,7 +604,7 @@ int main(int argc,char **argv){
     g_ram=calloc(1,RAM_SIZE);
     wii_net_report_args(argc,argv);
 #ifndef VIPER_WII_WATCHDOG_S
-#define VIPER_WII_WATCHDOG_S 300
+#define VIPER_WII_WATCHDOG_S 150   /* a run takes 67-85 s; diagnostics stay inside 2x */
 #endif
     wii_net_report_watchdog(VIPER_WII_WATCHDOG_S);
     VIDEO_Init();GXRModeObj *mode=VIDEO_GetPreferredMode(NULL);
