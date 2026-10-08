@@ -27,7 +27,8 @@ void rt_mmio_w32(uint32_t a,uint32_t v) { (void)a;(void)v;assert(0); }
 void rt_mmio_w16(uint32_t a,uint32_t v) { (void)a;(void)v;assert(0); }
 void rt_mmio_w8(uint32_t a,uint32_t v) { (void)a;(void)v;assert(0); }
 static void mock_place(PPCContext *c) {
-    assert(c->f[4]==k_missions[atomic_load(&g_mission_selected)].rolling_speed); placed++; placed_heading=(float)c->f[3];
+    const MissionDefinition *placing=&k_missions[atomic_load(&g_mission_selected)];
+    assert(placing->rolling_gate ? c->f[4]>0 : c->f[4]==placing->rolling_speed); placed++; placed_heading=(float)c->f[3];
     STF32(test_car+0x174,c->f[1]); STF32(test_car+0x178,c->f[2]); STF32(test_car+0x17c,10);
     ST8(test_car+0x3a4,0);
     memset(g_ram+c->r[1]-100,0x77,100); c->r[3]=0; c->budget-=100;
@@ -281,6 +282,24 @@ int main(int argc, char **argv) {
     k_missions[0]=saved_definition;
     csv=fopen(csv_path,"w"); assert(csv); fputs("car,transmission,course,cp1,cp2\n1,at,town,9,3\n",csv); fclose(csv);
     mission_csv_load(); assert(MISSION_COUNT==1 && k_missions[0].finish_cp==10);
+    /* A rolling-start gate is the first gate and replaces the authored start. */
+    csv=fopen(csv_path,"w"); assert(csv);
+    fputs("name,description,car,transmission,course,cp1,cp2,gatex,gatez,gatew,gatetype\n"
+          "ROLL,JUMP,1,at,town,0,10,900;1000,0;0,road;road,rstart;finish\n",csv); fclose(csv);
+    mission_csv_load(); assert(MISSION_COUNT==1 && k_missions[0].rolling_gate && k_missions[0].custom_start);
+    assert(k_missions[0].gate_role[0]==4 && k_missions[0].start_x==900);
+    const char *bad_rolling[]={
+        "name,description,car,transmission,course,cp1,cp2,gatex,gatez,gatew,gatetype\n"
+        "BAD,JUMP,1,at,town,0,10,900;1000,0;0,road;road,waypoint;rstart\n",
+        "name,description,car,transmission,course,cp1,cp2,gatex,gatez,gatew,gatetype,startx,startz,start_heading\n"
+        "BAD,JUMP,1,at,town,0,10,900;1000,0;0,road;road,rstart;finish,880,0,90\n",
+        "name,description,car,transmission,course,cp1,cp2,gatex,gatez,gatew,gatetype,rolling,rolling_speed\n"
+        "BAD,JUMP,1,at,town,0,10,900;1000,0;0,road;road,rstart;finish,75,108\n"};
+    for(unsigned i=0;i<3;i++) {
+        csv=fopen(csv_path,"w"); assert(csv); fputs(bad_rolling[i],csv); fclose(csv);
+        mission_csv_load(); assert(strcmp(k_missions[0].name,"BAD"));
+    }
+    k_missions[0]=saved_definition;
     /* A closer opposite-flow segment before CP9 must not own CSV gate direction. */
     ST32(0x4000c,0x40000); STF32(0x40100+7*32,1100);
     k_missions[0].gate_x[0]=900; k_missions[0].gate_z[0]=0;
@@ -337,6 +356,23 @@ int main(int argc, char **argv) {
     assert(fabs(LDF32(test_car+0x174)-approach_spawn.x)<.01f);
     assert(hypotf(g_mission_entry.centre.x-900,g_mission_entry.centre.z)>50);
     assert(!g_mission_run.next_gate && !g_mission_landed);
+    /* A rolling-start gate is the timing line: the car starts behind it on its
+     * heading and is timed from it; the line itself is not a waypoint. */
+    MissionDefinition rolling=before_custom_roll;
+    rolling.custom_start=1;rolling.rolling_gate=1;rolling.custom_gates=2;rolling.custom_finish=0;
+    rolling.rolling_metres=0;rolling.lead_in_metres=0;rolling.rolling_speed=0;
+    rolling.start_x=900;rolling.start_z=0;rolling.start_heading=90;
+    for(unsigned i=0;i<2;i++) {
+        rolling.gate_x[i]=900+100.f*i;rolling.gate_z[i]=0;rolling.gate_width[i]=36;rolling.gate_height[i]=8;
+        rolling.gate_heading[i]=90;rolling.gate_y[i]=NAN;rolling.gate_tilt[i]=0;
+    }
+    rolling.gate_role[0]=4;rolling.gate_role[1]=2;
+    k_missions[0]=rolling;mission_begin(&c,test_car);
+    assert(mission_phase()==MISSION_ROLLING);
+    assert(fabsf(g_mission_entry.centre.x-900)<.01f && g_mission_entry.nx>.99f);
+    assert(LDF32(test_car+0x174)<900 && LDF32(test_car+0x174)>889.99f);
+    assert(g_mission_run.gate_count==1 && fabsf(g_mission_run.gates[0].centre.x-1000)<.01f);
+    assert(g_mission_run.required_pass_mask==1);
     k_missions[0]=before_custom_roll;
     /* An explicit reverse section faces and crosses against native route order.
      * Its rolling approach starts beyond CP3, rather than on the outgoing leg. */

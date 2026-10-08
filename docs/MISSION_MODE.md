@@ -479,7 +479,7 @@ ahead of the camera and selects it for editing. X deletes, B selects previous,
 and Y selects next. In gate editing, left stick moves the gate, right stick
 changes width/height, D-pad left/right rotates, triggers tilt from upright
 to flat, D-pad up/down changes elevation, and shoulders cycle waypoint,
-failure and finish. Magenta edges are below the sampled road surface; cyan
+failure, finish, rolling start and start. Magenta edges are below the sampled road surface; cyan
 marks the road intersection.
 
 Home chooses the current checkpoint as the start and selects its fixed-size
@@ -489,6 +489,20 @@ to the mission's permanent CSV ID; Select discards the draft. Saved gates
 remain visible during track debug exploration. Gate geometry uses optional
 `gatey`, `gateh`, `gater`, `gatetilt` and `gatetype` semicolon lists. Tilt is
 in degrees: zero is upright, 90 is flat.
+
+Gate type `rstart` (rolling start, drawn blue) makes the first gate the timing
+line, and the game works out the rest. The car starts up to 10 m behind the gate
+on its heading, where the ground stays level, and drives itself straight through
+it; timing starts at the gate, which is not a waypoint. The speed comes from the
+leg to the next gate. Where the ground drops away between them (a jump), it is
+the speed that carries the car 8 m past the far side of the gap, or to the next
+gate if that is nearer; this uses the game's gravity of about 23.4 m/s² and a
+lip lift of about 0.17 of the car's speed, measured on the Town river jump. On
+the road it falls from 140 to 60 km/h as the turn to the next gate grows from
+15° to 90°. `rolling_speed` (km/h) overrides the speed. An `rstart` row cannot
+also set `startx`/`startz`/`start_heading`, `rolling` or `lead_in`; saving from
+the editor clears them. STUNT DRIVER (59) overrides the speed with 200 km/h to
+clear its parked car; RETURN TO SENDER (69) uses the computed 148 km/h.
 
 Authored parked-car obstacles use `obstacle_model` (native TCAR model 0–15),
 `obstacle_x`, `obstacle_z`, and `obstacle_heading` (degrees). Leave the model blank

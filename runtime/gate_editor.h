@@ -38,12 +38,15 @@ static int gate_editor_save(void) {
     for(unsigned i=0;i<g_author_count;i++) for(unsigned j=0;j<7;j++) {
         char item[40];AuthorGate g=g_author_gates[i];
         float numbers[]={g.x,g.z,g.width,g.y,g.height,g.heading};
-        if(j==6) snprintf(item,sizeof item,"%s",g.role==1?"fail":g.role==2?"finish":"waypoint");
+        if(j==6) snprintf(item,sizeof item,"%s",g.role==1?"fail":g.role==2?"finish":g.role==4?"rstart":"waypoint");
         else if(j==3 && !isfinite(g.y)) snprintf(item,sizeof item,"auto");
         else if(j==0 || j==1 || j==3) snprintf(item,sizeof item,"%.0f",roundf(numbers[j]));
         else snprintf(item,sizeof item,"%.2f",numbers[j]);
         size_t n=strlen(values[j]);snprintf(values[j]+n,sizeof values[j]-n,"%s%s",i?";":"",item);
     }
+    /* A rolling-start gate replaces the authored start: clear it from the row. */
+    int rstart=0;for(unsigned i=0;i<g_author_count;i++) rstart|=g_author_gates[i].role==4;
+    if(rstart) {const unsigned cleared[]={11,12,13,14,16};for(unsigned i=0;i<5;i++) values[cleared[i]][0]=0;}
     for(unsigned i=0;i<g_author_count;i++) {size_t n=strlen(values[15]);snprintf(values[15]+n,sizeof values[15]-n,"%s%.2f",i?";":"",g_author_gates[i].tilt);}
     char temporary[4096];snprintf(temporary,sizeof temporary,"%s.tmp",path);
     FILE *in=fopen(path,"r");if(!in) return 0;
@@ -68,7 +71,8 @@ static int gate_editor_save(void) {
         for(const char *p=line;;p++) {
             if(*p=='"') {if(quoted && p[1]=='"') {p++;continue;}quoted=!quoted;}
             if(!*p || (!quoted && (*p==',' || *p=='\r' || *p=='\n'))) {
-                int replacement=-1;for(unsigned j=0;j<18;j++) if(columns[j]==column && (j<10 || j==15 || g_author_start_cp>=0)) replacement=j;
+                int replacement=-1;for(unsigned j=0;j<18;j++) if(columns[j]==column && (j<10 || j==15 || g_author_start_cp>=0 ||
+                    (rstart && ((j>=11 && j<=14) || j==16)))) replacement=j;
                 if(replacement>=0) fputs(values[replacement],out);else fwrite(start,1,(size_t)(p-start),out);
                 if(*p!=',') {fputs(p,out);break;}
                 fputc(',',out);start=p+1;column++;
@@ -108,8 +112,9 @@ int enh_gate_editor_button(int action) {
         g_author_mission=d->id;g_author_count=d->custom_gates;g_author_selected=0;g_author_error=0;g_author_start_cp=-1;g_author_flying=1;g_author_edit_start=0;
         unsigned cpindex=d->start_cp?d->start_cp-1:0;
         MissionRoadPoint start=cpindex<11?g_mission_cp_point[cpindex]:g_mission_cp_point[0];
-        g_author_start=(AuthorGate){d->custom_start?d->start_x:start.x,NAN,d->custom_start?d->start_z:start.z,
-            36,8,d->custom_start?d->start_heading:start.heading*57.2957795f,3,0};
+        int authored=d->custom_start && !d->rolling_gate;
+        g_author_start=(AuthorGate){authored?d->start_x:start.x,NAN,authored?d->start_z:start.z,
+            36,8,authored?d->start_heading:start.heading*57.2957795f,3,0};
         g_author_start_speed=d->rolling_metres?d->rolling_speed*3.6f:0;
         g_author_start_plane_heading=start.heading*57.2957795f;
         g_author_start_rolling=d->rolling_metres;
@@ -197,7 +202,16 @@ int enh_gate_editor_button(int action) {
         }
         if(action==GATE_EDIT_ROLE_UP || action==GATE_EDIT_ROLE_DOWN) {
             AuthorGate *gate=&g_author_gates[g_author_selected];
-            gate->role=(gate->role+(action==GATE_EDIT_ROLE_UP?1:3))%4;
+            static const unsigned order[]={0,1,2,4,3};
+            unsigned k=0;while(k<4 && order[k]!=gate->role) k++;
+            gate->role=order[(k+(action==GATE_EDIT_ROLE_UP?1:4))%5];
+            if(gate->role==4) {
+                /* One rolling start, always the first gate. */
+                for(unsigned i=0;i<g_author_count;i++) if(i!=g_author_selected && g_author_gates[i].role==4) g_author_gates[i].role=0;
+                AuthorGate moved=*gate;
+                memmove(g_author_gates+1,g_author_gates,g_author_selected*sizeof *gate);
+                g_author_gates[0]=moved;g_author_selected=0;gate=g_author_gates;
+            }
             if(gate->role==3) {
                 /* Start is a mission setting, never an objective waypoint. */
                 g_author_start=*gate;g_author_start_plane_heading=gate->heading;

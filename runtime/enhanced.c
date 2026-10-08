@@ -2012,7 +2012,7 @@ static void debug_draw_gates(uint32_t *fb,int w,int h) {
         float tilt=atomic_load(&g_debug_gate_tilt[i])*.01745329252f,ct=cosf(tilt),st=sinf(tilt);
         unsigned role=atomic_load(&g_debug_gate_role[i]);
         int selected=enh_gate_editor_active() && (g_author_edit_start ? i==g_author_count : i==g_author_selected);
-        uint32_t gate_colour=role==3 ? 0x40ffff : role==1 ? 0xff5050 : role==2 ? 0x40ff40 : 0xffd800;
+        uint32_t gate_colour=role==3 ? 0x40ffff : role==4 ? 0x5090ff : role==1 ? 0xff5050 : role==2 ? 0x40ff40 : 0xffd800;
         if(enh_gate_editor_active()) {
             /* World-spaced dots give the plane a visible surface and
              * perspective, including when it is tilted towards horizontal. */
@@ -2077,7 +2077,7 @@ static void debug_draw_gates(uint32_t *fb,int w,int h) {
             }
         }
         if (debug_project(x,y+5,z,w,h,&sx,&sy)) {
-            snprintf(label,sizeof label,role==3 ? "START" : role==1 ? "FAIL %u" : role==2 ? "FINISH %u" : "GATE %u",i+1);
+            snprintf(label,sizeof label,role==3 ? "START" : role==4 ? "ROLLING START" : role==1 ? "FAIL %u" : role==2 ? "FINISH %u" : "GATE %u",i+1);
             debug_text(fb,w,h,sx,sy,label,gate_colour);
         }
     }
@@ -2202,8 +2202,8 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
         for (unsigned i=0;i<atomic_load(&g_debug_gate_count);i++) {
             unsigned role=atomic_load(&g_debug_gate_role[i]);
             int selected=enh_gate_editor_active() && (g_author_edit_start ? i==g_author_count : i==g_author_selected);
-            uint32_t colour=role==1?0xff5050:role==2?0x40ff40:role==3?0x40ffff:0xffd800;
-            char prefix[24];snprintf(prefix,sizeof prefix,role==3?"START ":"G%u %s ",i+1,role==1?"FAIL":role==2?"FINISH":"WAYPOINT");
+            uint32_t colour=role==1?0xff5050:role==2?0x40ff40:role==3?0x40ffff:role==4?0x5090ff:0xffd800;
+            char prefix[24];snprintf(prefix,sizeof prefix,role==3?"START ":"G%u %s ",i+1,role==1?"FAIL":role==2?"FINISH":role==4?"RSTART":"WAYPOINT");
             debug_text(fb,w,h,x,y,prefix,colour);
             snprintf(label,sizeof label,"X %.0f Z %.0f W %.0f",
                 atomic_load(&g_debug_gate[i][0]),atomic_load(&g_debug_gate[i][2]),atomic_load(&g_debug_gate[i][5])*2);
@@ -2221,7 +2221,7 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
             debug_text(fb,w,h,x,y,"DPAD ROTATE RIGHT STICK SPEED",0xffffff);y+=16;
         } else if(g_author_count) {
             AuthorGate gate=g_author_gates[g_author_selected];
-            snprintf(edit,sizeof edit,"W %.1f H %.1f R %.1f %s",gate.width,gate.height,gate.heading,gate.role==1?"FAIL":gate.role==2?"FINISH":"WAYPOINT");
+            snprintf(edit,sizeof edit,"W %.1f H %.1f R %.1f %s",gate.width,gate.height,gate.heading,gate.role==1?"FAIL":gate.role==2?"FINISH":gate.role==4?"RSTART":"WAYPOINT");
             debug_text(fb,w,h,x,y,edit,0xffffff);y+=16;
         }
         debug_text(fb,w,h,x,y,"A ADD X DELETE B PREV Y NEXT",0xffffff);y+=16;

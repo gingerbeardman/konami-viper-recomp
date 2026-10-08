@@ -28,10 +28,11 @@ typedef struct {
     float end_x, end_z, end_width;
     float gate_x[MISSION_MAX_GATES], gate_z[MISSION_MAX_GATES], gate_width[MISSION_MAX_GATES];
     float gate_y[MISSION_MAX_GATES],gate_height[MISSION_MAX_GATES],gate_heading[MISSION_MAX_GATES],gate_tilt[MISSION_MAX_GATES];
-    unsigned gate_role[MISSION_MAX_GATES]; /* 0 waypoint, 1 failure, 2 finish */
+    unsigned gate_role[MISSION_MAX_GATES]; /* 0 waypoint, 1 failure, 2 finish, 4 rolling start */
     char target_models[256], target_label[32], type[24],target_vehicles[64],parked_models[64];
     unsigned vehicle_destroy, region_visit, scenery_touch;
     unsigned target_count, target_at_finish, tuned, custom_start;
+    unsigned rolling_gate; /* gate 1 is a rolling start line: the game picks run-up and speed */
     int route_direction; /* zero/auto follows native route order; -1 reverses it */
     float start_x, start_z, start_heading, speed_goal, jump_height;
     unsigned contact_targets;
@@ -1058,6 +1059,56 @@ static int mission_place_obstacle(PPCContext *live,const MissionDefinition *d) {
     g_mission_obstacle_descriptor=descriptor;
     return 1;
 }
+/* Rolling-start run-up behind a start line: as far back as 10 m while the ground
+ * stays level enough to drive (no ledge, wall or drop between it and the line). */
+static float mission_rstart_runup(PPCContext *c, MissionGate line) {
+    float previous, run=0;
+    if(!mission_ground(c,line.centre.x,line.centre.z,&previous)) return 0;
+    for(float back=2;back<=10;back+=2) {
+        float y;
+        if(!mission_ground(c,line.centre.x-line.nx*back,line.centre.z-line.nz*back,&y) ||
+           fabsf(y-previous)>1) break;
+        previous=y; run=back;
+    }
+    return run;
+}
+/* Rolling-start speed in m/s for the leg to the next gate. Where the ground drops
+ * away (a jump), the speed carries the car 8 m past the far side of the gap, or to
+ * the next gate if that is nearer: the game's gravity is about 23.4 m/s2 and a lip
+ * lifts a car by about 0.17 of its speed (measured on the Town river jump). On the
+ * road the speed falls from 140 to 60 km/h as the turn to the next gate grows from
+ * 15 to 90 degrees. */
+static float mission_rstart_speed(PPCContext *c, MissionGate line, const MissionGate *next) {
+    if(!next) return 100/3.6f;
+    float dx=next->centre.x-line.centre.x,dz=next->centre.z-line.centre.z,distance=hypotf(dx,dz);
+    if(distance<1) return 100/3.6f;
+    dx/=distance;dz/=distance;
+    float launch,edge=-1,edge_y=0,bottom=INFINITY,target=distance,target_y=next->centre.y;
+    if(mission_ground(c,line.centre.x,line.centre.z,&launch)) {
+        float previous=launch;
+        for(float along=1;along<distance;along+=1) {
+            float y;
+            int ground=mission_ground(c,line.centre.x+dx*along,line.centre.z+dz*along,&y);
+            if(edge<0) {
+                if(!ground || y<launch-2) {edge=along-1;edge_y=previous;}
+                else previous=y;
+            }
+            if(edge<0 || !ground) continue;
+            if(y<bottom) bottom=y;
+            if(y>bottom+2) {
+                if(along+8<target) {target=along+8;mission_ground(c,line.centre.x+dx*target,line.centre.z+dz*target,&target_y);}
+                break;
+            }
+        }
+    }
+    if(edge>=0) {
+        float gap=target-edge,drop=edge_y-target_y,lift=drop+.17f*gap;
+        float speed=gap*sqrtf(23.4f/(2*fmaxf(.5f,lift)))*1.03f;
+        return fmaxf(40/3.6f,fminf(250/3.6f,speed));
+    }
+    float turn=acosf(fmaxf(-1,fminf(1,line.nx*dx+line.nz*dz)))*57.2957795f;
+    return (140-80*fmaxf(0,fminf(1,(turn-15)/75)))/3.6f;
+}
 static void mission_begin(PPCContext *c, uint32_t car) {
     memset(&g_mission_run,0,sizeof g_mission_run);
     g_mission_run.vehicle_height=2;
@@ -1150,6 +1201,7 @@ static void mission_begin(PPCContext *c, uint32_t car) {
         if (norm<.01f || !mission_ground(c,p.x,p.z,&y)) { mission_publish(); return; }
         g_mission_run.gates[i]=(MissionGate){{p.x,y,p.z},dx/norm,dz/norm,18,4,0};
     }
+    MissionGate rolling_line; memset(&rolling_line,0,sizeof rolling_line);
     if (d->custom_gates || d->custom_finish) {
         MissionGate finish=g_mission_run.gates[count-1];
         unsigned ordered=0;int explicit_finish=0;
@@ -1191,6 +1243,7 @@ static void mission_begin(PPCContext *c, uint32_t car) {
             MissionGate gate={{gx,y,gz},nx,nz,width/2,height,0};
             if(i<d->custom_gates) gate.tilt=d->gate_tilt[i]*.01745329252f;
             if(role==1) g_mission_run.failure_gates[g_mission_run.failure_gate_count++]=gate;
+            else if(role==4) rolling_line=gate;
             else {g_mission_run.gates[ordered++]=gate;if(role==2) explicit_finish=1;}
         }
         count=ordered;
@@ -1213,18 +1266,24 @@ static void mission_begin(PPCContext *c, uint32_t car) {
          * native tracker at their actual road node so streaming and recovery
          * follow the new position, including on parallel return lanes. */
         float nearest=INFINITY,along=0,entry_distance=0;
-        float heading=d->start_heading*.01745329252f;
+        float heading=d->start_heading*.01745329252f,start_x=d->start_x,start_z=d->start_z;
+        if(d->rolling_gate) {
+            /* The authored gate is the timing line; the car starts behind it. */
+            float run=mission_rstart_runup(c,rolling_line);
+            heading=atan2f(rolling_line.nx,rolling_line.nz);
+            start_x=rolling_line.centre.x-rolling_line.nx*run;start_z=rolling_line.centre.z-rolling_line.nz*run;
+        }
         for(unsigned j=0;j<g_mission_road_count;j++) {
             MissionRoadPoint a=g_mission_road[j],b=g_mission_road[(j+1)%g_mission_road_count];
             float dx=b.x-a.x,dz=b.z-a.z,n=hypotf(dx,dz);
-            float t=n>.01f ? fmaxf(0,fminf(1,((d->start_x-a.x)*dx+(d->start_z-a.z)*dz)/(n*n))) : 0;
-            float gap=hypotf(d->start_x-a.x-t*dx,d->start_z-a.z-t*dz);
+            float t=n>.01f ? fmaxf(0,fminf(1,((start_x-a.x)*dx+(start_z-a.z)*dz)/(n*n))) : 0;
+            float gap=hypotf(start_x-a.x-t*dx,start_z-a.z-t*dz);
             float alignment=n>.01f ? (dx*sinf(heading)+dz*cosf(heading))/n : 0;
             float score=gap+fmaxf(0,-alignment)*25;
             if(score<nearest) { nearest=score; spawn=a;entry_distance=along+t*a.length;g_mission_rolling_direction=alignment<0 ? -1 : 1; }
             along+=a.length;
         }
-        spawn.x=d->start_x; spawn.z=d->start_z; spawn.heading=heading;
+        spawn.x=start_x; spawn.z=start_z; spawn.heading=heading;
         float spawn_y;
         if(!mission_ground(c,spawn.x,spawn.z,&spawn_y)) {
             rt_log("mission: no terrain at custom start %.1f, %.1f\n",spawn.x,spawn.z);
@@ -1248,8 +1307,13 @@ static void mission_begin(PPCContext *c, uint32_t car) {
             MissionRoadPoint ahead=mission_road_sample(g_mission_roll_distance+g_mission_rolling_direction*12);
             spawn.heading=atan2f(ahead.x-spawn.x,ahead.z-spawn.z);
         }
+        if(d->rolling_gate) g_mission_entry=rolling_line;
     }
-    if (!mission_place(c,spawn,d->rolling_speed)) { mission_publish(); return; }
+    float spawn_speed=d->rolling_speed;
+    if(d->rolling_gate && !(spawn_speed>0)) spawn_speed=mission_rstart_speed(c,rolling_line,count ? &g_mission_run.gates[0] : NULL);
+    if(d->rolling_gate) rt_log("mission: rolling start %.1f, %.1f heading %.1f at %.0f km/h\n",
+        spawn.x,spawn.z,spawn.heading*57.2957795f,spawn_speed*3.6f);
+    if (!mission_place(c,spawn,spawn_speed)) { mission_publish(); return; }
     unsigned timing=LD32(c->r[2]+0x554), route=car+0x4dc;
     if (race_valid(timing,0xd4)) {
         ST8(timing+0x11,LD8(route+1)); ST8(timing+0x12,LD8(route+2));
@@ -1258,7 +1322,7 @@ static void mission_begin(PPCContext *c, uint32_t car) {
         ST8(timing+0xcc,0); ST8(timing+0xcd,0); ST8(timing+0xce,0);
     }
     unsigned waypoints=0;
-    for(unsigned i=0;i<d->custom_gates;i++) if(d->gate_role[i]!=1) waypoints++;
+    for(unsigned i=0;i<d->custom_gates;i++) if(d->gate_role[i]!=1 && d->gate_role[i]!=4) waypoints++;
     g_mission_run.required_pass_mask=waypoints ? (1u<<waypoints)-1 : 0;
     g_mission_run.gate_count=count; g_mission_run.limit_ms=d->limit_ms;
     g_mission_run.contact_limit=d->contacts;
@@ -1267,7 +1331,7 @@ static void mission_begin(PPCContext *c, uint32_t car) {
     if(d->landing) g_mission_run.gate_count=waypoints;
     g_mission_run.previous=mission_car_position(car);
     g_mission_challenge_heading=LDF32(car+0xc4);
-    g_mission_run.phase=d->rolling_metres ? MISSION_ROLLING : MISSION_RUNNING;
+    g_mission_run.phase=d->rolling_metres || d->rolling_gate ? MISSION_ROLLING : MISSION_RUNNING;
     g_mission_trace_marker=UINT_MAX; g_mission_trace_gate=UINT_MAX;
     g_mission_placements++;
     g_mission_roll_started=mission_now_ms();
@@ -1353,6 +1417,12 @@ static void mission_tick(PPCContext *c) {
                 float heading=d->start_heading*.01745329252f;
                 target.x=g_mission_entry.centre.x+sinf(heading)*lookahead;
                 target.z=g_mission_entry.centre.z+cosf(heading)*lookahead;
+            }
+            if(d->rolling_gate) {
+                /* Hold the straight line through the start gate. */
+                float ahead=(pos.x-g_mission_entry.centre.x)*g_mission_entry.nx+(pos.z-g_mission_entry.centre.z)*g_mission_entry.nz+lookahead;
+                target.x=g_mission_entry.centre.x+g_mission_entry.nx*ahead;
+                target.z=g_mission_entry.centre.z+g_mission_entry.nz*ahead;
             }
             float desired=atan2f(target.x-pos.x,target.z-pos.z);
             float error=remainderf(desired-LDF32(car+0xc4),6.28318530717958647692f);

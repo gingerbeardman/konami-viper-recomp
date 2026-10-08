@@ -201,6 +201,7 @@ static void mission_csv_load(void) {
                     if(!strcasecmp(part,"waypoint")) d->gate_role[i]=0;
                     else if(!strcasecmp(part,"fail")) d->gate_role[i]=1;
                     else if(!strcasecmp(part,"finish")) d->gate_role[i]=2;
+                    else if(!strcasecmp(part,"rstart")) d->gate_role[i]=4;
                     else ok=0;
                 } else if(strcasecmp(part,"auto")) {
                     char *end;float value=strtof(part,&end);ok &= *part && !*end && isfinite(value);
@@ -217,6 +218,8 @@ static void mission_csv_load(void) {
             finishes++;for(unsigned j=i+1;j<d->custom_gates;j++) ok &= d->gate_role[j]==1;
         }
         ok &= finishes<=1;
+        /* A rolling start is the first gate: the timing line the car approaches. */
+        for(unsigned i=0;i<d->custom_gates;i++) if(d->gate_role[i]==4) { ok &= i==0; d->rolling_gate=1; }
         /* An explicit finish gate replaces CP2, so checkpoint ordering only
          * constrains missions that actually finish at a native checkpoint. */
         if(!d->custom_gates && !finishes && !*CSV("endx"))
@@ -287,6 +290,11 @@ static void mission_csv_load(void) {
             d->custom_start=1;
             ok &= fabsf(d->start_x)<100000 && fabsf(d->start_z)<100000;
             /* Rolling custom starts use these coordinates as the timing line. */
+        }
+        if(d->rolling_gate) {
+            /* The game chooses the run-up; a rolling_speed still overrides the speed. */
+            ok &= !d->custom_start && !d->rolling_metres && !d->lead_in_metres;
+            d->custom_start=1; d->start_x=d->gate_x[0]; d->start_z=d->gate_z[0]; d->start_heading=d->gate_heading[0];
         }
 #undef CSV
         if(d->park_ms) ok &= d->custom_gates>0 && d->gate_role[d->custom_gates-1]==2;
