@@ -408,6 +408,18 @@ case "${WII_LIVE_AUDIO:-1}" in
     1) flags="$flags -DVIPER_WII_AUDIO"; output="$output-audio" ;;
     *) echo 'WII_LIVE_AUDIO must be 0 or 1' >&2; exit 2 ;;
 esac
+# 256-entry rsqrt memo (2.375 -> 2.365 s; 4096 was slower) and packet
+# vertices carried in the decode buffer (2.374 -> 2.364 s); hardware, exact.
+case "${WII_LIVE_RSQRT_MEMO_SIZE:-256}" in
+    64) ;;
+    256|1024|4096) flags="$flags -DVIPER_WII_RSQRT_MEMO_SIZE=$WII_LIVE_RSQRT_MEMO_SIZE"; output="$output-rsqm$WII_LIVE_RSQRT_MEMO_SIZE" ;;
+    *) echo 'WII_LIVE_RSQRT_MEMO_SIZE must be 64, 256, 1024 or 4096' >&2; exit 2 ;;
+esac
+case "${WII_LIVE_PACKET_CARRY:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_PACKET_CARRY"; output="$output-pcarry" ;;
+    *) echo 'WII_LIVE_PACKET_CARRY must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_LIVE_DENSE_LR:-1}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_DENSE_LR"; output="$output-denselr" ;;
