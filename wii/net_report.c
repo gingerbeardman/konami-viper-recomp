@@ -104,6 +104,41 @@ static int send_file(int s, const char *dir, const char *name) {
     return bad ? -1 : 1;
 }
 
+static int connect_target(void) {
+    int r;
+    for (int tries = 0; (r = net_init()) == -EAGAIN && tries < 50; tries++) usleep(100000);
+    if (r < 0) return -1;
+    int s = net_socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+    if (s < 0) return -1;
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_len = sizeof a;
+    a.sin_port = htons(target_port);
+    if (!inet_aton(target_host, &a.sin_addr) || net_connect(s, (struct sockaddr *)&a, sizeof a) < 0) {
+        net_close(s);
+        return -1;
+    }
+    net_fcntl(s, F_SETFL, net_fcntl(s, F_GETFL, 0) | O_NONBLOCK);
+    return s;
+}
+
+/* A file made from memory (no SD access): the watchdog's report. */
+int wii_net_report_text(const char *name, const char *text) {
+    if (!target_port) return 0;
+    int s = connect_target();
+    if (s < 0) return -1;
+    static unsigned char out[4096];
+    uLongf n = sizeof out;
+    char head[64];
+    int hn = snprintf(head, sizeof head, "ZFILE %s\n", name);
+    int bad = compress2(out, &n, (const Bytef *)text, (uLong)strlen(text), 1) != Z_OK ||
+              send_all(s, head, (size_t)hn) || send_frame(s, out, (uint32_t)n) || send_frame(s, NULL, 0) ||
+              send_all(s, "DONE\n", 5);
+    net_close(s);
+    return bad ? -1 : 1;
+}
+
 int wii_net_report_send(const char *dir, const char *const *names) {
     if (!target_port) return 0;
     printf("Sending results to %s:%u...\n", target_host, target_port);
@@ -132,4 +167,29 @@ int wii_net_report_send(const char *dir, const char *const *names) {
     net_close(s);
     printf(bad ? "send failed\n" : "sent %d files\n", sent);
     return bad ? -1 : sent;
+}
+
+/* Remote runs must always return to the Homebrew Channel, or the console
+ * needs a person to reset it. A top-priority thread waits out the deadline
+ * and, if the run is still going (a hang, or a stop that did not return),
+ * reports that and exits to the loader. It does not touch the SD card. */
+static unsigned watchdog_seconds;
+static void *watchdog_main(void *arg) {
+    (void)arg;
+    for (unsigned i = 0; i < watchdog_seconds; i++) usleep(1000000);
+    char text[96];
+    snprintf(text, sizeof text, "VIPER WII WATCHDOG no result after %u s; returned to the loader\n", watchdog_seconds);
+    wii_net_report_text("boot.log", text);
+    VIDEO_SetBlack(TRUE);
+    VIDEO_Flush();
+    exit(0);
+    return NULL;
+}
+
+void wii_net_report_watchdog(unsigned seconds) {
+    static lwp_t thread;
+    static unsigned char stack[16384] __attribute__((aligned(32)));
+    if (!target_port || !seconds) return;
+    watchdog_seconds = seconds;
+    LWP_CreateThread(&thread, watchdog_main, NULL, stack, sizeof stack, LWP_PRIO_HIGHEST);
 }

@@ -3,3 +3,5 @@
 void wii_net_report_args(int argc, char **argv);
 int wii_net_report_wanted(void);
 int wii_net_report_send(const char *dir, const char *const *names);
+int wii_net_report_text(const char *name, const char *text);
+void wii_net_report_watchdog(unsigned seconds);

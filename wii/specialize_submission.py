@@ -129,6 +129,7 @@ def regions(source):
 
 # Leaf callees inlined into localized gl callers (--inline-leaf).
 INLINE_LEAF = False
+INLINE_LEAF_ONLY = ()   # --inline-leaf-28fc4: only into f_gl_00028fc4
 LEAF_CALLEES = ('f_gl_000211d4',)
 
 
@@ -227,7 +228,7 @@ void f_gl_0002adac(PPCContext *c) {
         if not m:
             raise ValueError('Expected one ' + name + ' definition')
         text = m.group(0).strip('\n')
-        local_input = inline_leaf_calls(text, result) if INLINE_LEAF else text
+        local_input = inline_leaf_calls(text, result) if INLINE_LEAF or name in INLINE_LEAF_ONLY else text
         local = localize(local_input)
         if name in DIRECT_GL:
             local = ('#ifdef VIPER_WII_DIRECT_GL\n' + localize(local_input, gather='direct') +
@@ -280,8 +281,11 @@ if __name__ == '__main__':
     parser.add_argument('--dense-switch', action='store_true')
     parser.add_argument('--dense-lr', action='store_true')
     parser.add_argument('--inline-leaf', action='store_true')
+    parser.add_argument('--inline-leaf-28fc4', action='store_true')
     args = parser.parse_args()
     INLINE_LEAF = args.inline_leaf
+    if args.inline_leaf_28fc4:
+        INLINE_LEAF_ONLY = ('f_gl_00028fc4',)
     result = specialize(args.source.read_text(), args.dead_carry)
     if args.dense_lr:
         # The interpreter's shared LR dispatch (76 return points 32 bytes

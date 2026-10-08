@@ -76,6 +76,13 @@ void rt_fatal(const char *why){
 #ifdef VIPER_WII_GX_RENDER
     if(display_buffer){VIDEO_SetNextFramebuffer(display_buffer);VIDEO_SetBlack(FALSE);VIDEO_Flush();}
 #endif
+    /* Remote runs report the stop and return to the Homebrew Channel. */
+    if(wii_net_report_wanted()){
+        static const char *const log_only[]={"boot.log",NULL};
+        wii_net_report_send("sd:/viper",log_only);
+        VIDEO_SetBlack(TRUE);VIDEO_Flush();VIDEO_WaitVSync();
+        exit(0);
+    }
     /* Reset/Home/Power still leave a stopped game. */
     for(;;){VIDEO_WaitVSync();if(quit_request){if(quit_request==2)SYS_ResetSystem(SYS_POWEROFF,0,0);exit(0);}}
 }
@@ -587,6 +594,10 @@ int main(int argc,char **argv){
      * 68 KB larger program pushed it into MEM2 and cost 8.5% on hardware. */
     g_ram=calloc(1,RAM_SIZE);
     wii_net_report_args(argc,argv);
+#ifndef VIPER_WII_WATCHDOG_S
+#define VIPER_WII_WATCHDOG_S 300
+#endif
+    wii_net_report_watchdog(VIPER_WII_WATCHDOG_S);
     VIDEO_Init();GXRModeObj *mode=VIDEO_GetPreferredMode(NULL);
     void *fb=MEM_K0_TO_K1(SYS_AllocateFramebuffer(mode));
     /* Framebuffer memory is not zeroed on hardware (Dolphin zeroes it): clear

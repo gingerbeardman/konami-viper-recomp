@@ -715,6 +715,16 @@ case "${WII_PERF_CMP_MFCR:-0}" in
     1) flags="$flags -DVIPER_WII_CMP_MFCR"; output="$output-cmpmfcr" ;;
     *) echo 'WII_PERF_CMP_MFCR must be 0 or 1' >&2; exit 2 ;;
 esac
+case "${WII_PERF_FSEL:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_FSEL"; output="$output-fsel" ;;
+    *) echo 'WII_PERF_FSEL must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_INLINE_LEAF_28FC4:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_INLINE_LEAF_28FC4"; output="$output-inleaf28" ;;
+    *) echo 'WII_PERF_INLINE_LEAF_28FC4 must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;

@@ -269,6 +269,18 @@ static inline uint8_t CMPF(double a, double b) {
     return 1; /* unordered */
 }
 #define ROUND_S(x) ((double)(float)(x))
+/* Guest fsel (frA >= 0 ? frC : frB; NaN selects frB, -0 selects frC):
+ * Broadway's own fsel selects the same bits without a branch. */
+#if defined(VIPER_WII_FSEL) && defined(VIPER_WII)
+static inline double wii_fsel(double a, double c_, double b) {
+    double d;
+    __asm__("fsel %0,%1,%2,%3" : "=f"(d) : "f"(a), "f"(c_), "f"(b));
+    return d;
+}
+#define FSEL(a, c_, b) wii_fsel((a), (c_), (b))
+#else
+#define FSEL(a, c_, b) (((a) >= 0.0) ? (c_) : (b))
+#endif
 #if defined(VIPER_WII_CMP_MFCR) && defined(VIPER_WII)
 /* Branch-free compares: the host's own cmpw/cmplw/fcmpu into cr7, read with
  * mfcr. A CR field holds LT GT EQ SO/UN as 8 4 2 1, exactly the values

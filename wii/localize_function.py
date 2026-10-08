@@ -582,6 +582,8 @@ def localize(func, gather=False):
     if re.search(r'c->(?:r|f|cr)\[[^\d]', body):
         raise ValueError('register indexed by a variable')
     body = _rewrite_helpers(body)
+    # Guest fsel as FSEL (runtime/ppc_rt.h): the same expression by default.
+    body = re.sub(r'\(\((c->f\[\d+\]) >= 0\.0\) \? (c->f\[\d+\]) : (c->f\[\d+\])\)', r'FSEL(\1, \2, \3)', body)
     # Entry checkpoint first, before the locals are loaded.
     entry = re.match(r'\s*CHK\(c, (0x[0-9a-f]+u), 0\);\n', body)
     if not entry:
@@ -640,13 +642,17 @@ def localize(func, gather=False):
     # run (the direct prelude's slow paths, flush and packet hand-off).
     bud = 'c->budget'
     if gather == 'direct':
+        # Everything else that takes the context is a synced call.
         helpers = set(re.findall(r'\b(\w+)\(c[,)]', local))
-        if helpers <= {'TRACE'} | {h for h in helpers if re.fullmatch(r'f_[a-z]+_[0-9a-f]+', h)}:
-            local = local.replace('c->budget', 'DBUD')
-            bud = 'DBUD'
-            flush += 'DBUD_OUT(); '
-            in_ += ' DBUD_IN();'
-            decls.append('DIRECT_BUDGET_LOCAL();')
+        other = {h for h in helpers if not re.fullmatch(r'f_[a-z]+_[0-9a-f]+', h)} - {
+            'TRACE', 'rt_call', 'rt_hook', 'rt_lswi', 'rt_stswi'}
+        if other:
+            raise ValueError('direct function reads the budget through ' + ', '.join(sorted(other)))
+        local = local.replace('c->budget', 'DBUD')
+        bud = 'DBUD'
+        flush += 'DBUD_OUT(); '
+        in_ += ' DBUD_IN();'
+        decls.append('DIRECT_BUDGET_LOCAL();')
     # VIPER_WII_DIRTY_SYNC_CHECK (diagnostic): after a reduced write-back,
     # any local that still differs from the context (bitwise) was wrongly
     # left out; log it, then store everything.
