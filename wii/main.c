@@ -231,7 +231,7 @@ uint64_t rt_wii_profile_microseconds(uint64_t ticks){return ticks_to_microsecs(t
  * Each pixel is RGBA8 followed by big-endian u32 depth, in row-major order. */
 static void capture_efb_checkpoint(void){
     rt_log("VIPER WII CHECKPOINT EFB begin\n");
-    wii_gx_own_thread();wii_gx_batch_flush();GX_DrawDone();
+    wii_gx_batch_flush();wii_gx_own_thread();GX_DrawDone();
     rt_log("VIPER WII CHECKPOINT EFB draw_done\n");
     FILE *file=fopen("sd:/viper/efb.bin","wb");
     if(!file)rt_fatal("cannot create EFB checkpoint");
@@ -453,7 +453,7 @@ static void progress(void *arg){
 #ifdef VIPER_WII_GX_RENDER
         rt_log("VIPER WII END DISPLAY fence_begin\n");
         if(logfile){fclose(logfile);logfile=fopen("sd:/viper/boot.log","a");}
-        wii_gx_own_thread();wii_gx_batch_flush();GX_DrawDone();
+        wii_gx_batch_flush();wii_gx_own_thread();GX_DrawDone();
         rt_log("VIPER WII END DISPLAY fence_complete\n");
         if(logfile){fclose(logfile);logfile=fopen("sd:/viper/boot.log","a");}
         /* The console repaints only from its origin: clear the last game frame. */

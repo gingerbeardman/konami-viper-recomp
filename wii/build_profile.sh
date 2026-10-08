@@ -785,6 +785,11 @@ case "${WII_PERF_DIRECT_VERSION:-0}" in
     1) flags="$flags -DVIPER_WII_DIRECT_VERSION"; output="$output-dver" ;;
     *) echo 'WII_PERF_DIRECT_VERSION must be 0 or 1' >&2; exit 2 ;;
 esac
+case "${WII_PERF_DIRECT_VERSION_MIN:-8}" in
+    8) ;;
+    2|3|4|6) flags="$flags -DVIPER_WII_DIRECT_VERSION_MIN=$WII_PERF_DIRECT_VERSION_MIN"; output="$output-dvmin$WII_PERF_DIRECT_VERSION_MIN" ;;
+    *) echo 'WII_PERF_DIRECT_VERSION_MIN must be 2, 3, 4, 6 or 8' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;

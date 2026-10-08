@@ -38,9 +38,6 @@ static void ss_abort_line(int line);
 void wii_gx_own_thread(void){
     lwp_t self=LWP_GetSelf();
     if(self!=gx_owner){
-#ifdef VIPER_WII_SUPERSAMPLE
-        ss_abort();   /* never move GX to another thread with a list open */
-#endif
         GX_SetCurrentGXThread();gx_owner=self;
     }
 }
@@ -291,6 +288,9 @@ static int geometry;
 volatile uint32_t wii_gx_wait_site;
 static void gx_wait(unsigned site){
 #ifdef VIPER_WII_SUPERSAMPLE
+#ifdef VIPER_WII_SUPERSAMPLE_TRACE
+    {static unsigned n;if(n<3000){n++;rt_log("VIPER WII SS wait site=%u\n",site);}}
+#endif
     ss_abort();   /* a wait inside a recorded frame would never finish */
 #endif
     uint64_t start=gettime();
