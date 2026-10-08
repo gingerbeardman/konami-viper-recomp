@@ -920,9 +920,10 @@ static void mission_stunt_tick(PPCContext *c,unsigned car,const MissionDefinitio
         }
     }
     if(d->wallride_distance) {
-        float dx=d->end_x-d->gate_x[0],dz=d->end_z-d->gate_z[0],length=dx*dx+dz*dz;
-        float along=length>0 ? ((p.x-d->gate_x[0])*dx+(p.z-d->gate_z[0])*dz)/length : -1;
-        float gap=hypotf(p.x-d->gate_x[0]-along*dx,p.z-d->gate_z[0]-along*dz);
+        unsigned ride=d->rolling_gate;
+        float dx=d->end_x-d->gate_x[ride],dz=d->end_z-d->gate_z[ride],length=dx*dx+dz*dz;
+        float along=length>0 ? ((p.x-d->gate_x[ride])*dx+(p.z-d->gate_z[ride])*dz)/length : -1;
+        float gap=hypotf(p.x-d->gate_x[ride]-along*dx,p.z-d->gate_z[ride]-along*dz);
         float wx=(LDF32(car+0x234)+LDF32(car+0x23c)-LDF32(car+0x230)-LDF32(car+0x238))*.5f;
         float wy=(LDF32(car+0x244)+LDF32(car+0x24c)-LDF32(car+0x240)-LDF32(car+0x248))*.5f;
         float wz=(LDF32(car+0x254)+LDF32(car+0x25c)-LDF32(car+0x250)-LDF32(car+0x258))*.5f;
@@ -1059,12 +1060,12 @@ static int mission_place_obstacle(PPCContext *live,const MissionDefinition *d) {
     g_mission_obstacle_descriptor=descriptor;
     return 1;
 }
-/* Rolling-start run-up behind a start line: as far back as 10 m while the ground
+/* Rolling-start run-up behind a start line: as far back as 4 m while the ground
  * stays level enough to drive (no ledge, wall or drop between it and the line). */
 static float mission_rstart_runup(PPCContext *c, MissionGate line) {
     float previous, run=0;
     if(!mission_ground(c,line.centre.x,line.centre.z,&previous)) return 0;
-    for(float back=2;back<=10;back+=2) {
+    for(float back=1;back<=4;back+=1) {
         float y;
         if(!mission_ground(c,line.centre.x-line.nx*back,line.centre.z-line.nz*back,&y) ||
            fabsf(y-previous)>1) break;
@@ -1340,6 +1341,9 @@ static void mission_begin(PPCContext *c, uint32_t car) {
     atomic_store(&g_mission_countdown,0);
     mission_publish();
     rt_log("mission: %s, start %.1f m, section %.1f m, %u gates\n",d->name,start,metres,g_mission_run.gate_count);
+    if(getenv("RT_MISSION_GATE_LOG") && g_mission_run.phase==MISSION_ROLLING)
+        rt_log("mission timing line: XYZ %.2f %.2f %.2f heading %.2f\n",g_mission_entry.centre.x,g_mission_entry.centre.y,
+            g_mission_entry.centre.z,atan2f(g_mission_entry.nx,g_mission_entry.nz)*57.2957795f);
     if(getenv("RT_MISSION_GATE_LOG")) for(unsigned i=0;i<g_mission_run.gate_count;i++) {
         MissionGate *gate=&g_mission_run.gates[i];
         rt_log("mission gate %u: XYZ %.2f %.2f %.2f normal %.3f %.3f width %.1f height %.1f\n",
@@ -1380,7 +1384,10 @@ static void mission_tick(PPCContext *c) {
     uint64_t ms=mission_now_ms();
     if (g_mission_run.phase==MISSION_ROLLING) {
         MissionPosition pos=mission_car_position(car);
-        if (mission_crossing(g_mission_entry,g_mission_run.previous,pos)>=0) {
+        const MissionDefinition *rolling=&k_missions[atomic_load(&g_mission_selected)];
+        /* A rolling-start line times from its plane: its car starts on or just behind it. */
+        float past=(pos.x-g_mission_entry.centre.x)*g_mission_entry.nx+(pos.z-g_mission_entry.centre.z)*g_mission_entry.nz;
+        if (rolling->rolling_gate ? past>=0 : mission_crossing(g_mission_entry,g_mission_run.previous,pos)>=0) {
             g_mission_run.phase=MISSION_RUNNING; g_mission_run.started=ms;
             g_mission_challenge_heading=LDF32(car+0xc4);
             atomic_store(&g_mission_auto_steer,0);

@@ -299,8 +299,10 @@ static void mission_csv_load(void) {
 #undef CSV
         if(d->park_ms) ok &= d->custom_gates>0 && d->gate_role[d->custom_gates-1]==2;
         if(d->lead_in_metres) ok &= d->custom_start;
-        if(d->wallride_distance) ok &= d->custom_gates==1 && d->custom_finish &&
-            hypotf(d->end_x-d->gate_x[0],d->end_z-d->gate_z[0])>1;
+        /* The wall ride runs from its one gate (after any rolling start) to the end gate. */
+        unsigned wall=d->rolling_gate;
+        if(d->wallride_distance) ok &= d->custom_gates==1+wall && d->custom_finish &&
+            hypotf(d->end_x-d->gate_x[wall],d->end_z-d->gate_z[wall])>1;
         if(!ok) { rt_log("mission CSV: invalid row %d; retaining previously loaded missions\n",line_no); count=0; break; }
         count++;
     }

@@ -466,8 +466,8 @@ requires a custom start, ranges from 0 to 500, and defaults to 0 for existing
 missions. The authored heading selects the road's travel direction; the
 approach heading is calculated from the road ahead.
 
-Mission 23 uses an 80m player-controlled lead-in, preceded by 30m of auto-drive
-at 60km/h. Its cliff waypoint and bridge landing remain player objectives.
+Mission 23 starts with a rolling-start gate on the cliff-top road. Its cliff
+waypoint, lower-road failure gate and bridge finish remain player objectives.
 
 ### Gate editor
 
@@ -491,7 +491,7 @@ remain visible during track debug exploration. Gate geometry uses optional
 in degrees: zero is upright, 90 is flat.
 
 Gate type `rstart` (rolling start, drawn blue) makes the first gate the timing
-line, and the game works out the rest. The car starts up to 10 m behind the gate
+line, and the game works out the rest. The car starts up to 4 m behind the gate
 on its heading, where the ground stays level, and drives itself straight through
 it; timing starts at the gate, which is not a waypoint. The speed comes from the
 leg to the next gate. Where the ground drops away between them (a jump), it is
@@ -503,6 +503,11 @@ the road it falls from 140 to 60 km/h as the turn to the next gate grows from
 also set `startx`/`startz`/`start_heading`, `rolling` or `lead_in`; saving from
 the editor clears them. STUNT DRIVER (59) overrides the speed with 200 km/h to
 clear its parked car; RETURN TO SENDER (69) uses the computed 148 km/h.
+Every rolling and flying start in `missions.csv` uses an `rstart` gate at its
+former timing line. Rows that had the default 108 km/h use the computed speed;
+hand-tuned speeds stay as `rolling_speed`. A rolling-start line starts timing
+once the car is past its plane, so a car spawned on the line (no level run-up)
+or crossing it off-centre still starts.
 
 Authored parked-car obstacles use `obstacle_model` (native TCAR model 0–15),
 `obstacle_x`, `obstacle_z`, and `obstacle_heading` (degrees). Leave the model blank
