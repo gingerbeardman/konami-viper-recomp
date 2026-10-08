@@ -64,7 +64,12 @@ static uint64_t triangle_codes[3],triangle_fans;
 static uint64_t fifo_type_packets[8],fifo_type_words[8],fifo_reg_writes[0x1000];
 #endif
 typedef WiiVoodooVertex NativeVertex;
+#ifdef VIPER_WII_PACKET_CARRY
+static NativeVertex strip_buf[3+15];
+#define strip strip_buf
+#else
 static NativeVertex strip[3];
+#endif
 /* Field copies: GCC lowers whole 56-byte struct copies to memcpy calls on
  * every strip shuffle. lfs/stfs round-trip every single bit pattern. */
 static inline void vertex_copy(NativeVertex *d,const NativeVertex *s){
@@ -333,6 +338,9 @@ uint32_t voodoo_io_read(uint32_t off) {
 void voodoo_io_write(uint32_t off, uint32_t v, uint32_t mask) {
     unsigned r = (off >> 2) & 63;
     wii_voodoo_state_epoch++;
+#ifdef VIPER_WII_EPOCH_TRACE
+    epoch_cause[448+r]++;   /* I/O register writes (always bump) */
+#endif
     io[r] = (io[r] & ~mask) | (v & mask);
     if (r == 0x54 / 4) clut[io[0x50 / 4] & 511] = io[r];
     if (off >= 0xb0 && off <= 0xdf)
@@ -839,7 +847,14 @@ __attribute__((noinline)) static void triangle_packet59(uint32_t cmd,const uint3
     triangle_codes[code]++;triangle_fans+=!!(cmd&(1u<<22));
 #endif
     geometry_started=1;
+#ifdef VIPER_WII_PACKET_CARRY
+    /* The carried strip vertices are the buffer's first three slots, so a
+     * strip continuing from the last packet is contiguous (no per-triangle
+     * copies) and only the end-of-packet carry copies remain. */
+    NativeVertex *const buf=strip_buf;
+#else
     NativeVertex buf[3+15];
+#endif
     const NativeVertex *s0=&strip[0],*s1=&strip[1],*s2=&strip[2];
     const int fan=!!(cmd&(1u<<22));
     WiiVoodooView view;

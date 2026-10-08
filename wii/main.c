@@ -112,7 +112,13 @@ void rt_hook(PPCContext *c,uint32_t pc){
     (void)pc;
 #endif
 }
+#ifdef VIPER_WII_AUDIO
+/* The game's own mixed blocks out through the Wii audio DMA (wii/audio.c). */
+#include "audio.h"
+void audio_push_block(const uint8_t *blk){wii_audio_push_block(blk);}
+#else
 void audio_push_block(const uint8_t *blk){(void)blk;}
+#endif
 /* Cabinet steering motor byte (bit 7 drive, bits 0-3 torque), read by the
  * Wii Remote rumble in wii/input_platform.c. */
 volatile uint8_t wii_motor;
@@ -147,6 +153,9 @@ static void remote_power_pressed(s32 chan){(void)chan;quit_request=2;}
 void wii_request_quit(int kind){if(!quit_request)quit_request=kind;}
 static void quit_now(void){
     int kind=quit_request;
+#ifdef VIPER_WII_AUDIO
+    wii_audio_shutdown();   /* or the loader starts to a looping buffer */
+#endif
 #ifdef VIPER_WII_PC_PROFILE_PLAY
     /* Whole-session hardware PC profile, written to the log on the way out. */
     if(logfile){extern void wii_pc_profile_stop(void);wii_pc_profile_stop();}
@@ -607,6 +616,9 @@ int main(int argc,char **argv){
     display_mode=mode;display_buffer=fb;
 #endif
     console_init(fb,20,20,mode->fbWidth,mode->xfbHeight,mode->fbWidth*2);
+#ifdef VIPER_WII_AUDIO
+    wii_audio_init();
+#endif
     VIDEO_Configure(mode);VIDEO_SetNextFramebuffer(fb);VIDEO_SetBlack(FALSE);VIDEO_Flush();VIDEO_WaitVSync();
     printf("VIPER WII HEADLESS BEGIN %s\n",GAME_TITLE);
 #ifdef VIPER_WII_HEAP_POISON

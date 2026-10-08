@@ -379,7 +379,7 @@ esac
 # -> 2.423, local and grouped FIFO stores -> 2.377, local budget -> 2.373.
 case "${WII_LIVE_PRESERVE_SLOW:-1}" in
     0) ;;
-    1) flags="$flags -DVIPER_WII_PRESERVE_SLOW"; output="$output-pslow" ;;
+    1) flags="$flags -DVIPER_WII_PRESERVE_SLOW"; output="$output/pslow" ;;   # new path segment: names stay under 255
     *) echo 'WII_LIVE_PRESERVE_SLOW must be 0 or 1' >&2; exit 2 ;;
 esac
 case "${WII_LIVE_DIRTY_SYNC:-1}" in
@@ -401,6 +401,12 @@ case "${WII_LIVE_DIRECT_BUDGET:-1}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_DIRECT_BUDGET"; output="$output-dbud" ;;
     *) echo 'WII_LIVE_DIRECT_BUDGET must be 0 or 1' >&2; exit 2 ;;
+esac
+# The game's sound through the Wii audio DMA (wii/audio.c).
+case "${WII_LIVE_AUDIO:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_AUDIO"; output="$output-audio" ;;
+    *) echo 'WII_LIVE_AUDIO must be 0 or 1' >&2; exit 2 ;;
 esac
 case "${WII_LIVE_DENSE_LR:-1}" in
     0) ;;

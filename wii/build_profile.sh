@@ -755,6 +755,16 @@ case "${WII_PERF_LOCALIZE_HOT2:-0}" in
     1) flags="$flags -DVIPER_WII_LOCALIZE_HOT2"; output="$output-lochot2" ;;
     *) echo 'WII_PERF_LOCALIZE_HOT2 must be 0 or 1' >&2; exit 2 ;;
 esac
+case "${WII_PERF_PACKET_CARRY:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_PACKET_CARRY"; output="$output-pcarry" ;;
+    *) echo 'WII_PERF_PACKET_CARRY must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_AUDIO:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_AUDIO"; output="$output-audio" ;;
+    *) echo 'WII_PERF_AUDIO must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;

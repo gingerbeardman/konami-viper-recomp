@@ -46,6 +46,9 @@ ifneq ($(findstring VIPER_WII_ALLOC_LOG,$(EXTRA_CFLAGS)),)
 GAME_PLATFORM_OBJS += $(GAME_OUT)/wii/alloc_log.o
 GAME_ALLOC_WRAP := -Wl,--wrap=malloc,--wrap=memalign,--wrap=calloc
 endif
+ifneq ($(findstring -DVIPER_WII_AUDIO,$(EXTRA_CFLAGS)),)
+GAME_PLATFORM_OBJS += $(GAME_OUT)/wii/audio.o
+endif
 ifeq ($(findstring -DVIPER_WII_SCRIPTED_RACE,$(EXTRA_CFLAGS)),)
 GAME_PLATFORM_OBJS += $(GAME_OUT)/wii/input.o $(GAME_OUT)/wii/input_platform.o
 GAME_INPUT_LIBS := -lwiiuse -lbte

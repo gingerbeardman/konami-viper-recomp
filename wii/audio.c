@@ -8,6 +8,7 @@
  * more than ~100 ms is skipped, like the desktop frontend. */
 #include <gccore.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include "audio.h"
 
@@ -19,7 +20,7 @@ enum {
     DMA_FRAMES = 512,                  /* 48 kHz frames per DMA buffer (~10.7 ms) */
     BACKLOG_MAX = 44100 / 10,
     BACKLOG_KEEP = 44100 / 25,
-    STEP = (int)(65536.0 * 44100.0 / 48000.0 + 0.5)   /* 16.16 source frames per output frame */
+    STEP = (int)((65536LL * 44100 + 24000) / 48000)   /* 16.16 source frames per output frame */
 };
 static int16_t ring[RING][2];
 static volatile unsigned ring_w, ring_r;
@@ -88,6 +89,7 @@ void wii_audio_init(void) {
     AUDIO_InitDMA((u32)dma[0], DMA_FRAMES * 4);
     started = 1;
     AUDIO_StartDMA();
+    atexit(wii_audio_shutdown);   /* every way back to the loader stops the DMA */
 }
 
 void wii_audio_shutdown(void) {
