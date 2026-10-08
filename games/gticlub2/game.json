@@ -440,6 +440,7 @@
       "confirm_reg": 3
     },
     "test_menu_game_mode": 12,
+    "test_menu_unlock": "0x2000",
     "mission_style": 1
   }
 }

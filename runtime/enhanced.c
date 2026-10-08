@@ -1470,7 +1470,14 @@ static void menu_tick(void) {
         /* as on a cabinet: TEST opens TEST MODE, GAME MODE leaves it for the attract. All of it
          * runs fast-forwarded behind the loading screen; a reboot is the fallback. */
         uint64_t now = rt_now();
-        if (!g_return_t0) { g_return_t0 = now; g_attract_frame = 0; }
+        /* A password lock in the NVRAM replaces GAME MODE with PASSWORD, leaving no way out.
+         * The boot-switch word's unlock bit (DIP SW:3) keeps GAME MODE for this visit only. */
+        static uint16_t boot_switches;
+        if (!g_return_t0) {
+            g_return_t0 = now; g_attract_frame = 0;
+            boot_switches = LD16(0x826);
+            if (GAME_ENH_TEST_MENU_UNLOCK) ST16(0x826, boot_switches | GAME_ENH_TEST_MENU_UNLOCK);
+        }
         double t = (double)(now - g_return_t0) / CPU_HZ, t_start = 12.0 + GAME_ENH_TEST_GAME_MODE * 0.8 + 1.0;
         uint8_t in3 = 0xff, in4 = 0xff;
         if (t < 0.4) in3 &= (uint8_t)~0x02;                                   /* TEST */
@@ -1479,6 +1486,7 @@ static void menu_tick(void) {
         if (t >= t_start && t < t_start + 0.3) in3 &= (uint8_t)~0x10;          /* START on GAME MODE */
         g_in[3] = in3;
         g_in[4] = in4;
+        if (GAME_ENH_TEST_MENU_UNLOCK && (t > 60.0 || (t > t_start + 0.5 && g_attract_frame))) ST16(0x826, boot_switches);
         if (t > t_start + 0.5 && g_attract_frame) {
             g_returning = 0; g_screen = SCREEN_MAIN; g_cursor = 0;
             rt_log("enhanced: back to the attract mode\n");
@@ -2318,6 +2326,7 @@ static void scripted_menu(void) {
         if (!strncmp(a, "free", 4)) { explorer_free_toggle(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
         if (!strncmp(a, "drone", 5)) { explorer_toggle(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
         if (!strncmp(a, "esc", 3)) { enh_escape(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
+        if (!strncmp(a, "retry", 5)) { enh_mission_retry(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
         if (!strncmp(a, "name=", 5)) {
             for (a += 5; *a && *a != ','; a++) enh_name_type(*a == '<' ? '\b' : *a == '>' ? '\r' : *a);
             next = *a ? a + 1 : NULL;

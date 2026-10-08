@@ -454,6 +454,11 @@ An optional layer on top of the faithful port, in development. Everything is gat
     seconds, a few real ones. While it runs, the enhanced layer owns IN3 and IN4
     (`enh_inputs_owned()`), and the frontend does not overwrite them.
   - If the attract mode is not back within 60 s, the program restarts instead.
+  - A password lock in the NVRAM (bit 31 of the settings word the TEST MODE state copies to
+    `+0x60`) makes the GTI Club 2 menu show PASSWORD where GAME MODE was (`0x5494c`), so the
+    script could never leave. Unless DIP SW:3 is on, that is: bit `0x2000` of the boot-switch
+    halfword at `0x826` keeps GAME MODE. The profile's `test_menu_unlock` names that bit; the
+    return sets it while it runs and puts the halfword back afterwards. The NVRAM is not changed.
 - **Rankings name entry:** on a cabinet the steering wheel picks each initial and a pedal
   confirms it. In the enhanced mode the keyboard types it (`SDL_TEXTINPUT`, so the keyboard
   layout is followed; SDL's text input is on only during the entry, since on macOS it opens the

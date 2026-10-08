@@ -230,6 +230,8 @@ def write_config_header(g, out):
         *name_entry_config(enh.get('name_entry')),
         # TEST MODE main menu index of GAME MODE: the pause menu's "main menu" returns to the attract through it
         f"#define GAME_ENH_TEST_GAME_MODE {enh.get('test_menu_game_mode', -1)}",
+        # boot-switch bit (halfword 0x826) that keeps GAME MODE in that menu despite a password lock
+        f"#define GAME_ENH_TEST_MENU_UNLOCK 0x{int(enh.get('test_menu_unlock', '0'), 16):x}u",
         "#define GAME_ENH_BLANK_STRINGS {" + "".join(f"{{0x{int(b['addr'], 16):08x}u, {c_str(b['text'])}}}, " for b in blanks)
         + "{0, NULL}}",
     ]
