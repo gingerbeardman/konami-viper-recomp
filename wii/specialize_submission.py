@@ -289,9 +289,12 @@ if __name__ == '__main__':
     parser.add_argument('--dense-lr', action='store_true')
     parser.add_argument('--inline-leaf', action='store_true')
     parser.add_argument('--inline-leaf-28fc4', action='store_true')
+    parser.add_argument('--localize-210a8', action='store_true')
     parser.add_argument('--version-min', type=int, default=0)
     args = parser.parse_args()
     INLINE_LEAF = args.inline_leaf
+    if args.localize_210a8:
+        LOCALIZED_GL = LOCALIZED_GL + ('f_gl_000210a8',)
     if args.version_min:
         import localize_function
         localize_function.DIRECT_VERSION_MIN = args.version_min

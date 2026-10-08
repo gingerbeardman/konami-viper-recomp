@@ -82,10 +82,19 @@ static void triangle_packet(unsigned pc,uint32_t cmd);
 static void fifo_register(unsigned r, uint32_t v);
 static void fastfill(void);
 static void fifo_hdr_invalidate(void);
+#ifdef VIPER_WII_VRAM_WORD
+/* VRAM holds little-endian words at 4-byte aligned offsets: one byte-reversed
+ * word access is the same four bytes (lwbrx/stwbrx on Broadway). */
+typedef uint32_t __attribute__((may_alias)) vram_word_t;
+static inline uint32_t vram_read(unsigned word) {
+    return __builtin_bswap32(*(const vram_word_t *)(const void *)(vram+((word&0x1fffff)*4)));
+}
+#else
 static uint32_t vram_read(unsigned word) {
     const uint8_t *p=vram+((word&0x1fffff)*4);
     return (uint32_t)p[0]|((uint32_t)p[1]<<8)|((uint32_t)p[2]<<16)|((uint32_t)p[3]<<24);
 }
+#endif
 /* Bumped by every VRAM writer that can reach outside the active command
  * FIFO (pixel stores, non-FIFO LFB words, uploads) and by palette changes:
  * anything a texture can read. The renderer skips its bound-texture
@@ -108,8 +117,12 @@ void vram_write(unsigned word,uint32_t value) {
     word&=0x1fffff;
     if(fifo_hdr_valid&&word==(fifo_hdr_pc>>2))fifo_hdr_invalidate();
     vram_versions[word/1024]++;
+#ifdef VIPER_WII_VRAM_WORD
+    *(vram_word_t *)(void *)(vram+word*4)=__builtin_bswap32(value);
+#else
     uint8_t *p=vram+word*4;
     p[0]=value;p[1]=value>>8;p[2]=value>>16;p[3]=value>>24;
+#endif
 }
 static WiiVoodooView device_view(void) {
     return (WiiVoodooView){regs,io,clut,tmu_regs,texture_palette,palette_epoch,vram_versions,vram,strip_count

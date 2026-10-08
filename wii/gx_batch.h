@@ -173,7 +173,11 @@ WII_HOT_gx_batch_reserve static u32 *gx_batch_reserve(u8 format, unsigned words)
 }
 
 /* ------------------------------------------------------------ immediate */
-static struct { u16 sx, sy, sw, sh; unsigned proj_w, proj_h; s16 desc[32]; } gx_shadow;
+static struct { u16 sx, sy, sw, sh; unsigned proj_w, proj_h; s16 desc[32];
+#ifdef VIPER_WII_TEV_SHADOW
+    u8 ci[16][4], ai[16][4], co[16][5], ao[16][5], kcs[16], kas[16];
+#endif
+} gx_shadow;
 /* After menu.c: everything the renderer wants is re-sent at the next draw. */
 static void gx_shadow_reset(void) {
     gx_state_gen++;
@@ -249,13 +253,61 @@ static u8 gx_desc_of(u8 attr) { return gx_shadow.desc[attr] < 0 ? GX_NONE : (u8)
 /* Everything else that changes GPU state, memory or sync flushes first. */
 #define GX_BATCH_FLUSHING(fn, ...) (gx_batch_flush(), gx_state_gen++, fn(__VA_ARGS__))
 #define GX_SetVtxAttrFmt(...) GX_BATCH_FLUSHING(GX_SetVtxAttrFmt, __VA_ARGS__)
+#ifdef VIPER_WII_TEV_SHADOW
+/* TEV inputs, operations and konst selections: a write of the value the GPU
+ * already holds is skipped (no flush, no state change). The shadow is reset
+ * with the others (after menu.c, the supersample composite). */
+static inline void tev_ci(u8 st, u8 a, u8 b, u8 c, u8 d) {
+    u8 *v = gx_shadow.ci[st & 15];
+    if (v[0] == a && v[1] == b && v[2] == c && v[3] == d) return;
+    gx_batch_flush(); gx_state_gen++; v[0] = a; v[1] = b; v[2] = c; v[3] = d; GX_SetTevColorIn(st, a, b, c, d);
+}
+static inline void tev_ai(u8 st, u8 a, u8 b, u8 c, u8 d) {
+    u8 *v = gx_shadow.ai[st & 15];
+    if (v[0] == a && v[1] == b && v[2] == c && v[3] == d) return;
+    gx_batch_flush(); gx_state_gen++; v[0] = a; v[1] = b; v[2] = c; v[3] = d; GX_SetTevAlphaIn(st, a, b, c, d);
+}
+static inline void tev_co(u8 st, u8 op, u8 bias, u8 scale, u8 clamp, u8 reg) {
+    u8 *v = gx_shadow.co[st & 15];
+    if (v[0] == op && v[1] == bias && v[2] == scale && v[3] == clamp && v[4] == reg) return;
+    gx_batch_flush(); gx_state_gen++; v[0] = op; v[1] = bias; v[2] = scale; v[3] = clamp; v[4] = reg;
+    GX_SetTevColorOp(st, op, bias, scale, clamp, reg);
+}
+static inline void tev_ao(u8 st, u8 op, u8 bias, u8 scale, u8 clamp, u8 reg) {
+    u8 *v = gx_shadow.ao[st & 15];
+    if (v[0] == op && v[1] == bias && v[2] == scale && v[3] == clamp && v[4] == reg) return;
+    gx_batch_flush(); gx_state_gen++; v[0] = op; v[1] = bias; v[2] = scale; v[3] = clamp; v[4] = reg;
+    GX_SetTevAlphaOp(st, op, bias, scale, clamp, reg);
+}
+static inline void tev_kcs(u8 st, u8 sel) {
+    if (gx_shadow.kcs[st & 15] == sel) return;
+    gx_batch_flush(); gx_state_gen++; gx_shadow.kcs[st & 15] = sel; GX_SetTevKColorSel(st, sel);
+}
+static inline void tev_kas(u8 st, u8 sel) {
+    if (gx_shadow.kas[st & 15] == sel) return;
+    gx_batch_flush(); gx_state_gen++; gx_shadow.kas[st & 15] = sel; GX_SetTevKAlphaSel(st, sel);
+}
+#define GX_SetTevAlphaIn tev_ai
+#define GX_SetTevColorOp tev_co
+#define GX_SetTevColorIn tev_ci
+#define GX_SetTevAlphaOp tev_ao
+#else
 #define GX_SetTevAlphaIn(...) GX_BATCH_FLUSHING(GX_SetTevAlphaIn, __VA_ARGS__)
 #define GX_SetTevColorOp(...) GX_BATCH_FLUSHING(GX_SetTevColorOp, __VA_ARGS__)
 #define GX_SetTevColorIn(...) GX_BATCH_FLUSHING(GX_SetTevColorIn, __VA_ARGS__)
 #define GX_SetTevAlphaOp(...) GX_BATCH_FLUSHING(GX_SetTevAlphaOp, __VA_ARGS__)
+#endif
+#ifdef VIPER_WII_TEV_SHADOW
+/* GX_SetTevOp writes inputs and operations behind the shadow's back. */
+#define GX_SetTevOp(...) (memset(gx_shadow.ci, 0xff, sizeof gx_shadow.ci + sizeof gx_shadow.ai + sizeof gx_shadow.co + sizeof gx_shadow.ao), \
+    GX_BATCH_FLUSHING(GX_SetTevOp, __VA_ARGS__))
+#define GX_SetTevKAlphaSel tev_kas
+#define GX_SetTevKColorSel tev_kcs
+#else
 #define GX_SetTevOp(...) GX_BATCH_FLUSHING(GX_SetTevOp, __VA_ARGS__)
 #define GX_SetTevKAlphaSel(...) GX_BATCH_FLUSHING(GX_SetTevKAlphaSel, __VA_ARGS__)
 #define GX_SetTevKColorSel(...) GX_BATCH_FLUSHING(GX_SetTevKColorSel, __VA_ARGS__)
+#endif
 #define GX_LoadTexMtxImm(...) GX_BATCH_FLUSHING(GX_LoadTexMtxImm, __VA_ARGS__)
 #define GX_LoadPosMtxImm(...) GX_BATCH_FLUSHING(GX_LoadPosMtxImm, __VA_ARGS__)
 #define GX_LoadTexObj(...) GX_BATCH_FLUSHING(GX_LoadTexObj, __VA_ARGS__)

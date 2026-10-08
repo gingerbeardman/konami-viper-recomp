@@ -806,6 +806,21 @@ case "${WII_PERF_DISPLAY_START:-}" in
     0|1|2|3|4|5) flags="$flags -DVIPER_WII_DISPLAY_START=$WII_PERF_DISPLAY_START"; output="$output-dstart$WII_PERF_DISPLAY_START" ;;
     *) echo 'WII_PERF_DISPLAY_START must be 0-5' >&2; exit 2 ;;
 esac
+case "${WII_PERF_TEV_SHADOW:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_TEV_SHADOW"; output="$output-tevshadow" ;;
+    *) echo 'WII_PERF_TEV_SHADOW must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_LOCALIZE_210A8:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_LOCALIZE_210A8"; output="$output-loc210a8" ;;
+    *) echo 'WII_PERF_LOCALIZE_210A8 must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_VRAM_WORD:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_VRAM_WORD"; output="$output-vword" ;;
+    *) echo 'WII_PERF_VRAM_WORD must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;
