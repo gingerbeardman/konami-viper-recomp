@@ -304,6 +304,17 @@ void enh_track_debug_toggle(void) {
  * a camera-space translation. Capture after the game builds it, before HUD view. */
 unsigned long long voodoo_swap_count(void);
 uint64_t voodoo_frame_swaps(void);
+/* Frames the game drew before a mission teleport are still queued for display;
+ * keep the loading cover over them so the native start line never flashes. */
+#define MISSION_COVER_SWAPS 6
+static _Atomic unsigned long long g_mission_cover_until;
+static void mission_cover_tick(void) {
+    static unsigned seen;
+    if (g_mission_placements == seen) return;
+    seen = g_mission_placements;
+    atomic_store(&g_mission_cover_until, voodoo_swap_count() + MISSION_COVER_SWAPS);
+}
+static int mission_covered(void) { return voodoo_swap_count() < atomic_load(&g_mission_cover_until); }
 /* Views are built a frame ahead of the picture on screen, so each one is
  * tagged with the swaps made before its frame and drawn with that frame. */
 #define DEBUG_VIEW_RING 8
@@ -571,7 +582,7 @@ void rt_hook(PPCContext *c, uint32_t pc) {
          * target alone leaves a warning from the approach/retry fading out. */
         if(race_valid(c->r[30],0x2c)) { ST8(c->r[30]+0x27,0); ST8(c->r[30]+0x28,0); }
     } break;
-    case HOOK_RACE_LAPS: if (g_enhanced) { track_debug_tick(c); mission_tick(c); if (!mission_engaged() || atomic_load(&g_race_mission_practice)) race_laps_hook(c); } break;
+    case HOOK_RACE_LAPS: if (g_enhanced) { track_debug_tick(c); mission_tick(c); mission_cover_tick(); if (!mission_engaged() || atomic_load(&g_race_mission_practice)) race_laps_hook(c); } break;
     case HOOK_PRACTICE_HUD:
         if (g_enhanced) {
             race_practice_hud_hook(c);
@@ -2079,7 +2090,7 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
     g_ui = h >= 768 ? (float)h / 384.0f : 1.0f;     /* lay out in 384-high logical units */
     w = (int)(w / g_ui + 0.5f);
     h = (int)(h / g_ui + 0.5f);
-    if (enh_turbo()) {                               /* booting or applying: cover it all */
+    if (enh_turbo() || mission_covered()) {          /* booting or applying: cover it all */
         dim_rect(fb, w, h, 0, 0, w, h, 255);
         draw_centered(fb, w, h, FONT_MEDIUM, h / 2 - font_height(FONT_MEDIUM) / 2, T(g_apply == 1 || g_apply == 2 ? T_APPLYING : T_LOADING), 0xffffff);
         return;

@@ -104,6 +104,7 @@ static atomic_int g_mission_auto_steer, g_mission_auto_release;
 static float g_mission_roll_distance;
 static uint64_t g_mission_roll_started;
 static int g_mission_native_running;
+static unsigned g_mission_placements; /* counts teleports to a mission start */
 static unsigned g_mission_trace_marker=UINT_MAX, g_mission_trace_gate=UINT_MAX;
 static uint32_t g_mission_course_key, g_mission_car_key;
 static atomic_uint g_mission_best;
@@ -1268,6 +1269,7 @@ static void mission_begin(PPCContext *c, uint32_t car) {
     g_mission_challenge_heading=LDF32(car+0xc4);
     g_mission_run.phase=d->rolling_metres ? MISSION_ROLLING : MISSION_RUNNING;
     g_mission_trace_marker=UINT_MAX; g_mission_trace_gate=UINT_MAX;
+    g_mission_placements++;
     g_mission_roll_started=mission_now_ms();
     g_mission_run.started=g_mission_roll_started;
     atomic_store(&g_mission_auto_steer,0);
