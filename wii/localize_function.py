@@ -222,7 +222,9 @@ __attribute__((noinline)) static void direct_flush_words(void);
 #define DBUD_OUT() (void)(c->budget = dl_budget)
 #define DBUD_IN() (void)(dl_budget = c->budget)
 #define DIRECT_BUDGET_LOCAL() __typeof__(c->budget) dl_budget = c->budget
+#define DIRECT_MFTB(...) (DBUD_OUT(), rt_mftb(c, __VA_ARGS__))
 #else
+#define DIRECT_MFTB(...) rt_mftb(c, __VA_ARGS__)
 #define DBUD c->budget
 #define DBUD_OUT() (void)0
 #define DBUD_IN() (void)0
@@ -645,9 +647,11 @@ def localize(func, gather=False):
         # Everything else that takes the context is a synced call.
         helpers = set(re.findall(r'\b(\w+)\(c[,)]', local))
         other = {h for h in helpers if not re.fullmatch(r'f_[a-z]+_[0-9a-f]+', h)} - {
-            'TRACE', 'rt_call', 'rt_hook', 'rt_lswi', 'rt_stswi'}
+            'TRACE', 'rt_call', 'rt_hook', 'rt_lswi', 'rt_stswi', 'rt_mftb'}
         if other:
             raise ValueError('direct function reads the budget through ' + ', '.join(sorted(other)))
+        # rt_mftb reads the time (the budget) and nothing it changes.
+        local = re.sub(r'\brt_mftb\(c, ', 'DIRECT_MFTB(', local)
         local = local.replace('c->budget', 'DBUD')
         bud = 'DBUD'
         flush += 'DBUD_OUT(); '
