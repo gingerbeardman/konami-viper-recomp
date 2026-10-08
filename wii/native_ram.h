@@ -234,8 +234,14 @@ static inline void native_st8(uint8_t *ram, uint32_t ea, uint32_t v) {
 #ifndef VIPER_WII_STRIP_PREFETCH
 #define VIPER_WII_STRIP_PREFETCH 0x40u
 #endif
+#if defined(VIPER_WII_DIRECT_MASK) || defined(VIPER_WII_PRESERVE_SLOW)
+/* The same hint behind a one-instruction test (no RAM_SIZE constant). */
+#define RAM_PREFETCH(ea) do { uint32_t pf_ = (ea); if (!(pf_ & 0xff000000u)) __builtin_prefetch(native_ram_base + pf_); } while (0)
+#define RAM_PREFETCH_W(ea) do { uint32_t pf_ = (ea); if (!(pf_ & 0xff000000u)) __builtin_prefetch(native_ram_base + pf_, 1); } while (0)
+#else
 #define RAM_PREFETCH(ea) do { uint32_t pf_ = (ea); if (pf_ < RAM_SIZE) __builtin_prefetch(native_ram_base + pf_); } while (0)
 #define RAM_PREFETCH_W(ea) do { uint32_t pf_ = (ea); if (pf_ < RAM_SIZE) __builtin_prefetch(native_ram_base + pf_, 1); } while (0)
+#endif
 #else
 #define RAM_PREFETCH(ea) do { uint32_t pf_ = (ea); if (pf_ < RAM_SIZE) __builtin_prefetch(g_ram + pf_); } while (0)
 #define RAM_PREFETCH_W(ea) do { uint32_t pf_ = (ea); if (pf_ < RAM_SIZE) __builtin_prefetch(g_ram + pf_, 1); } while (0)

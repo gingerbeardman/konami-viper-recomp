@@ -269,6 +269,32 @@ static inline uint8_t CMPF(double a, double b) {
     return 1; /* unordered */
 }
 #define ROUND_S(x) ((double)(float)(x))
+#if defined(VIPER_WII_CMP_MFCR) && defined(VIPER_WII)
+/* Branch-free compares: the host's own cmpw/cmplw/fcmpu into cr7, read with
+ * mfcr. A CR field holds LT GT EQ SO/UN as 8 4 2 1, exactly the values
+ * above; the host SO bit is masked off (the guest's xer_so is OR'd in by the
+ * generated code), the unordered bit kept for floats. */
+static inline uint8_t wii_cmps(int32_t a, int32_t b) {
+    uint32_t cr;
+    __asm__("cmpw 7,%1,%2\n\tmfcr %0" : "=r"(cr) : "r"(a), "r"(b) : "cr7");
+    return (uint8_t)(cr & 14);
+}
+static inline uint8_t wii_cmpu(uint32_t a, uint32_t b) {
+    uint32_t cr;
+    __asm__("cmplw 7,%1,%2\n\tmfcr %0" : "=r"(cr) : "r"(a), "r"(b) : "cr7");
+    return (uint8_t)(cr & 14);
+}
+static inline uint8_t wii_cmpf(double a, double b) {
+    uint32_t cr;
+    __asm__("fcmpu 7,%1,%2\n\tmfcr %0" : "=r"(cr) : "f"(a), "f"(b) : "cr7");
+    return (uint8_t)(cr & 15);
+}
+#undef CMPS
+#undef CMPU
+#define CMPS(a, b) wii_cmps((int32_t)(a), (int32_t)(b))
+#define CMPU(a, b) wii_cmpu((uint32_t)(a), (uint32_t)(b))
+#define CMPF(a, b) wii_cmpf((a), (b))
+#endif
 
 /* ------------------------------------------------------------------ runtime services */
 void rt_check(PPCContext *c, uint32_t pc);          /* time/irq checkpoint */

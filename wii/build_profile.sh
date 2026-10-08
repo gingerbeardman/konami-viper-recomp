@@ -700,6 +700,21 @@ case "${WII_PERF_DIRTY_SYNC_CHECK:-0}" in
     1) flags="$flags -DVIPER_WII_DIRTY_SYNC_CHECK"; output="$output-dsynccheck" ;;
     *) echo 'WII_PERF_DIRTY_SYNC_CHECK must be 0 or 1' >&2; exit 2 ;;
 esac
+case "${WII_PERF_DIRECT_GROUP:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRECT_GROUP"; output="$output-dgroup" ;;
+    *) echo 'WII_PERF_DIRECT_GROUP must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_DIRECT_BUDGET:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRECT_BUDGET"; output="$output-dbud" ;;
+    *) echo 'WII_PERF_DIRECT_BUDGET must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_CMP_MFCR:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_CMP_MFCR"; output="$output-cmpmfcr" ;;
+    *) echo 'WII_PERF_CMP_MFCR must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;

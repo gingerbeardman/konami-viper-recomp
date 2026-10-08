@@ -188,12 +188,51 @@ __attribute__((noinline)) static void direct_flush_words(void);
 #endif
 #define DN dl_n
 #define DEA dl_ea
+#if defined(VIPER_WII_DIRECT_GROUP)
+/* A run of k stores to consecutive words from one base (wii/
+ * localize_function.py _direct_groups) is checked once, at its first store:
+ * in the FIFO window with room for all k words, contiguous with the buffer
+ * (or starting it), and room in the buffer. Each store is then a plain
+ * append; any flush in between clears the flag, so the stores after it
+ * take the full path, as they would have. */
+#define DIRECT_LOCALS() unsigned dl_n = 0; uint32_t dl_ea = 0; int dl_fast = 0
+#define DIRECT_FAST_CLEAR() dl_fast = 0,
+#define DIRECT_GROUP_BEGIN(ea_, k_) do { uint32_t _gb = (ea_); \
+    if (LIKELY(_gb - 0x84000000u <= 0x02000000u - 4u * (k_) && dl_n + (k_) <= 150u && \
+               (!dl_n || _gb == dl_ea + 4u * dl_n))) { if (!dl_n) dl_ea = _gb; dl_fast = 1; } \
+    else dl_fast = 0; } while (0)
+#define DIRECT_GST32(ea_, v_) do { if (LIKELY(dl_fast)) direct_words[dl_n++] = (v_); \
+    else DIRECT_ST32(ea_, v_); } while (0)
+#else
 #define DIRECT_LOCALS() unsigned dl_n = 0; uint32_t dl_ea = 0
-#define DIRECT_FLUSH_WITH(call) ((dl_n) ? (void)(direct_n = dl_n, direct_ea = dl_ea, dl_n = 0, call) : (void)0)
+#define DIRECT_FAST_CLEAR()
+#endif
+#define DIRECT_FLUSH_WITH(call) (UNLIKELY(dl_n) ? (void)(DIRECT_FAST_CLEAR() direct_n = dl_n, direct_ea = dl_ea, dl_n = 0, \
+    DBUD_OUT(), call, DBUD_IN()) : (void)0)
 #else
 #define DN direct_n
 #define DEA direct_ea
 #define DIRECT_LOCALS() do { } while (0)
+#endif
+#if defined(VIPER_WII_DIRECT_BUDGET)
+#if !defined(VIPER_WII_DIRECT_LOCAL)
+#error VIPER_WII_DIRECT_BUDGET needs VIPER_WII_DIRECT_LOCAL
+#endif
+#define DBUD dl_budget
+#define DBUD_OUT() (void)(c->budget = dl_budget)
+#define DBUD_IN() (void)(dl_budget = c->budget)
+#define DIRECT_BUDGET_LOCAL() __typeof__(c->budget) dl_budget = c->budget
+#else
+#define DBUD c->budget
+#define DBUD_OUT() (void)0
+#define DBUD_IN() (void)0
+#define DIRECT_BUDGET_LOCAL() do { } while (0)
+#endif
+#if !defined(VIPER_WII_DIRECT_GROUP)
+#define DIRECT_GROUP_BEGIN(ea_, k_) do { } while (0)
+#define DIRECT_GST32(ea_, v_) DIRECT_ST32(ea_, v_)
+#elif !defined(VIPER_WII_DIRECT_LOCAL)
+#error VIPER_WII_DIRECT_GROUP needs VIPER_WII_DIRECT_LOCAL
 #endif
 #if defined(VIPER_WII_PRESERVE_SLOW) && defined(VIPER_WII_RAM_BASE_LOCAL)
 /* Cold calls through wii/preserve_call.h: the localized values stay in the
@@ -209,7 +248,7 @@ static inline void direct_flush(void) {
 #endif
 #define DIRECT_ST32_OTHER(ea_, v_) do { \
     if (LIKELY(NATIVE_IN_RAM(ea_, 4))) RST32(ea_, v_); \
-    else { if (ea_ >= RAM_LIMIT) direct_flush(); wii_pcall_v_uu(wii_ram_slow_st32, ea_, v_); } } while (0)
+    else { DBUD_OUT(); if (ea_ >= RAM_LIMIT) direct_flush(); wii_pcall_v_uu(wii_ram_slow_st32, ea_, v_); DBUD_IN(); } } while (0)
 /* Slow paths of the R* accessors: each is exactly the original accessor
  * (wii/ram_access_cold.c), as the R* accessors are for every address. */
 #define DIRECT_SLOW_RLD8(a) wii_pcall_u_u(wii_ram_slow_ld8, (a))
@@ -233,7 +272,7 @@ static inline void direct_flush(void) {
     if (direct_n) direct_flush_words();
 }
 #endif
-#define DIRECT_ST32_OTHER(ea_, v_) do { if (ea_ >= RAM_LIMIT) direct_flush(); ST32(ea_, v_); } while (0)
+#define DIRECT_ST32_OTHER(ea_, v_) do { DBUD_OUT(); if (ea_ >= RAM_LIMIT) direct_flush(); ST32(ea_, v_); DBUD_IN(); } while (0)
 #define DIRECT_SLOW_LOAD(fn, a) fn(a)
 #define DIRECT_SLOW_STORE(fn, a, v) fn(a, v)
 #endif
@@ -261,13 +300,13 @@ static int direct_triangles_preserved(uint32_t header_ea, uint32_t cmd) {
 #endif
 #define DIRECT_ST32(ea_, v_) ({ uint32_t _gea = (ea_), _gv = (v_); \
     if (_gea - 0x84000000u < 0x02000000u) { \
-        if (DN && (_gea != DEA + 4 * DN || DN == 150)) direct_flush(); \
-        if (!DN) DEA = _gea; \
+        if (UNLIKELY(DN && (_gea != DEA + 4 * DN || DN == 150))) direct_flush(); \
+        if (UNLIKELY(!DN)) DEA = _gea; \
         direct_words[DN++] = _gv; \
     } else DIRECT_ST32_OTHER(_gea, _gv); })
-#define DIRECT_ST32LE(ea_, v_) ({ uint32_t _gea = (ea_), _gv = (v_); \
+#define DIRECT_ST32LE(ea_, v_) ({ uint32_t _gea = (ea_), _gv = (v_); int _gr; \
     if (DN && _gea + 4 == DEA && \
-        DIRECT_TRIANGLES(_gea, _gv, direct_words, DN)) DN = 0; \
+        (DBUD_OUT(), _gr = DIRECT_TRIANGLES(_gea, _gv, direct_words, DN), DBUD_IN(), _gr)) DN = 0; \
     else DIRECT_ST32_OTHER(_gea, bswap32(_gv)); })
 #define DIRECT_FLUSHED(f) (direct_flush(), f)
 /* One range test on the common path: below RAM_SIZE - 8 the accessor's own
@@ -305,10 +344,10 @@ static int direct_triangles_preserved(uint32_t header_ea, uint32_t cmd) {
 #endif
 #define DIRECT_LOAD(fn, ea_) ({ uint32_t _gla = (ea_); __typeof__(fn(0)) _glv; \
     if (LIKELY(DIRECT_IN_RAM(fn, _gla))) _glv = fn(_gla); \
-    else { if (_gla >= RAM_LIMIT) direct_flush(); _glv = DIRECT_SLOW_LOAD(fn, _gla); } _glv; })
+    else { DBUD_OUT(); if (_gla >= RAM_LIMIT) direct_flush(); _glv = DIRECT_SLOW_LOAD(fn, _gla); DBUD_IN(); } _glv; })
 #define DIRECT_STORE(fn, ea_, v_) ({ uint32_t _gsa = (ea_); \
     if (LIKELY(DIRECT_IN_RAM(fn, _gsa))) fn(_gsa, (v_)); \
-    else { if (_gsa >= RAM_LIMIT) direct_flush(); DIRECT_SLOW_STORE(fn, _gsa, (v_)); } })
+    else { DBUD_OUT(); if (_gsa >= RAM_LIMIT) direct_flush(); DIRECT_SLOW_STORE(fn, _gsa, (v_)); DBUD_IN(); } })
 #endif
 '''
 SCALAR_FALLBACK = ('VIPER_WII_DRIVING_BULK', 'VIPER_WII_DRIVING_TAIL')
@@ -334,6 +373,44 @@ def _resolve_undefined(body, names):
     return '\n'.join(out)
 
 
+STORE_LINE = re.compile(r'^(\s*)DIRECT_ST32\((?:\((c->r\[\d+\]) \+ 0x([0-9a-f]+)u\)|(c->r\[\d+\]))(, .*)\);\s*$')
+GROUP_BREAK = re.compile(r'\bL_\w+:|\bgoto\b|\breturn\b|SYNC_|\bCHK\(|DIRECT_ST32LE|DIRECT_FLUSHED|\bf_[a-z]+_[0-9a-f]+\(|rt_\w+\(c[,)]|^\s*#')
+
+
+def _direct_groups(body):
+    """Mark runs of DIRECT_ST32 to consecutive words from one base register
+    (no label, jump, call, checkpoint, header store or reassignment of the
+    base in between) for DIRECT_GROUP_BEGIN / DIRECT_GST32."""
+    lines = body.split('\n')
+    groups, cur = [], None
+    def close():
+        if cur and len(cur['lines']) >= 2:
+            groups.append(cur)
+    for i, l in enumerate(lines):
+        m = STORE_LINE.match(l)
+        if m:
+            base = m.group(2) or m.group(4)
+            off = int(m.group(3), 16) if m.group(3) else 0
+            if cur and cur['base'] == base and off == cur['next']:
+                cur['lines'].append(i); cur['next'] += 4
+                continue
+            close()
+            cur = {'base': base, 'off': off, 'next': off + 4, 'lines': [i]}
+            continue
+        if cur and (GROUP_BREAK.search(l) or re.search(re.escape(cur['base']) + r'\s*(?:[-+|&^*/]|<<|>>)?=(?!=)', l)):
+            close(); cur = None
+    close()
+    for g in groups:
+        k = len(g['lines'])
+        for j in g['lines']:
+            lines[j] = lines[j].replace('DIRECT_ST32(', 'DIRECT_GST32(', 1)
+        first = g['lines'][0]
+        lead = re.match(r'\s*', lines[first]).group(0)
+        ea = f"({g['base']} + 0x{g['off']:x}u)"
+        lines[first] = f'{lead}DIRECT_GROUP_BEGIN({ea}, {k}u); ' + lines[first].lstrip()
+    return '\n'.join(lines)
+
+
 def _direct(body):
     body = _resolve_undefined(body, SCALAR_FALLBACK)
     if re.search(r'\bwii_voodoo_bulk', body):
@@ -347,7 +424,7 @@ def _direct(body):
             continue
         kind = 'DIRECT_LOAD' if name.startswith('LD') else 'DIRECT_STORE'
         body = re.sub(r'\b' + name + r'\(', kind + '(' + name + ', ', body)
-    return body
+    return _direct_groups(body)
 
 
 def _gather(body):
@@ -558,6 +635,18 @@ def localize(func, gather=False):
             return 'SYNC_OUT_D(' + st + ')' if m.group(0) == 'SYNC_OUT()' else 'NATIVE_CHK_D(' + st + ', '
         local = re.sub(r'SYNC_OUT\(\)|NATIVE_CHK\(', site_text, local)
     flush = 'direct_flush(); ' if gather == 'direct' else 'gather_flush(); ' if gather else ''
+    # VIPER_WII_DIRECT_BUDGET: in the direct function the budget is a local
+    # (DBUD), written back with the registers and wherever device code can
+    # run (the direct prelude's slow paths, flush and packet hand-off).
+    bud = 'c->budget'
+    if gather == 'direct':
+        helpers = set(re.findall(r'\b(\w+)\(c[,)]', local))
+        if helpers <= {'TRACE'} | {h for h in helpers if re.fullmatch(r'f_[a-z]+_[0-9a-f]+', h)}:
+            local = local.replace('c->budget', 'DBUD')
+            bud = 'DBUD'
+            flush += 'DBUD_OUT(); '
+            in_ += ' DBUD_IN();'
+            decls.append('DIRECT_BUDGET_LOCAL();')
     # VIPER_WII_DIRTY_SYNC_CHECK (diagnostic): after a reduced write-back,
     # any local that still differs from the context (bitwise) was wrongly
     # left out; log it, then store everything.
@@ -572,16 +661,16 @@ def localize(func, gather=False):
     prelude = ((DIRECT_PRELUDE if gather == 'direct' else GATHER_PRELUDE if gather else '') +
                f'#define SYNC_OUT() do {{ {flush}{out_} }} while (0)\n'
                f'#define SYNC_IN() do {{ {in_} }} while (0)\n'
-               '#define NATIVE_CHK(pc, n) do { if (UNLIKELY((c->budget -= (n)) <= 0)) { '
+               f'#define NATIVE_CHK(pc, n) do {{ if (UNLIKELY(({bud} -= (n)) <= 0)) {{ '
                'SYNC_OUT(); rt_check(c, (pc)); if (c->unwind) return; SYNC_IN(); } } while (0)\n'
                '#if defined(VIPER_WII_DIRTY_SYNC_CHECK)\n'
                f'#define SYNC_DIRTY_CHECK() do {{ if ({check}) {{ void rt_log(const char *, ...); rt_log("VIPER WII DIRTY SYNC MISS {name} line %d\\n", __LINE__); }} }} while (0)\n'
                f'#define SYNC_OUT_D(...) do {{ {flush}__VA_ARGS__ SYNC_DIRTY_CHECK(); {out_} }} while (0)\n'
-               '#define NATIVE_CHK_D(st, pc, n) do { if (UNLIKELY((c->budget -= (n)) <= 0)) { '
+               f'#define NATIVE_CHK_D(st, pc, n) do {{ if (UNLIKELY(({bud} -= (n)) <= 0)) {{ '
                f'{flush}st SYNC_DIRTY_CHECK(); {out_} rt_check(c, (pc)); if (c->unwind) return; SYNC_IN(); }} }} while (0)\n'
                '#elif defined(VIPER_WII_DIRTY_SYNC)\n'
                f'#define SYNC_OUT_D(...) do {{ {flush}__VA_ARGS__ }} while (0)\n'
-               '#define NATIVE_CHK_D(st, pc, n) do { if (UNLIKELY((c->budget -= (n)) <= 0)) { '
+               f'#define NATIVE_CHK_D(st, pc, n) do {{ if (UNLIKELY(({bud} -= (n)) <= 0)) {{ '
                f'{flush}st rt_check(c, (pc)); if (c->unwind) return; SYNC_IN(); }} }} while (0)\n'
                '#else\n'
                '#define SYNC_OUT_D(...) SYNC_OUT()\n'
