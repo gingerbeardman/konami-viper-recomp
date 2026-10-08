@@ -262,6 +262,8 @@ def write_config_header(g, out):
         # widescreen: where the gl library keeps its projection slots and viewport (0: not supported)
         *[f"#define GAME_ENH_WIDE_{k.upper()} 0x{int((enh.get('widescreen') or {}).get(k, '0'), 16):x}u"
           for k in ('proj_matrix', 'proj_frustum', 'proj_slot', 'viewport')],
+        f"#define GAME_ENH_RACE_RESTART_STYLE {enh.get('race_restart_style', 0)}",
+        f"#define GAME_ENH_PRACTICE_TEXT_RENDER {int(enh.get('practice_text_render', '0'), 16)}u",
         game_options_config(enh.get('game_options')),
         *name_entry_config(enh.get('name_entry')),
         wheel_select_config(enh.get('wheel_select')),

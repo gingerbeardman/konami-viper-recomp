@@ -126,6 +126,8 @@
     "The calibration is TD2's script plus the motor-driven steering test (about 50 s, needs RT_FFB_WHEEL, set automatically by the first-run calibration) and the HAND BRAKE step."
   ],
   "enhanced": {
+    "race_restart_style": 1,
+    "practice_text_render": "0x46bc0",
     "setup": {
       "script": "12:3=fd,12.5:3=ff,22.0:4=fe,22.3:4=ff,22.8:4=fe,23.1:4=ff,23.6:4=fe,23.9:4=ff,24.4:4=fe,24.7:4=ff,25.2:4=fe,25.5:4=ff,26.0:4=fe,26.3:4=ff,26.8:4=fe,27.1:4=ff,28.5:3=ef,28.8:3=ff,30.5:3=ef,30.8:3=ff,31.5:4=fe,31.8:4=ff,32.3:4=fe,32.6:4=ff,33.5:3=ef,33.8:3=ff",
       "seconds": 36,
@@ -147,7 +149,17 @@
         "0x839b4": "name_index",
         "0x839f8": "name_confirm",
         "0x8cacc": "course_select",
-        "0x8c028": "transmission_select"
+        "0x8c028": "transmission_select",
+        "0x889a4": "race_dispatch",
+        "0xb45b4": "race_countdown",
+        "0xaa6f0": "race_time_bonus",
+        "0xa9c30": "race_laps",
+        "0xa9cc8": "race_lap_clock",
+        "0xa9ed0": "practice_text",
+        "0xa9ee4": "practice_text",
+        "0xaa71c": "practice_checkpoint",
+        "0xb46fc": "practice_hud",
+        "0xb4700": "practice_hud_end"
       },
       "gl": {
         "0x213f4": "projection",

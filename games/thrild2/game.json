@@ -114,6 +114,7 @@
     "seconds": 82
   },
   "enhanced": {
+    "race_restart_style": 2,
     "setup": {
       "script": "12:3=fd,12.5:3=ff,22.0:4=fe,22.3:4=ff,22.8:4=fe,23.1:4=ff,23.6:4=fe,23.9:4=ff,24.4:4=fe,24.7:4=ff,25.2:4=fe,25.5:4=ff,26.0:4=fe,26.3:4=ff,26.8:4=fe,27.1:4=ff,28.5:3=ef,28.8:3=ff,30.5:3=ef,30.8:3=ff,31.5:4=fe,31.8:4=ff,32.3:4=fe,32.6:4=ff,33.5:3=ef,33.8:3=ff",
       "seconds": 36,
@@ -130,7 +131,8 @@
         "0x7dd40": "attract",
         "0xb59c4": "name_index",
         "0xb510c": "name_confirm",
-        "0x828c4": "course_select"
+        "0x828c4": "course_select",
+        "0x7e6fc": "race_dispatch"
       },
       "gl": {
         "0x217bc": "projection",
