@@ -1940,6 +1940,14 @@ static void debug_dot(uint32_t *fb,int x,int y,uint32_t colour) {
             blend(&fb[(py+dy)*g_fbw+px+dx],colour,alpha);
         }
 }
+/* Whether the last projected point is behind the scene at logical (x, y). */
+static int debug_hidden(int x,int y) {
+    int px=(int)lroundf(x*g_ui),py=(int)lroundf(y*g_ui);
+    if(!g_overlay_depth || g_overlay_depth_w!=g_fbw || g_overlay_depth_h!=g_fbh ||
+       px<0 || px>=g_fbw || py<0 || py>=g_fbh) return 0;
+    unsigned scene=g_overlay_depth[py*g_fbw+px];
+    return scene!=65535 && debug_depth_value(g_debug_project_depth)>scene+16;
+}
 /* Project diagnostic markers using the native camera's -Z forward convention. */
 static int debug_project(float x,float y,float z,int w,int h,int *sx,int *sy) {
     float dx=x-atomic_load(&g_debug_camera[0]),dy=y-atomic_load(&g_debug_camera[1]);
@@ -1991,16 +1999,20 @@ static void debug_draw_gates(uint32_t *fb,int w,int h) {
              * perspective, including when it is tilted towards horizontal. */
             int columns=(int)fminf(64,fmaxf(2,ceilf(half*2)));
             int rows=(int)fminf(32,fmaxf(2,ceilf(half_height*2)));
-            for(int row=1;row<rows;row++) for(int column=1;column<columns;column++) {
-                float u=2.f*column/columns,side=half*(u-1);
-                float height=half_height*(2.f*row/rows-1);
+            /* Hidden parts use a grid twice as fine, so they read as a surface
+             * through scenery; the extra points are drawn only where hidden. */
+            for(int row=1;row<rows*2;row++) for(int column=1;column<columns*2;column++) {
+                int fine=(row|column)&1;
+                float u=1.f*column/columns,side=half*(u-1);
+                float height=half_height*(1.f*row/rows-1);
                 int segment=u<=1?0:1;float blend=u-segment;
                 float ground=atomic_load(&g_debug_gate_ground[i][segment])*(1-blend)+
                     atomic_load(&g_debug_gate_ground[i][segment+1])*blend;
                 int underground=isfinite(ground) && y+height*ct<ground;
                 uint32_t colour=underground?0xbfc3c8:selected?0xffffff:gate_colour;
                 int px,py;
-                if(debug_project(x+nz*side-nx*height*st,y+height*ct,z-nx*side-nz*height*st,w,h,&px,&py))
+                if(debug_project(x+nz*side-nx*height*st,y+height*ct,z-nx*side-nz*height*st,w,h,&px,&py) &&
+                   (!fine || debug_hidden(px,py)))
                     debug_dot(fb,px,py,colour);
             }
         }
