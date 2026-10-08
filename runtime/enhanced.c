@@ -1999,8 +1999,8 @@ static void debug_draw_gates(uint32_t *fb,int w,int h) {
              * perspective, including when it is tilted towards horizontal. */
             int columns=(int)fminf(64,fmaxf(2,ceilf(half*2)));
             int rows=(int)fminf(32,fmaxf(2,ceilf(half_height*2)));
-            /* Hidden parts use a grid twice as fine, so they read as a surface
-             * through scenery; the extra points are drawn only where hidden. */
+            /* Hidden and underground parts use a grid twice as fine, so they
+             * read as a surface; the extra points are drawn only there. */
             for(int row=1;row<rows*2;row++) for(int column=1;column<columns*2;column++) {
                 int fine=(row|column)&1;
                 float u=1.f*column/columns,side=half*(u-1);
@@ -2012,7 +2012,7 @@ static void debug_draw_gates(uint32_t *fb,int w,int h) {
                 uint32_t colour=underground?0xbfc3c8:selected?0xffffff:gate_colour;
                 int px,py;
                 if(debug_project(x+nz*side-nx*height*st,y+height*ct,z-nx*side-nz*height*st,w,h,&px,&py) &&
-                   (!fine || debug_hidden(px,py)))
+                   (!fine || underground || debug_hidden(px,py)))
                     debug_dot(fb,px,py,colour);
             }
         }
