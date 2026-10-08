@@ -12,12 +12,15 @@
 #include <string.h>
 #include "audio.h"
 
+#ifndef VIPER_WII_AUDIO_DMA_FRAMES
+#define VIPER_WII_AUDIO_DMA_FRAMES 512   /* ~10.7 ms per buffer */
+#endif
 #ifndef VIPER_WII_AUDIO_GAIN
 #define VIPER_WII_AUDIO_GAIN 16        /* runtime/frontend_sdl.c g_audio_gain */
 #endif
 enum {
     RING = 8192,                       /* 44.1 kHz frames, power of two */
-    DMA_FRAMES = 512,                  /* 48 kHz frames per DMA buffer (~10.7 ms) */
+    DMA_FRAMES = VIPER_WII_AUDIO_DMA_FRAMES,   /* 48 kHz frames per DMA buffer */
     BACKLOG_MAX = 44100 / 10,
     BACKLOG_KEEP = 44100 / 25,
     STEP = (int)((65536LL * 44100 + 24000) / 48000)   /* 16.16 source frames per output frame */
@@ -35,14 +38,21 @@ static inline int16_t sat16(int32_t v) { return v > 32767 ? 32767 : v < -32768 ?
 void wii_audio_push_block(const uint8_t *blk) {
     if (!started) return;
     unsigned w = ring_w, r = ring_r;
-    for (int i = 0; i < 256; i++) {
-        if (w - r >= RING - 1) break;   /* full: drop */
-        const uint8_t *p = blk + 8 * i;
-        int32_t l = (int32_t)(((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]);
-        int32_t rr = (int32_t)(((uint32_t)p[4] << 24) | ((uint32_t)p[5] << 16) | ((uint32_t)p[6] << 8) | p[7]);
-        ring[w % RING][0] = sat16((int32_t)(((int64_t)l * VIPER_WII_AUDIO_GAIN) >> 16));
-        ring[w % RING][1] = sat16((int32_t)(((int64_t)rr * VIPER_WII_AUDIO_GAIN) >> 16));
-        w++;
+    /* Big-endian host: the guest's words load as they are. With the default
+     * gain, (s * 16) >> 16 is exactly s >> 12 (both floor). */
+    unsigned room = RING - 1 - (w - r);
+    unsigned n = room < 256 ? room : 256;   /* full: drop the rest */
+    const int32_t *s = (const int32_t *)(const void *)blk;
+    for (unsigned i = 0; i < n; i++, w++) {
+        int32_t l = s[2 * i], rr = s[2 * i + 1];
+#if VIPER_WII_AUDIO_GAIN == 16
+        l >>= 12; rr >>= 12;
+#else
+        l = (int32_t)(((int64_t)l * VIPER_WII_AUDIO_GAIN) >> 16);
+        rr = (int32_t)(((int64_t)rr * VIPER_WII_AUDIO_GAIN) >> 16);
+#endif
+        ring[w % RING][0] = sat16(l);
+        ring[w % RING][1] = sat16(rr);
     }
     ring_w = w;
 }

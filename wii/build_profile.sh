@@ -790,6 +790,11 @@ case "${WII_PERF_DIRECT_VERSION_MIN:-8}" in
     2|3|4|6) flags="$flags -DVIPER_WII_DIRECT_VERSION_MIN=$WII_PERF_DIRECT_VERSION_MIN"; output="$output-dvmin$WII_PERF_DIRECT_VERSION_MIN" ;;
     *) echo 'WII_PERF_DIRECT_VERSION_MIN must be 2, 3, 4, 6 or 8' >&2; exit 2 ;;
 esac
+case "${WII_PERF_AUDIO_DMA_FRAMES:-512}" in
+    512) ;;
+    1024|2048) flags="$flags -DVIPER_WII_AUDIO_DMA_FRAMES=$WII_PERF_AUDIO_DMA_FRAMES"; output="$output-adma$WII_PERF_AUDIO_DMA_FRAMES" ;;
+    *) echo 'WII_PERF_AUDIO_DMA_FRAMES must be 512, 1024 or 2048' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;
