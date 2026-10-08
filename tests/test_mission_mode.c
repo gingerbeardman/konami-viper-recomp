@@ -466,6 +466,13 @@ int main(int argc, char **argv) {
     STF32(test_car+0xac,2);mission_special_tick(&special,test_car,3000);assert(!g_mission_park_since);
     STF32(test_car+0xac,0);mission_special_tick(&special,test_car,4000);
     mission_special_tick(&special,test_car,6000);assert(g_mission_run.phase==MISSION_PASSED);
+    /* A bay counts without driving through it, but only once every target is done. */
+    g_mission_run.phase=MISSION_RUNNING;g_mission_run.next_gate=0;g_mission_park_since=0;
+    g_mission_target_goal=1;atomic_store(&g_mission_broken,0);
+    mission_special_tick(&special,test_car,10000);mission_special_tick(&special,test_car,13000);
+    assert(g_mission_run.phase==MISSION_RUNNING);
+    atomic_store(&g_mission_broken,1);mission_special_tick(&special,test_car,13100);
+    assert(g_mission_run.phase==MISSION_PASSED && g_mission_run.next_gate==1);
     special=(MissionDefinition){.collect_gap_ms=8000};g_mission_run.phase=MISSION_RUNNING;
     g_mission_target_goal=2;atomic_store(&g_mission_broken,1);g_mission_last_collect_ms=1000;
     mission_special_tick(&special,test_car,9001);assert(g_mission_run.phase==MISSION_OBJECTIVE_FAILED);

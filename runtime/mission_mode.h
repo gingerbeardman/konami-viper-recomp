@@ -738,9 +738,13 @@ static void mission_special_tick(const MissionDefinition *d,unsigned car,uint64_
         fabs(LDF32(car+0xac))*3.6f<=d->park_speed && angle<=d->park_angle;
     if(!parked) g_mission_park_since=0;
     else if(!g_mission_park_since) g_mission_park_since=ms;
-    int complete=parked && ms-g_mission_park_since>=d->park_ms;
-    if(g_mission_run.next_gate>=g_mission_run.gate_count)
-        g_mission_run.phase=complete ? MISSION_PASSED : MISSION_RUNNING;
+    /* A bay is parked in, not driven through: it counts once every earlier gate
+     * and every target is done, however the car came into it. */
+    int complete=parked && ms-g_mission_park_since>=d->park_ms &&
+        (!g_mission_target_goal || atomic_load(&g_mission_broken)>=g_mission_target_goal);
+    if(complete && g_mission_run.next_gate+1>=g_mission_run.gate_count) {
+        g_mission_run.next_gate=g_mission_run.gate_count;g_mission_run.phase=MISSION_PASSED;
+    } else if(g_mission_run.next_gate>=g_mission_run.gate_count) g_mission_run.phase=MISSION_RUNNING;
 }
 static void mission_check_objective(void) {
     const MissionDefinition *d=&k_missions[atomic_load(&g_mission_selected)];
@@ -1325,6 +1329,8 @@ static void mission_begin(PPCContext *c, uint32_t car) {
     unsigned waypoints=0;
     for(unsigned i=0;i<d->custom_gates;i++) if(d->gate_role[i]!=1 && d->gate_role[i]!=4) waypoints++;
     g_mission_run.required_pass_mask=waypoints ? (1u<<waypoints)-1 : 0;
+    /* Driving past a parking bay is not a missed gate. */
+    if(d->park_ms && waypoints) g_mission_run.required_pass_mask&=~(1u<<(waypoints-1));
     g_mission_run.gate_count=count; g_mission_run.limit_ms=d->limit_ms;
     g_mission_run.contact_limit=d->contacts;
     /* Whole-course collection runs may cross the finish and continue another lap. */
