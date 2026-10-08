@@ -8,9 +8,10 @@
 // so the menu shows the real rate; 720p (60 fps; the Wii's 480p loses nothing)
 // is the default.
 // View menu: 16:9 (Cmd-1) or 4:3 (Cmd-2), Smooth (Cmd-3) or Sharp (Cmd-4)
-// scaling, Mute, Full Screen. Resolution
+// scaling, Full Screen. Audio menu: a volume slider, Volume Up (Cmd-=) and
+// Down (Cmd--) in 10% steps, Mute (Cmd-M); the volume is remembered. Resolution
 // menu: every capture size the device offers (at its best frame rate). Keys without
-// Cmd also work: A switch aspect, F full screen, M mute, Q quit.
+// Cmd also work: A switch aspect, F full screen, M mute, + and - volume, Q quit.
 // The capture frame is always 16:9; the Wii's own aspect setting decides what
 // the picture should be: 16:9 shows it as is, 4:3 squeezes it. The signal
 // cannot tell them apart, so the choice is remembered (default 16:9).
@@ -75,7 +76,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let mic = device(.audio), let input = try? AVCaptureDeviceInput(device: mic) {
             audioSession.beginConfiguration()
             if audioSession.canAddInput(input) { audioSession.addInput(input) }
-            audioOut.volume = 1
             if audioSession.canAddOutput(audioOut) { audioSession.addOutput(audioOut) }
             audioSession.commitConfiguration()
         }
@@ -88,6 +88,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.contentView = view
         buildMenu()
         setScaling(UserDefaults.standard.string(forKey: "scaling") ?? "Smooth")
+        applyVolume()
         /* Frame saved by hand (any display, including a secondary one left
          * of the main): applied after the window is on screen, where AppKit's
          * autosave would first constrain it to the main display. */
@@ -125,10 +126,29 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateTitle()
     }
     @objc func chooseAspect(_ sender: NSMenuItem) { setAspect(sender.title, resize: true) }
-    @objc func toggleMute(_ sender: NSMenuItem) {
-        audioOut.volume = audioOut.volume > 0 ? 0 : 1
-        sender.state = audioOut.volume > 0 ? .off : .on
+
+    /* AVCaptureAudioPreviewOutput plays at 0...1 (no boost past the
+     * device's own level); mute keeps the volume to come back to. */
+    var volume: Float = UserDefaults.standard.object(forKey: "volume") == nil ? 1 : UserDefaults.standard.float(forKey: "volume")
+    var muted = false
+    var muteItem: NSMenuItem?
+    var volumeSlider: NSSlider?
+    func setVolume(_ v: Float) {
+        volume = min(max((v * 100).rounded() / 100, 0), 1)
+        muted = false
+        UserDefaults.standard.set(volume, forKey: "volume")
+        applyVolume()
     }
+    func applyVolume() {
+        audioOut.volume = muted ? 0 : volume
+        muteItem?.state = muted ? .on : .off
+        volumeSlider?.floatValue = volume * 100
+        updateTitle()
+    }
+    @objc func toggleMute(_ sender: Any?) { muted.toggle(); applyVolume() }
+    @objc func volumeUp(_ sender: Any?) { setVolume(volume + 0.1) }
+    @objc func volumeDown(_ sender: Any?) { setVolume(volume - 0.1) }
+    @objc func slideVolume(_ sender: NSSlider) { setVolume(sender.floatValue / 100) }
 
     func buildMenu() {
         let bar = NSMenu()
@@ -150,12 +170,27 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             scalingItems[title] = item
         }
         viewMenu.addItem(.separator())
-        let mute = viewMenu.addItem(withTitle: "Mute", action: #selector(toggleMute(_:)), keyEquivalent: "m")
-        mute.target = self
         viewMenu.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         viewMenu.addItem(.separator())
         viewMenu.addItem(withTitle: "Restart Capture", action: #selector(restartCapture(_:)), keyEquivalent: "r").target = self
         viewItem.submenu = viewMenu
+        let audioItem = NSMenuItem(); bar.addItem(audioItem)
+        let audioMenu = NSMenu(title: "Audio")
+        let sliderView = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 28))
+        let slider = NSSlider(value: Double(volume * 100), minValue: 0, maxValue: 100, target: self, action: #selector(slideVolume(_:)))
+        slider.frame = NSRect(x: 20, y: 4, width: 184, height: 20)
+        slider.isContinuous = true
+        sliderView.addSubview(slider)
+        volumeSlider = slider
+        let sliderItem = NSMenuItem(); sliderItem.view = sliderView
+        audioMenu.addItem(sliderItem)
+        audioMenu.addItem(withTitle: "Volume Up", action: #selector(volumeUp(_:)), keyEquivalent: "=").target = self
+        audioMenu.addItem(withTitle: "Volume Down", action: #selector(volumeDown(_:)), keyEquivalent: "-").target = self
+        audioMenu.addItem(.separator())
+        let mute = audioMenu.addItem(withTitle: "Mute", action: #selector(toggleMute(_:)), keyEquivalent: "m")
+        mute.target = self
+        muteItem = mute
+        audioItem.submenu = audioMenu
         let resItem = NSMenuItem(); bar.addItem(resItem)
         let resMenu = NSMenu(title: "Resolution")
         for f in formats() {
@@ -208,11 +243,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let f = formats().first(where: { label($0) == sender.title }) { applyFormat(f) }
     }
 
-    /* "ShadowCast — 16:9 — 1920 x 1080 @ 60 fps — Smooth" */
+    /* "ShadowCast — 16:9 — 1920 x 1080 @ 60 fps — Smooth — Volume 80%" */
     func updateTitle() {
         guard let window else { return }
         let scaling = UserDefaults.standard.string(forKey: "scaling") ?? "Smooth"
-        window.title = [video.localizedName, aspect, label(video.activeFormat), scaling].joined(separator: " — ")
+        let sound = muted ? "Muted" : "Volume \(Int((volume * 100).rounded()))%"
+        window.title = [video.localizedName, aspect, label(video.activeFormat), scaling, sound].joined(separator: " — ")
     }
 
     /* Stop and start the session: drops anything queued in the capture or
@@ -241,7 +277,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         switch key {
         case "f": window.toggleFullScreen(nil)
         case "a": setAspect(aspect == "16:9" ? "4:3" : "16:9", resize: true)
-        case "m": audioOut.volume = audioOut.volume > 0 ? 0 : 1
+        case "m": toggleMute(nil)
+        case "=", "+": volumeUp(nil)
+        case "-", "_": volumeDown(nil)
         case "q": NSApp.terminate(nil)
         default: break
         }
