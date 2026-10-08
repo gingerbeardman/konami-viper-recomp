@@ -27,7 +27,7 @@ for spec in "$@"; do
 done
 printf 'label\tdolphin_us\tdolphin_ram\tdolphin_efb\twii_runs\n' > "$OUT/summary.tsv"
 while IFS='	' read -r label _ run us ram efb result; do
-  [ "$ram" = 9730789c ] && [ "$efb" = aa724676757f ] || { echo "$label: NOT EXACT in Dolphin ($ram $efb), skipped"; continue; }
+  [ "$ram" = "${ORACLE_RAM:-40971e3d}" ] && [ "$efb" = "${ORACLE_EFB:-2c392b9d7460}" ] || { echo "$label: NOT EXACT in Dolphin ($ram $efb), skipped"; continue; }
   while pgrep -f "hw_remote.py" >/dev/null; do sleep 10; done   # one Wii user at a time
   python3 wii/hw_remote.py --wii "$WII" "$OUT/$label.dol" "$OUT/wii-$label" --repeat "$RUNS" --timeout 900 > "$OUT/wii-$label.log" 2>&1
   times=$(grep -o 'ram=[0-9a-f]* [A-Z]* driving=[0-9.]*s' "$OUT/wii-$label.log" | sed 's/ram=[0-9a-f]* //; s/driving=//' | tr '\n' ' ')

@@ -80,3 +80,4 @@ export WII_PERF_DENSE_LR=1
 export WII_PERF_TEXTURE_SLOT_HINT=1
 export WII_PERF_LOG_BUFFERED=1   # measurement: SD log writes out of the timed windows
 export WII_PERF_PLANE_PROFILE=0   # measurement: no per-triangle/per-lookup clock reads (absent from playable builds)
+export WII_PERF_DIRECT_NO_VRAM=1

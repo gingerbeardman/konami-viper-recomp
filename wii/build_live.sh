@@ -366,6 +366,13 @@ case "${WII_LIVE_TEXTURE_SLOT_HINT:-1}" in
     1) flags="$flags -DVIPER_WII_TEXTURE_SLOT_HINT"; output="$output-tslothint" ;;
     *) echo 'WII_LIVE_TEXTURE_SLOT_HINT must be 0 or 1' >&2; exit 2 ;;
 esac
+# Direct triangle packets consumed without a copy into Voodoo VRAM (RAM/EFB
+# exact): 2.551 -> 2.480 s on hardware (2026-10-08, branch wii-port).
+case "${WII_LIVE_DIRECT_NO_VRAM:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRECT_NO_VRAM"; output="$output-dnovram" ;;
+    *) echo 'WII_LIVE_DIRECT_NO_VRAM must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_LIVE_DENSE_LR:-1}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_DENSE_LR"; output="$output-denselr" ;;

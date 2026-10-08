@@ -1044,6 +1044,7 @@ WII_HOT_wii_voodoo_direct_triangles int wii_voodoo_direct_triangles(uint32_t hea
      * The header is cmd and each payload word is bswap(words[i]), so the
      * native stores are bswap(cmd) and words[i]. Page versions get the same
      * per-word increments, summed per page. */
+#ifndef VIPER_WII_DIRECT_NO_VRAM
     uint32_t *dst=(uint32_t*)(void*)(vram+word*4);
 #if defined(VIPER_WII_CACHE_HINTS) && defined(__PPC__)
     {
@@ -1070,6 +1071,14 @@ WII_HOT_wii_voodoo_direct_triangles int wii_voodoo_direct_triangles(uint32_t hea
         unsigned n=1024-(w&1023);if(n>left)n=left;
         vram_versions[w/1024]+=n;w+=n;left-=n;
     }
+#else
+    /* Consumed straight from the producer: the words never need to exist in
+     * VRAM. Nothing reads a consumed FIFO packet back, and no texture lives
+     * in the FIFO region (a texture there would change the picture: the
+     * EFB oracle guards it), so its bytes and page versions are left as
+     * they were. Guest-visible FIFO state (read pointer) still advances. */
+    (void)word;
+#endif
 #else
     for(unsigned i=0;i<count;i++)if(fifo_has(off+i*4u)){direct_triangle_reject[5]++;return 0;}
     for(unsigned i=0;i<count;i++,word++){

@@ -658,6 +658,13 @@ esac
 if [ -n "${WII_PERF_STRIP_PREFETCH:-}" ]; then
     flags="$flags -DVIPER_WII_STRIP_PREFETCH=${WII_PERF_STRIP_PREFETCH}u"; output="$output-spf$WII_PERF_STRIP_PREFETCH"
 fi
+# Direct triangle packets are not copied into Voodoo VRAM (RAM/EFB exact;
+# the device-state VRAM hash changes).
+case "${WII_PERF_DIRECT_NO_VRAM:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRECT_NO_VRAM"; output="$output-dnovram" ;;
+    *) echo 'WII_PERF_DIRECT_NO_VRAM must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_ALLOC_LOG:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_ALLOC_LOG"; output="$output-alloclog" ;;

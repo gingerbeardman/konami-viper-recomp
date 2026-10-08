@@ -9,6 +9,7 @@ scripted end it sends boot.log and efb.bin back here
 
 Run: python3 wii/hw_remote.py --wii 192.168.1.224 DOL OUTDIR [--repeat N]"""
 import argparse
+import os
 import re
 import socket
 import struct
@@ -17,7 +18,7 @@ import time
 import zlib
 from pathlib import Path
 
-EXPECTED_RAM = '9730789c'
+EXPECTED_RAM = os.environ.get('ORACLE_RAM', '40971e3d')   # branch wii-port game config
 
 
 def local_ip_for(wii: str) -> str:

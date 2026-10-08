@@ -13,6 +13,11 @@
 #include "voodoo_headless.h"
 #include "enhanced_headless.h"
 #include "net_report.h"
+/* Scripted-benchmark game-state oracle (ram_fnv32) for this branch's game
+ * config: main's config forces NETWORK ID 1 (the HUD says PLAYER 1). */
+#ifndef VIPER_WII_ORACLE_RAM
+#define VIPER_WII_ORACLE_RAM 0x40971e3du
+#endif
 #ifdef VIPER_WII_PC_PROFILE
 #ifndef VIPER_WII_PC_PROFILE_BEGIN
 #define VIPER_WII_PC_PROFILE_BEGIN 20
@@ -522,8 +527,8 @@ static void progress(void *arg){
                 bench_render_us/1e6,100.0*bench_render_us/bench_elapsed_us,
                 (bench_elapsed_us-bench_render_us)/1e6);
         }else printf("Driving window unavailable - inspect boot.log\n");
-        printf("RAM oracle: %s (expected 9730789c)\n",
-            hash==0x9730789cu?"MATCH":"DIFFERENT");
+        printf("RAM oracle: %s (expected %08lx)\n",
+            hash==VIPER_WII_ORACLE_RAM?"MATCH":"DIFFERENT",(unsigned long)VIPER_WII_ORACLE_RAM);
 #ifdef VIPER_WII_NATIVE_FRSQRTE
         printf("RAM/image changes expected with this estimate.\n");
 #endif
@@ -551,7 +556,7 @@ static void progress(void *arg){
             /* The RAM snapshot only matters when the oracle differs. */
             static const char *const all[]={"boot.log","ram.bin","efb.bin",NULL},*const match[]={"boot.log","efb.bin",NULL};
             /* Once sent, the big captures need not occupy the SD card. */
-            if(wii_net_report_send("sd:/viper",hash==0x9730789cu?match:all)>0){remove("sd:/viper/ram.bin");remove("sd:/viper/efb.bin");}
+            if(wii_net_report_send("sd:/viper",hash==VIPER_WII_ORACLE_RAM?match:all)>0){remove("sd:/viper/ram.bin");remove("sd:/viper/efb.bin");}
             VIDEO_SetBlack(TRUE);VIDEO_Flush();VIDEO_WaitVSync();VIDEO_WaitVSync();   /* no static on the way out */
             exit(0);
         }
