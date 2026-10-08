@@ -12,6 +12,10 @@ LOCALIZED_GL = ('f_gl_00028fc4', 'f_gl_000248b0', 'f_gl_00029d28', 'f_gl_000281a
 LOCALIZED_GL_MORE = ('f_gl_00024d28', 'f_gl_0002a004', 'f_gl_0002132c', 'f_gl_00022340',
                      'f_gl_00022e18', 'f_gl_00027668', 'f_gl_00028158')
 GATHER_GL = ('f_gl_00029d28', 'f_gl_00028fc4', 'f_gl_00021ed0')
+# The plainly localized producers' FIFO words gathered too (their ST32LE
+# stores otherwise take the accessor's slow path per word), without moving
+# 0x28fc4 off the direct path: under VIPER_WII_GATHER_MORE.
+GATHER_MORE = ('f_gl_000210a8', 'f_gl_00021940', 'f_gl_000281ac', 'f_gl_00021ed0')
 # Header-last producers whose FIFO words are gathered and completed as direct
 # triangle packets (gather='direct') under VIPER_WII_DIRECT_GL.
 DIRECT_GL = ('f_gl_00028fc4',)
@@ -232,6 +236,9 @@ void f_gl_0002adac(PPCContext *c) {
         local = localize(local_input)
         if name in DIRECT_GL:
             local = ('#ifdef VIPER_WII_DIRECT_GL\n' + localize(local_input, gather='direct') +
+                     '#else\n' + local + '#endif\n')
+        if name in GATHER_MORE:
+            local = ('#ifdef VIPER_WII_GATHER_MORE\n' + localize(local_input, gather=True) +
                      '#else\n' + local + '#endif\n')
         if name in GATHER_GL:
             local = ('#ifdef VIPER_WII_GATHER_GL\n' + localize(local_input, gather=True) +

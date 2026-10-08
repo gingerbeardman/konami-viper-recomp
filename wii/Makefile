@@ -92,10 +92,10 @@ GAME_PLATFORM_OBJS += $(GAME_OUT)/wii/gx_renderer.o $(GAME_OUT)/wii/texture.o $(
 endif
 .PHONY: game
 game: $(GAME_OUT)/viper.dol
-$(GAME_OUT)/generated/%.o: generated/$(GAME)/%.c runtime/ppc_rt.h wii/specialize_gpr_multiple.py wii/gpr_multiple.h wii/native_ram.h wii/localize_function.py wii/localize_hot.txt wii/localize_hot_extra.txt
+$(GAME_OUT)/generated/%.o: generated/$(GAME)/%.c runtime/ppc_rt.h wii/specialize_gpr_multiple.py wii/gpr_multiple.h wii/native_ram.h wii/localize_function.py wii/localize_hot.txt wii/localize_hot_extra.txt wii/localize_hot2.txt
 	@mkdir -p $(dir $@)
 ifneq ($(findstring -DVIPER_WII_GPR_MULTIPLE,$(EXTRA_CFLAGS))$(findstring -DVIPER_WII_RAM_BASE_LOCAL,$(EXTRA_CFLAGS))$(findstring -DVIPER_WII_LOCALIZE_HOT,$(EXTRA_CFLAGS))$(findstring -DVIPER_WII_DEAD_CARRY,$(EXTRA_CFLAGS)),)
-	python3 wii/specialize_gpr_multiple.py $(if $(findstring -DVIPER_WII_LOCALIZE_ALL,$(EXTRA_CFLAGS)),--localize) $(if $(findstring -DVIPER_WII_LOCALIZE_HOT,$(EXTRA_CFLAGS)),--localize-list wii/localize_hot.txt) $(if $(findstring -DVIPER_WII_LOCALIZE_EXTRA,$(EXTRA_CFLAGS)),--localize-list wii/localize_hot_extra.txt) $(if $(findstring -DVIPER_WII_LANC_COPY,$(EXTRA_CFLAGS)),--lanc-copy) $(if $(findstring -DVIPER_WII_DEAD_CARRY,$(EXTRA_CFLAGS)),--dead-carry) $(if $(findstring -DVIPER_WII_BUDGET_LOCAL,$(EXTRA_CFLAGS)),--budget-local) $(if $(findstring -DVIPER_WII_DENSE_SWITCH,$(EXTRA_CFLAGS)),--dense-switch) $(if $(findstring -DVIPER_WII_RESTRICT_CTX,$(EXTRA_CFLAGS)),--restrict-ctx) $< $(GAME_OUT)/generated/$*.gpr.c
+	python3 wii/specialize_gpr_multiple.py $(if $(findstring -DVIPER_WII_LOCALIZE_ALL,$(EXTRA_CFLAGS)),--localize) $(if $(findstring -DVIPER_WII_LOCALIZE_HOT,$(EXTRA_CFLAGS)),--localize-list wii/localize_hot.txt) $(if $(findstring -DVIPER_WII_LOCALIZE_EXTRA,$(EXTRA_CFLAGS)),--localize-list wii/localize_hot_extra.txt) $(if $(findstring -DVIPER_WII_LOCALIZE_HOT2,$(EXTRA_CFLAGS)),--localize-list wii/localize_hot2.txt) $(if $(findstring -DVIPER_WII_LANC_COPY,$(EXTRA_CFLAGS)),--lanc-copy) $(if $(findstring -DVIPER_WII_DEAD_CARRY,$(EXTRA_CFLAGS)),--dead-carry) $(if $(findstring -DVIPER_WII_BUDGET_LOCAL,$(EXTRA_CFLAGS)),--budget-local) $(if $(findstring -DVIPER_WII_DENSE_SWITCH,$(EXTRA_CFLAGS)),--dense-switch) $(if $(findstring -DVIPER_WII_RESTRICT_CTX,$(EXTRA_CFLAGS)),--restrict-ctx) $< $(GAME_OUT)/generated/$*.gpr.c
 	$(CC) $(GAME_CFLAGS) $(GEN_OPT) $(GEN_FP) -c $(GAME_OUT)/generated/$*.gpr.c -o $@
 else
 	$(CC) $(GAME_CFLAGS) $(GEN_OPT) $(GEN_FP) -c $< -o $@

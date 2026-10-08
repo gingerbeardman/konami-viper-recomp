@@ -34,11 +34,14 @@ extern "C" {
 #include "preserve_call.h"
 #endif
 typedef struct { uint64_t key; double val; } WiiRsqrtMemo;
-extern WiiRsqrtMemo wii_rsqrt_memo[64];
+#ifndef VIPER_WII_RSQRT_MEMO_SIZE
+#define VIPER_WII_RSQRT_MEMO_SIZE 64
+#endif
+extern WiiRsqrtMemo wii_rsqrt_memo[VIPER_WII_RSQRT_MEMO_SIZE];
 static inline double wii_rsqrt_memoized(double x) {
     uint64_t b;
     memcpy(&b, &x, sizeof b);
-    WiiRsqrtMemo *m = &wii_rsqrt_memo[(unsigned)((b >> 29) ^ (b >> 35) ^ (b >> 41)) & 63];
+    WiiRsqrtMemo *m = &wii_rsqrt_memo[(unsigned)((b >> 29) ^ (b >> 35) ^ (b >> 41)) & (VIPER_WII_RSQRT_MEMO_SIZE - 1)];
     if (__builtin_expect(m->key == b && rt_round_nearest, 1)) return m->val;
 #ifdef VIPER_WII_PRESERVE_RSQRT
     /* The miss through wii/preserve_call.h: callers keep their volatile

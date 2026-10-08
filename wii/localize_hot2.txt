@@ -1,0 +1,39 @@
+# Hot generated functions (physical-Wii profile, 2026-10-08 evening) that grow
+# at most 1.35x when localized with dirty-only write-backs (VIPER_WII_DIRTY_SYNC).
+# Localized by VIPER_WII_LOCALIZE_HOT2.
+f_g_00058838
+f_g_000a3cfc
+f_g_0005bba4
+f_g_000a34c4
+f_k_000127e4
+f_g_00038098
+f_g_00055b94
+f_g_000667dc
+f_g_0009f66c
+f_g_000a3210
+f_k_00009f40
+f_k_00009e50
+f_g_000380a0
+f_g_0009d808
+f_g_00043644
+f_g_00058670
+f_g_0007b84c
+f_g_000a44d0
+f_g_000a2344
+f_g_0003a760
+f_g_00040a74
+f_g_00092608
+f_g_00059e7c
+f_g_0003e1a4
+f_g_0003a714
+f_g_00069654
+f_k_00008fb0
+f_g_00094de8
+f_g_00041968
+f_g_0008ebe4
+f_g_0003d588
+f_g_000405f8
+f_g_0003f9c0
+f_k_0000c080
+f_g_0003f4b4
+f_g_0003d720

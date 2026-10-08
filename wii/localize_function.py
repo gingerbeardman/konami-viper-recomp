@@ -616,6 +616,101 @@ def _dirty_sites(local):
     return sites
 
 
+LOCAL_TOKEN = re.compile(r'\b' + LOCAL_NAME + r'\b')
+
+
+def _live_reloads(local):
+    """Per SYNC_IN() in text order, the locals live after it (that may be read
+    before being overwritten), for VIPER_WII_LAZY_RELOAD: only those are
+    reloaded. Backward liveness over the same line graph as _dirty_sites,
+    with the write-back lists (SYNC_OUT_D / NATIVE_CHK_D) counted as reads:
+    a local left stale is clean, so no write-back stores it before it is
+    assigned again, and the context keeps the callee's value. Only an
+    unconditional plain assignment or SYNC_IN kills; None when the text has
+    a shape the line model does not cover."""
+    lines = local.split('\n')
+    labels = {}
+    for i, l in enumerate(lines):
+        m = re.match(r'\s*(L_\w+):\s*$', l)
+        if m:
+            labels[m.group(1)] = i
+    events, stack, opened, extra, cond = [], [], [], {}, []
+    site = 0
+    for li, l in enumerate(lines):
+        t = l.strip()
+        if re.match(r'#\s*if', t):
+            cond.append(li)
+        elif re.match(r'#\s*(elif|else|endif)', t):
+            if not cond:
+                return None
+            extra.setdefault(cond[-1], []).append(li)
+            if re.match(r'#\s*endif', t):
+                cond.pop()
+        ev = []
+        for m in re.finditer(r'[{}]|SYNC_IN\(\)|goto (L_\w+)|' + LOCAL_TOKEN.pattern, l):
+            tok = m.group(0)
+            if tok == '{':
+                before = l[:m.start()].rstrip()
+                stack.append(before.endswith(')') or before.endswith('else') or before.endswith(':'))
+                opened.append(li)
+            elif tok == '}':
+                if not stack:
+                    return None
+                if stack.pop() and opened[-1] != li:
+                    extra.setdefault(opened[-1], []).append(li)
+                opened.pop()
+            elif tok == 'SYNC_IN()':
+                stmt = re.split(r'[;{}]', l[:m.start()])[-1]
+                ev.append((m.start(), 'reload', site, not any(stack) and 'if' not in stmt))
+                site += 1
+            elif tok.startswith('goto'):
+                ev.append((m.start(), 'goto', m.group(1), None))
+            else:
+                stmt = re.split(r'[;{}]', l[:m.start()])[-1]
+                end = l.find(';', m.end())
+                body = l[m.end():end if end >= 0 else len(l)]
+                if re.match(r'\s*=(?!=)', body) and not any(stack) and not stmt.strip() and '?' not in body:
+                    ev.append((end if end >= 0 else len(l), 'def', tok, None))
+                else:
+                    ev.append((m.start(), 'use', tok, None))
+        ev.sort(key=lambda e: e[0])
+        events.append(ev)
+    if cond or stack:
+        return None
+    for ev in events:
+        for _, kind, arg, _ in ev:
+            if kind == 'goto' and arg not in labels:
+                return None
+    n = len(lines)
+    live_in = [frozenset()] * n
+    sites = [frozenset()] * site
+    changed = True
+    while changed:
+        changed = False
+        for i in range(n - 1, -1, -1):
+            cur = set()
+            if not TERMINAL.match(lines[i]) and i + 1 < n:
+                cur |= live_in[i + 1]
+            for j in extra.get(i, ()):
+                cur |= live_in[j]
+            for _, kind, arg, flag in reversed(events[i]):
+                if kind == 'use':
+                    cur.add(arg)
+                elif kind == 'def':
+                    cur.discard(arg)
+                elif kind == 'goto':
+                    cur |= live_in[labels[arg]]
+                elif kind == 'reload':
+                    sites[arg] = sites[arg] | frozenset(cur)
+                    if flag:
+                        cur = set()
+            f = frozenset(cur)
+            if f != live_in[i]:
+                live_in[i] = f
+                changed = True
+    return sites
+
+
 def localize(func, gather=False):
     head, brace, body = func.partition('{')
     name = re.match(r'\s*void\s+(\w+)\(', head).group(1)
@@ -693,11 +788,23 @@ def localize(func, gather=False):
             st = ' '.join(t for name, t in order if name in d and name in assigned)
             return 'SYNC_OUT_D(' + st + ')' if m.group(0) == 'SYNC_OUT()' else 'NATIVE_CHK_D(' + st + ', '
         local = re.sub(r'SYNC_OUT\(\)|NATIVE_CHK\(', site_text, local)
+        # VIPER_WII_LAZY_RELOAD: each reload after a call loads only the
+        # locals live there (_live_reloads); needs the dirty write-backs.
+        reloads = _live_reloads(local)
+        if reloads is not None:
+            load = ([(f'r_{n}', f'r_{n}=c->r[{n}];') for n in gprs] + [(f'f_{n}', f'f_{n}=c->f[{n}];') for n in fprs] +
+                    [(f'cr_{n}', f'cr_{n}=c->cr[{n}];') for n in crs] + [(f'{s}_', f'{s}_=c->{s};') for s in specials])
+            rit = iter(reloads)
+            def reload_text(m):
+                live = next(rit)
+                return 'SYNC_IN_D(' + ' '.join(t for nm, t in load if nm in live) + ')'
+            local = re.sub(r'SYNC_IN\(\)', reload_text, local)
     flush = 'direct_flush(); ' if gather == 'direct' else 'gather_flush(); ' if gather else ''
     # VIPER_WII_DIRECT_BUDGET: in the direct function the budget is a local
     # (DBUD), written back with the registers and wherever device code can
     # run (the direct prelude's slow paths, flush and packet hand-off).
     bud = 'c->budget'
+    in_extra = ''
     if gather == 'direct':
         # Everything else that takes the context is a synced call.
         helpers = set(re.findall(r'\b(\w+)\(c[,)]', local))
@@ -711,6 +818,7 @@ def localize(func, gather=False):
         bud = 'DBUD'
         flush += 'DBUD_OUT(); '
         in_ += ' DBUD_IN();'
+        in_extra = 'DBUD_IN();'
         decls.append('DIRECT_BUDGET_LOCAL();')
     # VIPER_WII_DIRTY_SYNC_CHECK (diagnostic): after a reduced write-back,
     # any local that still differs from the context (bitwise) was wrongly
@@ -740,10 +848,15 @@ def localize(func, gather=False):
                '#else\n'
                '#define SYNC_OUT_D(...) SYNC_OUT()\n'
                '#define NATIVE_CHK_D(st, pc, n) NATIVE_CHK(pc, n)\n'
+               '#endif\n'
+               '#if defined(VIPER_WII_LAZY_RELOAD) && defined(VIPER_WII_DIRTY_SYNC) && !defined(VIPER_WII_DIRTY_SYNC_CHECK)\n'
+               f'#define SYNC_IN_D(...) do {{ __VA_ARGS__ {in_extra} }} while (0)\n'
+               '#else\n'
+               '#define SYNC_IN_D(...) SYNC_IN()\n'
                '#endif\n')
     text = (prelude + head + '{\n    CHK(c, ' + entry.group(1) + ', 0);\n    ' +
             '\n    '.join(decls) + '\n' + local + '}\n'
-            '#undef SYNC_OUT\n#undef SYNC_IN\n#undef NATIVE_CHK\n#undef SYNC_OUT_D\n#undef NATIVE_CHK_D\n')
+            '#undef SYNC_OUT\n#undef SYNC_IN\n#undef NATIVE_CHK\n#undef SYNC_OUT_D\n#undef NATIVE_CHK_D\n#undef SYNC_IN_D\n')
     return text
 
 

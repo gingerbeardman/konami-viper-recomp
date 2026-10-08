@@ -730,6 +730,31 @@ case "${WII_PERF_WATCHDOG:-1}" in
     0) flags="$flags -DVIPER_WII_WATCHDOG_S=0"; output="$output-nowatchdog" ;;
     *) echo 'WII_PERF_WATCHDOG must be 0 or 1' >&2; exit 2 ;;
 esac
+case "${WII_PERF_GATHER_MORE:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_GATHER_MORE"; output="$output-gmore" ;;
+    *) echo 'WII_PERF_GATHER_MORE must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_GATHER_PRESERVE:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_GATHER_PRESERVE"; output="$output-gpres" ;;
+    *) echo 'WII_PERF_GATHER_PRESERVE must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_RSQRT_MEMO_SIZE:-64}" in
+    64) ;;
+    256|1024|4096) flags="$flags -DVIPER_WII_RSQRT_MEMO_SIZE=$WII_PERF_RSQRT_MEMO_SIZE"; output="$output-rsqm$WII_PERF_RSQRT_MEMO_SIZE" ;;
+    *) echo 'WII_PERF_RSQRT_MEMO_SIZE must be 64, 256, 1024 or 4096' >&2; exit 2 ;;
+esac
+case "${WII_PERF_LAZY_RELOAD:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_LAZY_RELOAD"; output="$output-lazy" ;;
+    *) echo 'WII_PERF_LAZY_RELOAD must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_LOCALIZE_HOT2:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_LOCALIZE_HOT2"; output="$output-lochot2" ;;
+    *) echo 'WII_PERF_LOCALIZE_HOT2 must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;

@@ -723,7 +723,7 @@ void rt_mtfsf(PPCContext *c, uint32_t fm, uint32_t v) {
 /* Host is in round-to-nearest; exact fast paths (wii/rsqrt_exact.h) check it. */
 int rt_round_nearest = 1;
 #if defined(VIPER_WII_EXACT_RSQRT) && defined(VIPER_WII) && defined(VIPER_WII_RSQRT_MEMO)
-WiiRsqrtMemo wii_rsqrt_memo[64] = {[0 ... 63] = {0, __builtin_inf()}};
+WiiRsqrtMemo wii_rsqrt_memo[VIPER_WII_RSQRT_MEMO_SIZE] = {[0 ... VIPER_WII_RSQRT_MEMO_SIZE - 1] = {0, __builtin_inf()}};
 #endif
 
 /* PPC FPSCR[RN] -> host rounding mode (per host thread, re-applied on fiber switches) */
