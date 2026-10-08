@@ -821,6 +821,16 @@ case "${WII_PERF_VRAM_WORD:-0}" in
     1) flags="$flags -DVIPER_WII_VRAM_WORD"; output="$output-vword" ;;
     *) echo 'WII_PERF_VRAM_WORD must be 0 or 1' >&2; exit 2 ;;
 esac
+case "${WII_PERF_MEMO_SPURIOUS_STATS:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_MEMO_SPURIOUS_STATS"; output="$output-spurious" ;;
+    *) echo 'WII_PERF_MEMO_SPURIOUS_STATS must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_NATIVE_PACKET:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_NATIVE_PACKET"; output="$output-npacket" ;;
+    *) echo 'WII_PERF_NATIVE_PACKET must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;

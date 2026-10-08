@@ -256,7 +256,7 @@ __attribute__((noinline)) static void direct_flush_words(void);
     if (LIKELY(_gb - 0x84000000u <= 0x02000000u - 4u * (k_) && dl_n + (k_) <= 150u && \
                (!dl_n || _gb == dl_ea + 4u * dl_n))) { if (!dl_n) dl_ea = _gb; dl_fast = 1; } \
     else dl_fast = 0; } while (0)
-#define DIRECT_GST32(ea_, v_) do { if (LIKELY(dl_fast)) direct_words[dl_n++] = (v_); \
+#define DIRECT_GST32(ea_, v_) do { if (LIKELY(dl_fast)) direct_words[dl_n++] = DIRECT_NWORD(v_); \
     else DIRECT_ST32(ea_, v_); } while (0)
 #else
 #define DIRECT_LOCALS() unsigned dl_n = 0; uint32_t dl_ea = 0
@@ -336,6 +336,9 @@ static inline void direct_flush(void) {
 __attribute__((noinline)) static void direct_flush_words(void) {
     unsigned n = direct_n;
     direct_n = 0;
+#ifdef VIPER_WII_NATIVE_PACKET
+    for (unsigned i = 0; i < n; i++) direct_words[i] = __builtin_bswap32(direct_words[i]);   /* back to FIFO order */
+#endif
 #ifdef VIPER_WII_BULK_WRITER
     if (rt_wii_bulk_lfb_allowed() && wii_voodoo_bulk_writer_ready(direct_ea, n)) {
         wii_voodoo_bulk_writer_be(direct_ea, direct_words, n);
@@ -352,14 +355,25 @@ static int direct_triangles_preserved(uint32_t header_ea, uint32_t cmd) {
     return wii_voodoo_direct_triangles(header_ea, cmd, direct_words, direct_n);
 }
 #define DIRECT_TRIANGLES(h_, c_, w_, n_) ((int)wii_pcall_u_uu(direct_triangles_preserved, (h_), (c_)))
+#elif defined(VIPER_WII_NATIVE_PACKET)
+int wii_voodoo_direct_triangles_native(uint32_t header_ea, uint32_t cmd, const uint32_t *words, unsigned nwords);
+#define DIRECT_TRIANGLES wii_voodoo_direct_triangles_native
 #else
 #define DIRECT_TRIANGLES wii_voodoo_direct_triangles
+#endif
+/* VIPER_WII_NATIVE_PACKET: the buffer holds host-order words (each FIFO word
+ * byte-swapped; a word loaded byte-reversed from RAM becomes a plain load),
+ * swapped back before anything stores them to the device. */
+#ifdef VIPER_WII_NATIVE_PACKET
+#define DIRECT_NWORD(v) __builtin_bswap32(v)
+#else
+#define DIRECT_NWORD(v) (v)
 #endif
 #define DIRECT_ST32(ea_, v_) ({ uint32_t _gea = (ea_), _gv = (v_); \
     if (_gea - 0x84000000u < 0x02000000u) { \
         if (UNLIKELY(DN && (_gea != DEA + 4 * DN || DN == 150))) direct_flush(); \
         if (UNLIKELY(!DN)) DEA = _gea; \
-        direct_words[DN++] = _gv; \
+        direct_words[DN++] = DIRECT_NWORD(_gv); \
     } else DIRECT_ST32_OTHER(_gea, _gv); })
 #define DIRECT_ST32LE(ea_, v_) ({ uint32_t _gea = (ea_), _gv = (v_); int _gr; \
     if (DN && _gea + 4 == DEA && \

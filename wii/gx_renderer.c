@@ -1339,7 +1339,17 @@ WII_HOT_triangle RENDER_O3 static void triangle(void *user,const WiiVoodooView *
     tri_memo.valid=0;
 #endif
 #ifdef VIPER_WII_GX_EARLY_CULL
+#ifdef VIPER_WII_MEMO_SPURIOUS_STATS
+    {   /* Diagnostic: a memo miss after which the full path changed no GX
+         * state could have kept the memo (a keyed multi-entry memo's case). */
+        static unsigned long long misses,quiet;unsigned gen=gx_state_gen;
+        triangle_full(user,v,p,cmd,area);
+        misses++;quiet+=gen==gx_state_gen;
+        if(!(misses&0x3ffff))rt_log("VIPER WII MEMO SPURIOUS misses=%llu quiet=%llu\n",misses,quiet);
+    }
+#else
     triangle_full(user,v,p,cmd,area);
+#endif
 #else
     triangle_full(user,v,p,cmd,0.f);
 #endif

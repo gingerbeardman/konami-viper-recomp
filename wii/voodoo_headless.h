@@ -64,6 +64,7 @@ void wii_voodoo_bulk_writer_be(uint32_t ea,const uint32_t *words,unsigned count)
 #endif
 #ifdef VIPER_WII_DIRECT_TRIANGLES
 int wii_voodoo_direct_triangles(uint32_t header_ea,uint32_t cmd,const uint32_t *words,unsigned nwords);
+int wii_voodoo_direct_triangles_native(uint32_t header_ea,uint32_t cmd,const uint32_t *words,unsigned nwords);
 #endif
 extern uint32_t wii_voodoo_texture_epoch;
 extern uint32_t wii_voodoo_state_epoch;

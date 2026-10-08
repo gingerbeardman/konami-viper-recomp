@@ -74,6 +74,10 @@ int wii_voodoo_direct_triangles(uint32_t ea,uint32_t cmd,const uint32_t *w,unsig
     for(unsigned i=0;i<n;i++)ST32(ea+4+4*i,w[i]);ST32LE(ea,cmd);
     return 1;
 }
+int wii_voodoo_direct_triangles_native(uint32_t ea,uint32_t cmd,const uint32_t *w,unsigned n){
+    uint32_t le[160];for(unsigned i=0;i<n&&i<160;i++)le[i]=__builtin_bswap32(w[i]);
+    return wii_voodoo_direct_triangles(ea,cmd,le,n);
+}
 uint32_t rt_mmio_r8(uint32_t a){fprintf(trace,"R8 %08x\n",a);return (a*29+5)&255;}
 uint32_t rt_mmio_r16(uint32_t a){fprintf(trace,"R16 %08x\n",a);return (a*29+5)&0xffff;}
 uint32_t rt_mmio_r32(uint32_t a){fprintf(trace,"R32 %08x\n",a);return a*2654435761u;}

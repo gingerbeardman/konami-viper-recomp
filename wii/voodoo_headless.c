@@ -851,6 +851,15 @@ WII_HOT_triangle_packet static void triangle_packet(unsigned pc, uint32_t cmd) {
  * format tests gone: fewer conditions live across the renderer call. Same
  * vertices, strip/fan/list rules, counters and calls as triangle_packet. */
 static inline float word_float(uint32_t w){uint32_t v=__builtin_bswap32(w);float f;memcpy(&f,&v,4);return f;}
+#ifdef VIPER_WII_NATIVE_PACKET
+static int direct_native;   /* the packet's words are host-order (see wii_voodoo_direct_triangles_native) */
+static inline float packet_float(uint32_t w){
+    if(!direct_native)return word_float(w);
+    float f;memcpy(&f,&w,4);return f;
+}
+#else
+#define packet_float word_float
+#endif
 __attribute__((noinline)) static void triangle_packet59(uint32_t cmd,const uint32_t *words) {
     counters.packets++;
     unsigned code = (cmd>>3)&7, vertices = (cmd>>6)&15;
@@ -879,11 +888,11 @@ __attribute__((noinline)) static void triangle_packet59(uint32_t cmd,const uint3
     for (unsigned i = 0; i < vertices; i++, words += 10) {
         NativeVertex *pv=&buf[3+i];
         pv->z=0;
-        pv->x=word_float(words[0]);pv->y=word_float(words[1]);
-        pv->r=word_float(words[2]);pv->g=word_float(words[3]);pv->b=word_float(words[4]);
-        pv->a=word_float(words[5]);pv->wb=word_float(words[6]);
-        pv->w0=pv->w1=word_float(words[7]);
-        pv->s=pv->s1=word_float(words[8]);pv->t=pv->t1=word_float(words[9]);
+        pv->x=packet_float(words[0]);pv->y=packet_float(words[1]);
+        pv->r=packet_float(words[2]);pv->g=packet_float(words[3]);pv->b=packet_float(words[4]);
+        pv->a=packet_float(words[5]);pv->wb=packet_float(words[6]);
+        pv->w0=pv->w1=packet_float(words[7]);
+        pv->s=pv->s1=packet_float(words[8]);pv->t=pv->t1=packet_float(words[9]);
         if ((code == 1 && i == 0) || (code == 0 && i%3 == 0)) {
             s0=s1=s2=pv;
             strip_count=1;
@@ -1031,6 +1040,22 @@ WII_HOT_fifo_run_loop static void fifo_run_loop(void) {
  * and the caller stores the words itself. words are the guest ST32 operands
  * of the vertex words; cmd is the header's ST32LE operand. */
 static unsigned long long direct_triangle_reject[6],direct_triangle_packets;
+#ifdef VIPER_WII_NATIVE_PACKET
+/* Host-order words (VIPER_WII_NATIVE_PACKET): the producer stored each word
+ * byte-swapped back from the FIFO's little-endian order, so a float word is
+ * its float's own bits; the decode skips the swap. Consumed directly only
+ * (DIRECT_NO_VRAM): a declined packet goes back to the producer, which
+ * restores the FIFO order before any guest-visible store. */
+#ifndef VIPER_WII_DIRECT_NO_VRAM
+#error VIPER_WII_NATIVE_PACKET needs VIPER_WII_DIRECT_NO_VRAM
+#endif
+int wii_voodoo_direct_triangles_native(uint32_t header_ea,uint32_t cmd,const uint32_t *words,unsigned nwords){
+    direct_native=1;
+    int r=wii_voodoo_direct_triangles(header_ea,cmd,words,nwords);
+    direct_native=0;
+    return r;
+}
+#endif
 WII_HOT_wii_voodoo_direct_triangles int wii_voodoo_direct_triangles(uint32_t header_ea,uint32_t cmd,const uint32_t *words,unsigned nwords){
     if(header_ea<0x84000000u||header_ea>=0x86000000u||(header_ea&3)){direct_triangle_reject[0]++;return 0;}
     unsigned off=header_ea-0x84000000u;
