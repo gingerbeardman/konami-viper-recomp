@@ -412,7 +412,7 @@ esac
 # vertices carried in the decode buffer (2.374 -> 2.364 s); hardware, exact.
 case "${WII_LIVE_RSQRT_MEMO_SIZE:-256}" in
     64) ;;
-    256|1024|4096) flags="$flags -DVIPER_WII_RSQRT_MEMO_SIZE=$WII_LIVE_RSQRT_MEMO_SIZE"; output="$output-rsqm$WII_LIVE_RSQRT_MEMO_SIZE" ;;
+    256|1024|4096) n=${WII_LIVE_RSQRT_MEMO_SIZE:-256}; flags="$flags -DVIPER_WII_RSQRT_MEMO_SIZE=$n"; output="$output-rsqm$n" ;;
     *) echo 'WII_LIVE_RSQRT_MEMO_SIZE must be 64, 256, 1024 or 4096' >&2; exit 2 ;;
 esac
 case "${WII_LIVE_PACKET_CARRY:-1}" in
