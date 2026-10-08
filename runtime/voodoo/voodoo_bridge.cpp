@@ -3,6 +3,7 @@
 // Bus conventions match MAME's viper.cpp: BAR0 (0x82000000) -> read/write,
 // BAR1 (0x84000000) -> read_lfb/write_lfb, I/O (0xfe800000) -> read_io/write_io,
 // offsets in 32-bit words, data as little-endian register values.
+#include <atomic>
 #include "emu.h"
 #include "voodoo_banshee.h"
 
@@ -15,6 +16,8 @@ void rt_log(const char *fmt, ...);
 void rt_pace_vblank(void);
 void rt_frame_published(uint64_t count, const uint32_t *pix, int w, int h);
 }
+
+extern "C" unsigned long long voodoo_swap_count(void);
 
 namespace emu_shim { bool g_log_enabled = false; }
 voodoo_fbstats g_fbstats;
@@ -128,6 +131,7 @@ std::vector<u16> s_depth;
 u32 s_depth_mode;
 int s_frame_w, s_frame_h;
 u64 s_frame_count;
+std::atomic<u64> s_frame_swaps, s_shown_swaps;
 
 void publish_frame()
 {
@@ -161,6 +165,7 @@ void publish_frame()
 	s_frame_w = w;
 	s_frame_h = h;
 	s_frame_count++;
+	s_frame_swaps = voodoo_swap_count();
 	{	// debug: RT_VOODOO_VRAMDUMP=path:frame writes the whole VRAM at that frame
 		static const char *dump = getenv("RT_VOODOO_VRAMDUMP");
 		if (dump)
@@ -245,10 +250,21 @@ uint64_t voodoo_get_frame(uint32_t *dst, int max_pixels, int *w, int *h)
 	return s_frame_count;
 }
 
+// recomp: buffer swaps the game had made when the displayed frame was published
+// (lock-free: headless frame dumps draw the overlay while s_frame_lock is held).
+// Once the window has copied a frame, report that frame: the game may publish
+// another before its overlay is drawn.
+extern "C" uint64_t voodoo_frame_swaps(void)
+{
+	u64 shown = s_shown_swaps.load();
+	return shown ? shown : s_frame_swaps.load();
+}
+
 uint64_t voodoo_get_frame_depth(uint32_t *dst, uint16_t *depth, int max_pixels, int *w, int *h, unsigned *mode)
 {
     std::lock_guard<std::mutex> lock(s_frame_lock);
     *w = s_frame_w; *h = s_frame_h; *mode = s_depth_mode;
+    s_shown_swaps = s_frame_swaps.load();
     if (s_frame.size() <= size_t(max_pixels)) {
         memcpy(dst, s_frame.data(), s_frame.size() * 4);
         if (s_depth.size() == s_frame.size()) memcpy(depth, s_depth.data(), s_depth.size() * 2);

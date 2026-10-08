@@ -302,11 +302,46 @@ void enh_track_debug_toggle(void) {
 }
 /* Native view slot zero: a column-major world-to-camera rotation followed by
  * a camera-space translation. Capture after the game builds it, before HUD view. */
+unsigned long long voodoo_swap_count(void);
+uint64_t voodoo_frame_swaps(void);
+/* Views are built a frame ahead of the picture on screen, so each one is
+ * tagged with the swaps made before its frame and drawn with that frame. */
+#define DEBUG_VIEW_RING 8
+static struct {
+    atomic_ullong tag;      /* swaps before the frame, plus one; 0 while written */
+    _Atomic float view[12];
+    atomic_int valid;
+} g_debug_view_ring[DEBUG_VIEW_RING];
+static unsigned g_debug_view_next;
 static void track_debug_view_capture(PPCContext *c) {
     unsigned state=LD32(c->r[2]+0x6c);
-    if(!race_valid(state+0xa4,48)) {atomic_store(&g_debug_view_valid,0);return;}
-    for(unsigned i=0;i<12;i++) atomic_store(&g_debug_view[i],LDF32(state+0xa4+i*4));
-    atomic_store(&g_debug_view_valid,1);
+    unsigned long long swaps=voodoo_swap_count();
+    unsigned slot=g_debug_view_next;
+    /* Several views can be built before one swap; keep the last in one slot. */
+    unsigned prev=(slot+DEBUG_VIEW_RING-1)%DEBUG_VIEW_RING;
+    if(atomic_load(&g_debug_view_ring[prev].tag)==swaps+1) slot=prev;
+    else g_debug_view_next=(slot+1)%DEBUG_VIEW_RING;
+    atomic_store(&g_debug_view_ring[slot].tag,0);
+    int valid=race_valid(state+0xa4,48);
+    if(valid) for(unsigned i=0;i<12;i++) atomic_store(&g_debug_view_ring[slot].view[i],LDF32(state+0xa4+i*4));
+    atomic_store(&g_debug_view_ring[slot].valid,valid);
+    atomic_store(&g_debug_view_ring[slot].tag,swaps+1);
+}
+/* Select the latest view built before the displayed frame's swap. */
+static void track_debug_view_select(void) {
+    unsigned long long shown=voodoo_frame_swaps();
+    int best=-1;unsigned long long best_tag=0;
+    for(int i=0;i<DEBUG_VIEW_RING;i++) {
+        unsigned long long tag=atomic_load(&g_debug_view_ring[i].tag);
+        if(tag && tag<=shown && tag>best_tag) {best=i;best_tag=tag;}
+    }
+    if(best<0) {atomic_store(&g_debug_view_valid,0);return;}
+    float v[12];
+    for(unsigned i=0;i<12;i++) v[i]=atomic_load(&g_debug_view_ring[best].view[i]);
+    int valid=atomic_load(&g_debug_view_ring[best].valid);
+    if(atomic_load(&g_debug_view_ring[best].tag)!=best_tag) return;   /* overwritten meanwhile */
+    for(unsigned i=0;i<12;i++) atomic_store(&g_debug_view[i],v[i]);
+    atomic_store(&g_debug_view_valid,valid);
 }
 /* The slot is rewritten each frame: perspective for the scene, then
  * orthographic for the HUD. Keep the latest perspective terms (after mirror
@@ -884,7 +919,6 @@ static void dim_rect(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1,
 /* frames the game drew (Voodoo buffer swaps) per emulated second: 30 on these games. Distinct
  * pictures would undercount static screens and slow fades. */
 static volatile int g_fps;
-unsigned long long voodoo_swap_count(void);
 
 static void fps_tick(const uint32_t *buf, int w, int h) {
     (void)buf; (void)w; (void)h;
@@ -2101,7 +2135,7 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
     if (g_paused && g_pause_controls) draw_controls(fb, w, h, g_controls_cursor);
     if (enh_menu_active()) draw_menu(fb, w, h);
     if (atomic_load(&g_track_debug) && (race_time_trial() || mission_engaged())) {
-        if(!g_paused) debug_draw_gates(fb,w,h);
+        if(!g_paused) {track_debug_view_select();debug_draw_gates(fb,w,h);}
         char label[128]; int y=16, x=w/2-6*8;
         unsigned gates=atomic_load(&g_debug_gate_count);
         unsigned vehicle=atomic_load(&g_debug_vehicle_kind);
