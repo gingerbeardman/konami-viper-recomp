@@ -26,6 +26,21 @@ void wii_ram_slow_st32(uint32_t ea,uint32_t v) __attribute__((cold,noinline));
 #define NATIVE_SLOW_ST8 wii_ram_slow_st8
 #define NATIVE_SLOW_ST16 wii_ram_slow_st16
 #define NATIVE_SLOW_ST32 wii_ram_slow_st32
+#ifdef VIPER_WII_PRESERVE_SLOW_ALL
+#include "preserve_call.h"
+#undef NATIVE_SLOW_LD8
+#undef NATIVE_SLOW_LD16
+#undef NATIVE_SLOW_LD32
+#undef NATIVE_SLOW_ST8
+#undef NATIVE_SLOW_ST16
+#undef NATIVE_SLOW_ST32
+#define NATIVE_SLOW_LD8(ea) wii_pcall_u_u(wii_ram_slow_ld8, (ea))
+#define NATIVE_SLOW_LD16(ea) wii_pcall_u_u(wii_ram_slow_ld16, (ea))
+#define NATIVE_SLOW_LD32(ea) wii_pcall_u_u(wii_ram_slow_ld32, (ea))
+#define NATIVE_SLOW_ST8(ea, v) wii_pcall_v_uu(wii_ram_slow_st8, (ea), (v))
+#define NATIVE_SLOW_ST16(ea, v) wii_pcall_v_uu(wii_ram_slow_st16, (ea), (v))
+#define NATIVE_SLOW_ST32(ea, v) wii_pcall_v_uu(wii_ram_slow_st32, (ea), (v))
+#endif
 #else
 #define NATIVE_SLOW_LD8 LD8
 #define NATIVE_SLOW_LD16 LD16
@@ -73,6 +88,17 @@ double wii_ram_slow_ldf32(uint32_t ea) __attribute__((cold,noinline));
 void wii_ram_slow_stf32(uint32_t ea, double d) __attribute__((cold,noinline));
 double wii_ram_slow_ldf64(uint32_t ea) __attribute__((cold,noinline));
 void wii_ram_slow_stf64(uint32_t ea, double d) __attribute__((cold,noinline));
+#ifdef VIPER_WII_PRESERVE_SLOW_ALL
+#define WII_SLOW_LDF32(ea) wii_pcall_d_u(wii_ram_slow_ldf32, (ea))
+#define WII_SLOW_STF32(ea, d) wii_pcall_v_ud(wii_ram_slow_stf32, (ea), (d))
+#define WII_SLOW_LDF64(ea) wii_pcall_d_u(wii_ram_slow_ldf64, (ea))
+#define WII_SLOW_STF64(ea, d) wii_pcall_v_ud(wii_ram_slow_stf64, (ea), (d))
+#else
+#define WII_SLOW_LDF32 wii_ram_slow_ldf32
+#define WII_SLOW_STF32 wii_ram_slow_stf32
+#define WII_SLOW_LDF64 wii_ram_slow_ldf64
+#define WII_SLOW_STF64 wii_ram_slow_stf64
+#endif
 typedef float __attribute__((may_alias)) native_aliased_f32;
 typedef double __attribute__((may_alias)) native_aliased_f64;
 /* Bisect switches (hardware RAM divergence 2026-10-08): VIPER_WII_FP_SLOW_PARTS
@@ -83,7 +109,7 @@ typedef double __attribute__((may_alias)) native_aliased_f64;
 static inline double native_ldf32(uint8_t *ram, uint32_t ea) {
 #if VIPER_WII_FP_SLOW_PARTS & 1
     if (LIKELY(NATIVE_FP_IN_RAM(ram, ea, 4))) return (double)*(const native_aliased_f32 *)(void *)(ram + ea);
-    return wii_ram_slow_ldf32(ea);
+    return WII_SLOW_LDF32(ea);
 #else
     if (LIKELY(NATIVE_FP_IN_RAM(ram, ea, 4))) {
         float f; memcpy(&f, __builtin_assume_aligned(ram + ea, 4), 4); return (double)f;
@@ -95,7 +121,7 @@ static inline double native_ldf32_ram(uint8_t *ram, uint32_t ea) { return native
 static inline void native_stf32(uint8_t *ram, uint32_t ea, double d) {
 #if VIPER_WII_FP_SLOW_PARTS & 2
     if (LIKELY(NATIVE_FP_IN_RAM(ram, ea, 4))) { *(native_aliased_f32 *)(void *)(ram + ea) = (float)d; return; }
-    wii_ram_slow_stf32(ea, d);
+    WII_SLOW_STF32(ea, d);
 #else
     float f = (float)d;
     if (LIKELY(NATIVE_FP_IN_RAM(ram, ea, 4))) {
@@ -107,7 +133,7 @@ static inline void native_stf32(uint8_t *ram, uint32_t ea, double d) {
 static inline double native_ldf64(uint8_t *ram, uint32_t ea) {
 #if VIPER_WII_FP_SLOW_PARTS & 4
     if (LIKELY(NATIVE_FP_IN_RAM(ram, ea, 8))) return *(const native_aliased_f64 *)(void *)(ram + ea);
-    return wii_ram_slow_ldf64(ea);
+    return WII_SLOW_LDF64(ea);
 #else
     if (LIKELY(NATIVE_FP_IN_RAM(ram, ea, 8))) {
         double d; memcpy(&d, __builtin_assume_aligned(ram + ea, 8), 8); return d;
@@ -118,7 +144,7 @@ static inline double native_ldf64(uint8_t *ram, uint32_t ea) {
 static inline void native_stf64(uint8_t *ram, uint32_t ea, double d) {
 #if VIPER_WII_FP_SLOW_PARTS & 4
     if (LIKELY(NATIVE_FP_IN_RAM(ram, ea, 8))) { *(native_aliased_f64 *)(void *)(ram + ea) = d; return; }
-    wii_ram_slow_stf64(ea, d);
+    WII_SLOW_STF64(ea, d);
 #else
     if (LIKELY(NATIVE_FP_IN_RAM(ram, ea, 8))) {
         memcpy(__builtin_assume_aligned(ram + ea, 8), &d, 8); return;

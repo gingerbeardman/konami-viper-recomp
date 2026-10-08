@@ -176,9 +176,67 @@ static unsigned direct_n;
 /* The store itself out of line: the inline test is all that is left at the
  * ~100 call sites (device-space guards, SYNC_OUT) of a gathering function. */
 __attribute__((noinline)) static void direct_flush_words(void);
+/* VIPER_WII_DIRECT_LOCAL: the buffer's count and address live in locals of
+ * the function (DIRECT_LOCALS), so GCC keeps them in registers instead of
+ * reloading the statics after every guest RAM store (those go through
+ * may_alias pointers). Every write-back flushes, so the count is 0 whenever
+ * the function returns or calls out, and starts at 0. The out-of-line
+ * writer still takes them from the statics, set just before it runs. */
+#if defined(VIPER_WII_DIRECT_LOCAL)
+#if defined(VIPER_WII_PRESERVE_DTRI)
+#error VIPER_WII_DIRECT_LOCAL and VIPER_WII_PRESERVE_DTRI are exclusive
+#endif
+#define DN dl_n
+#define DEA dl_ea
+#define DIRECT_LOCALS() unsigned dl_n = 0; uint32_t dl_ea = 0
+#define DIRECT_FLUSH_WITH(call) ((dl_n) ? (void)(direct_n = dl_n, direct_ea = dl_ea, dl_n = 0, call) : (void)0)
+#else
+#define DN direct_n
+#define DEA direct_ea
+#define DIRECT_LOCALS() do { } while (0)
+#endif
+#if defined(VIPER_WII_PRESERVE_SLOW) && defined(VIPER_WII_RAM_BASE_LOCAL)
+/* Cold calls through wii/preserve_call.h: the localized values stay in the
+ * volatile registers across them. The fast paths are the accessors' own
+ * (in RAM and aligned); everything else is exactly ST32 (wii_ram_slow_st32). */
+#include "preserve_call.h"
+#if defined(VIPER_WII_DIRECT_LOCAL)
+#define direct_flush() DIRECT_FLUSH_WITH(wii_pcall_v_v(direct_flush_words))
+#else
+static inline void direct_flush(void) {
+    if (direct_n) wii_pcall_v_v(direct_flush_words);
+}
+#endif
+#define DIRECT_ST32_OTHER(ea_, v_) do { \
+    if (LIKELY(NATIVE_IN_RAM(ea_, 4))) RST32(ea_, v_); \
+    else { if (ea_ >= RAM_LIMIT) direct_flush(); wii_pcall_v_uu(wii_ram_slow_st32, ea_, v_); } } while (0)
+/* Slow paths of the R* accessors: each is exactly the original accessor
+ * (wii/ram_access_cold.c), as the R* accessors are for every address. */
+#define DIRECT_SLOW_RLD8(a) wii_pcall_u_u(wii_ram_slow_ld8, (a))
+#define DIRECT_SLOW_RLD16(a) wii_pcall_u_u(wii_ram_slow_ld16, (a))
+#define DIRECT_SLOW_RLD32(a) wii_pcall_u_u(wii_ram_slow_ld32, (a))
+#define DIRECT_SLOW_RLD32LE(a) bswap32(wii_pcall_u_u(wii_ram_slow_ld32, (a)))
+#define DIRECT_SLOW_RLDF32(a) wii_pcall_d_u(wii_ram_slow_ldf32, (a))
+#define DIRECT_SLOW_RLDF64(a) wii_pcall_d_u(wii_ram_slow_ldf64, (a))
+#define DIRECT_SLOW_RST8(a, v) wii_pcall_v_uu(wii_ram_slow_st8, (a), (v))
+#define DIRECT_SLOW_RST16(a, v) wii_pcall_v_uu(wii_ram_slow_st16, (a), (v))
+#define DIRECT_SLOW_ST16LE(a, v) wii_pcall_v_uu(wii_ram_slow_st16, (a), bswap16((uint16_t)(v)))
+#define DIRECT_SLOW_RSTF32(a, d) wii_pcall_v_ud(wii_ram_slow_stf32, (a), (d))
+#define DIRECT_SLOW_RSTF64(a, d) wii_pcall_v_ud(wii_ram_slow_stf64, (a), (d))
+#define DIRECT_SLOW_LOAD(fn, a) DIRECT_SLOW_##fn(a)
+#define DIRECT_SLOW_STORE(fn, a, v) DIRECT_SLOW_##fn(a, v)
+#else
+#if defined(VIPER_WII_DIRECT_LOCAL)
+#define direct_flush() DIRECT_FLUSH_WITH(direct_flush_words())
+#else
 static inline void direct_flush(void) {
     if (direct_n) direct_flush_words();
 }
+#endif
+#define DIRECT_ST32_OTHER(ea_, v_) do { if (ea_ >= RAM_LIMIT) direct_flush(); ST32(ea_, v_); } while (0)
+#define DIRECT_SLOW_LOAD(fn, a) fn(a)
+#define DIRECT_SLOW_STORE(fn, a, v) fn(a, v)
+#endif
 __attribute__((noinline)) static void direct_flush_words(void) {
     unsigned n = direct_n;
     direct_n = 0;
@@ -190,26 +248,67 @@ __attribute__((noinline)) static void direct_flush_words(void) {
 #endif
     for (unsigned i = 0; i < n; i++) ST32(direct_ea + 4 * i, direct_words[i]);
 }
+#if defined(VIPER_WII_PRESERVE_DTRI)
+/* The packet hand-off through wii/preserve_call.h, words and count from the
+ * statics (direct_words is passed as itself). */
+#include "preserve_call.h"
+static int direct_triangles_preserved(uint32_t header_ea, uint32_t cmd) {
+    return wii_voodoo_direct_triangles(header_ea, cmd, direct_words, direct_n);
+}
+#define DIRECT_TRIANGLES(h_, c_, w_, n_) ((int)wii_pcall_u_uu(direct_triangles_preserved, (h_), (c_)))
+#else
+#define DIRECT_TRIANGLES wii_voodoo_direct_triangles
+#endif
 #define DIRECT_ST32(ea_, v_) ({ uint32_t _gea = (ea_), _gv = (v_); \
     if (_gea - 0x84000000u < 0x02000000u) { \
-        if (direct_n && (_gea != direct_ea + 4 * direct_n || direct_n == 150)) direct_flush(); \
-        if (!direct_n) direct_ea = _gea; \
-        direct_words[direct_n++] = _gv; \
-    } else { if (_gea >= RAM_LIMIT) direct_flush(); ST32(_gea, _gv); } })
+        if (DN && (_gea != DEA + 4 * DN || DN == 150)) direct_flush(); \
+        if (!DN) DEA = _gea; \
+        direct_words[DN++] = _gv; \
+    } else DIRECT_ST32_OTHER(_gea, _gv); })
 #define DIRECT_ST32LE(ea_, v_) ({ uint32_t _gea = (ea_), _gv = (v_); \
-    if (direct_n && _gea + 4 == direct_ea && \
-        wii_voodoo_direct_triangles(_gea, _gv, direct_words, direct_n)) direct_n = 0; \
-    else { if (_gea >= RAM_LIMIT) direct_flush(); ST32LE(_gea, _gv); } })
+    if (DN && _gea + 4 == DEA && \
+        DIRECT_TRIANGLES(_gea, _gv, direct_words, DN)) DN = 0; \
+    else DIRECT_ST32_OTHER(_gea, bswap32(_gv)); })
 #define DIRECT_FLUSHED(f) (direct_flush(), f)
 /* One range test on the common path: below RAM_SIZE - 8 the accessor's own
  * in-RAM test is known true; the flush still happens exactly when ea is in
- * device space (>= RAM_LIMIT). */
+ * device space (>= RAM_LIMIT). With VIPER_WII_DIRECT_MASK the test is the
+ * in-RAM-and-aligned mask of VIPER_WII_RAM_MASK_TEST instead, the same
+ * expression as the accessor's own test, so GCC folds that one away. Any
+ * address passing either test is below RAM_LIMIT, so both are exact. */
+#if defined(VIPER_WII_DIRECT_MASK) || defined(VIPER_WII_PRESERVE_SLOW)
+#define DIRECT_SIZE_LD8 1u
+#define DIRECT_SIZE_LD16 2u
+#define DIRECT_SIZE_LD32 4u
+#define DIRECT_SIZE_LD32LE 4u
+#define DIRECT_SIZE_LDF32 4u
+#define DIRECT_SIZE_LDF64 8u
+#define DIRECT_SIZE_ST8 1u
+#define DIRECT_SIZE_ST16 2u
+#define DIRECT_SIZE_ST16LE 2u
+#define DIRECT_SIZE_STF32 4u
+#define DIRECT_SIZE_STF64 8u
+#define DIRECT_SIZE_RLD8 1u
+#define DIRECT_SIZE_RLD16 2u
+#define DIRECT_SIZE_RLD32 4u
+#define DIRECT_SIZE_RLD32LE 4u
+#define DIRECT_SIZE_RLDF32 4u
+#define DIRECT_SIZE_RLDF64 8u
+#define DIRECT_SIZE_RST8 1u
+#define DIRECT_SIZE_RST16 2u
+#define DIRECT_SIZE_RST16LE 2u
+#define DIRECT_SIZE_RSTF32 4u
+#define DIRECT_SIZE_RSTF64 8u
+#define DIRECT_IN_RAM(fn, a) (!((a) & (0xff000000u | (DIRECT_SIZE_##fn - 1u))))
+#else
+#define DIRECT_IN_RAM(fn, a) ((a) <= RAM_SIZE - 8u)
+#endif
 #define DIRECT_LOAD(fn, ea_) ({ uint32_t _gla = (ea_); __typeof__(fn(0)) _glv; \
-    if (LIKELY(_gla <= RAM_SIZE - 8u)) _glv = fn(_gla); \
-    else { if (_gla >= RAM_LIMIT) direct_flush(); _glv = fn(_gla); } _glv; })
+    if (LIKELY(DIRECT_IN_RAM(fn, _gla))) _glv = fn(_gla); \
+    else { if (_gla >= RAM_LIMIT) direct_flush(); _glv = DIRECT_SLOW_LOAD(fn, _gla); } _glv; })
 #define DIRECT_STORE(fn, ea_, v_) ({ uint32_t _gsa = (ea_); \
-    if (LIKELY(_gsa <= RAM_SIZE - 8u)) fn(_gsa, (v_)); \
-    else { if (_gsa >= RAM_LIMIT) direct_flush(); fn(_gsa, (v_)); } })
+    if (LIKELY(DIRECT_IN_RAM(fn, _gsa))) fn(_gsa, (v_)); \
+    else { if (_gsa >= RAM_LIMIT) direct_flush(); DIRECT_SLOW_STORE(fn, _gsa, (v_)); } })
 #endif
 '''
 SCALAR_FALLBACK = ('VIPER_WII_DRIVING_BULK', 'VIPER_WII_DRIVING_TAIL')
@@ -263,6 +362,126 @@ def _gather(body):
     return body
 
 
+LOCAL_NAME = r'(?:(?:r|f|cr)_\d+|ctr_|lr_|xer_(?:ca|so|ov|bc)_)'
+ASSIGN = re.compile(r'\b(' + LOCAL_NAME + r')\s*(?:(?:[-+|&^*/]|<<|>>)?=(?!=)|\+\+|--)|(?:\+\+|--)\s*(' + LOCAL_NAME + r')\b')
+TERMINAL = re.compile(r'^\s*(?:goto L_\w+;|\{ NATIVE_CHK\([^;]*\); goto L_\w+; \}|\{ SYNC_OUT\(\); return; \})\s*$')
+
+
+def _dirty_sites(local):
+    """Per write-back site (each SYNC_OUT() and NATIVE_CHK( in text order),
+    the locals that may differ from the context there: a forward dataflow
+    over the lines, gotos and fall-through (every line falls through unless
+    it is only a goto or a return, so extra edges can only add locals). An
+    assignment makes a local dirty; a SYNC_IN() that runs unconditionally
+    makes all clean (the context and the locals are then equal); write-backs
+    do not clean (they are on the firing or returning paths). A set is the
+    union over all paths, so a local left out is equal to the context on
+    every path: storing it again would change nothing."""
+    lines = local.split('\n')
+    labels = {}
+    for i, l in enumerate(lines):
+        m = re.match(r'\s*(L_\w+):\s*$', l)
+        if m:
+            labels[m.group(1)] = i
+    # Braces opened under if/switch/else are conditional; a SYNC_IN inside
+    # one (or after an unbraced if in the same statement) does not clean.
+    events = []   # per line: (pos, kind, arg)
+    stack = []
+    opened = []   # line of each open brace
+    skips = {}    # conditional block: its opening line -> its closing line
+    site = 0
+    for li, l in enumerate(lines):
+        ev = []
+        for m in re.finditer(r'[{}]|SYNC_OUT\(\)|SYNC_IN\(\)|NATIVE_CHK\(|goto (L_\w+)|' + ASSIGN.pattern, l):
+            t = m.group(0)
+            if t == '{':
+                before = l[:m.start()].rstrip()
+                stack.append(before.endswith(')') or before.endswith('else') or before.endswith(':'))
+                opened.append(li)
+            elif t == '}':
+                if not stack:
+                    return None
+                if stack.pop() and opened[-1] != li:
+                    skips.setdefault(opened[-1], []).append(li)
+                opened.pop()
+            elif t in ('SYNC_OUT()', 'NATIVE_CHK('):
+                ev.append(('site', site)); site += 1
+            elif t == 'SYNC_IN()':
+                stmt = re.split(r'[;{}]', l[:m.start()])[-1]
+                if not any(stack) and 'if' not in stmt:
+                    ev.append(('clean', None))
+            elif t.startswith('goto'):
+                ev.append(('goto', m.group(1)))
+            else:
+                ev.append(('assign', m.group(2) or m.group(3)))
+        events.append(ev)
+    # Preprocessor conditionals: every branch (and the #endif, for none)
+    # also starts from the state before the #if, not only from the end of
+    # the branch above it.
+    extra = {i: list(js) for i, js in skips.items()}
+    cond = []
+    for i, l in enumerate(lines):
+        t = l.strip()
+        if re.match(r'#\s*if', t):
+            cond.append(i)
+        elif re.match(r'#\s*(elif|else|endif)', t):
+            if not cond:
+                return None
+            extra.setdefault(cond[-1], []).append(i)
+            if re.match(r'#\s*endif', t):
+                cond.pop()
+    if cond:
+        return None
+    entry = [frozenset() if i == 0 else None for i in range(len(lines))]
+    sites = [frozenset()] * site
+    work = [0]
+    while work:
+        i = work.pop()
+        cur = entry[i]
+        for kind, arg in events[i]:
+            if kind == 'assign':
+                cur = cur | {arg}
+            elif kind == 'clean':
+                cur = frozenset()
+            elif kind == 'site':
+                sites[arg] = sites[arg] | cur
+            elif kind == 'goto':
+                if arg not in labels:
+                    return None
+                j = labels[arg]
+                if entry[j] is None or not cur <= entry[j]:
+                    entry[j] = cur if entry[j] is None else entry[j] | cur
+                    work.append(j)
+        for j in extra.get(i, ()):
+            if entry[j] is None or not cur <= entry[j]:
+                entry[j] = cur if entry[j] is None else entry[j] | cur
+                work.append(j)
+        if not TERMINAL.match(lines[i]) and i + 1 < len(lines):
+            j = i + 1
+            if entry[j] is None or not cur <= entry[j]:
+                entry[j] = cur if entry[j] is None else entry[j] | cur
+                work.append(j)
+    # Safety net: a write-back or an assignment on a line the flow never
+    # reached means the line model missed a path; keep full write-backs.
+    # Dead code is fine: an unreached line that only follows a goto or a
+    # return, through lines nothing else can enter (no label, case, brace
+    # or preprocessor line), is unreachable in C too.
+    def dead(i):
+        for k in range(i, -1, -1):
+            t = lines[k].strip()
+            if k < i and entry[k] is not None:
+                return bool(TERMINAL.match(lines[k]))
+            if re.search(r'(^|\s)(L_\w+|case\b[^:]*|default):|[{}]|^#', t) and not TERMINAL.match(lines[k]):
+                return False
+            if k < i and TERMINAL.match(lines[k]):
+                return True
+        return False
+    for i, ev in enumerate(events):
+        if entry[i] is None and any(k in ('site', 'assign') for k, _ in ev) and not dead(i):
+            return None
+    return sites
+
+
 def localize(func, gather=False):
     head, brace, body = func.partition('{')
     name = re.match(r'\s*void\s+(\w+)\(', head).group(1)
@@ -313,6 +532,8 @@ def localize(func, gather=False):
     types = {'ctr': 'uint32_t', 'lr': 'uint32_t', 'xer_ca': 'uint8_t', 'xer_so': 'uint8_t',
              'xer_ov': 'uint8_t', 'xer_bc': 'uint8_t'}
     decls += [f'{types[s]} {s}_ = c->{s};' for s in specials]
+    if gather == 'direct':
+        decls.append('DIRECT_LOCALS();')
     # Only locals the function assigns can differ from the context (reloads
     # after calls make the others equal again), so only they are written back.
     assigned = set(re.findall(r'\b((?:r|f|cr)_\d+|ctr_|lr_|xer_(?:ca|so|ov|bc)_)\s*(?:[-+|&^*/]|<<|>>)?=(?!=)', local))
@@ -324,15 +545,51 @@ def localize(func, gather=False):
                     [f'c->{s}={s}_;' for s in specials if f'{s}_' in assigned])
     in_ = ' '.join([f'r_{n}=c->r[{n}];' for n in gprs] + [f'f_{n}=c->f[{n}];' for n in fprs] +
                    [f'cr_{n}=c->cr[{n}];' for n in crs] + [f'{s}_=c->{s};' for s in specials])
+    # VIPER_WII_DIRTY_SYNC: each write-back stores only the locals that may
+    # differ from the context at that site (_dirty_sites).
+    order = ([(f'r_{n}', f'c->r[{n}]=r_{n};') for n in gprs] + [(f'f_{n}', f'c->f[{n}]=f_{n};') for n in fprs] +
+             [(f'cr_{n}', f'c->cr[{n}]=cr_{n};') for n in crs] + [(f'{s}_', f'c->{s}={s}_;') for s in specials])
+    sites = _dirty_sites(local)
+    if sites is not None:
+        it = iter(sites)
+        def site_text(m):
+            d = next(it)
+            st = ' '.join(t for name, t in order if name in d and name in assigned)
+            return 'SYNC_OUT_D(' + st + ')' if m.group(0) == 'SYNC_OUT()' else 'NATIVE_CHK_D(' + st + ', '
+        local = re.sub(r'SYNC_OUT\(\)|NATIVE_CHK\(', site_text, local)
     flush = 'direct_flush(); ' if gather == 'direct' else 'gather_flush(); ' if gather else ''
+    # VIPER_WII_DIRTY_SYNC_CHECK (diagnostic): after a reduced write-back,
+    # any local that still differs from the context (bitwise) was wrongly
+    # left out; log it, then store everything.
+    def differs(name, ctx, typ):
+        if typ == 'double':
+            return f'memcmp(&{ctx}, &{name}, 8)'
+        return f'{ctx} != {name}'
+    check = ' || '.join([differs(f'r_{n}', f'c->r[{n}]', 'u') for n in gprs if f'r_{n}' in assigned] +
+                        [differs(f'f_{n}', f'c->f[{n}]', 'double') for n in fprs if f'f_{n}' in assigned] +
+                        [differs(f'cr_{n}', f'c->cr[{n}]', 'u') for n in crs if f'cr_{n}' in assigned] +
+                        [differs(f'{s}_', f'c->{s}', 'u') for s in specials if f'{s}_' in assigned]) or '0'
     prelude = ((DIRECT_PRELUDE if gather == 'direct' else GATHER_PRELUDE if gather else '') +
                f'#define SYNC_OUT() do {{ {flush}{out_} }} while (0)\n'
                f'#define SYNC_IN() do {{ {in_} }} while (0)\n'
                '#define NATIVE_CHK(pc, n) do { if (UNLIKELY((c->budget -= (n)) <= 0)) { '
-               'SYNC_OUT(); rt_check(c, (pc)); if (c->unwind) return; SYNC_IN(); } } while (0)\n')
+               'SYNC_OUT(); rt_check(c, (pc)); if (c->unwind) return; SYNC_IN(); } } while (0)\n'
+               '#if defined(VIPER_WII_DIRTY_SYNC_CHECK)\n'
+               f'#define SYNC_DIRTY_CHECK() do {{ if ({check}) {{ void rt_log(const char *, ...); rt_log("VIPER WII DIRTY SYNC MISS {name} line %d\\n", __LINE__); }} }} while (0)\n'
+               f'#define SYNC_OUT_D(...) do {{ {flush}__VA_ARGS__ SYNC_DIRTY_CHECK(); {out_} }} while (0)\n'
+               '#define NATIVE_CHK_D(st, pc, n) do { if (UNLIKELY((c->budget -= (n)) <= 0)) { '
+               f'{flush}st SYNC_DIRTY_CHECK(); {out_} rt_check(c, (pc)); if (c->unwind) return; SYNC_IN(); }} }} while (0)\n'
+               '#elif defined(VIPER_WII_DIRTY_SYNC)\n'
+               f'#define SYNC_OUT_D(...) do {{ {flush}__VA_ARGS__ }} while (0)\n'
+               '#define NATIVE_CHK_D(st, pc, n) do { if (UNLIKELY((c->budget -= (n)) <= 0)) { '
+               f'{flush}st rt_check(c, (pc)); if (c->unwind) return; SYNC_IN(); }} }} while (0)\n'
+               '#else\n'
+               '#define SYNC_OUT_D(...) SYNC_OUT()\n'
+               '#define NATIVE_CHK_D(st, pc, n) NATIVE_CHK(pc, n)\n'
+               '#endif\n')
     text = (prelude + head + '{\n    CHK(c, ' + entry.group(1) + ', 0);\n    ' +
             '\n    '.join(decls) + '\n' + local + '}\n'
-            '#undef SYNC_OUT\n#undef SYNC_IN\n#undef NATIVE_CHK\n')
+            '#undef SYNC_OUT\n#undef SYNC_IN\n#undef NATIVE_CHK\n#undef SYNC_OUT_D\n#undef NATIVE_CHK_D\n')
     return text
 
 

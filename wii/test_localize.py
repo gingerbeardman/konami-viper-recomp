@@ -21,6 +21,7 @@ mirrors and device space.
 With --inline-leaf, leaf callees are inlined first (specialize_submission.py).
 Run: python3 wii/test_localize.py [--gather|--direct] [--ram-base] [--inline-leaf] [cases] [function ...]"""
 from pathlib import Path
+import os
 import re
 import subprocess
 import sys
@@ -79,6 +80,8 @@ uint32_t rt_mmio_r32(uint32_t a){fprintf(trace,"R32 %08x\n",a);return a*26544357
 void rt_mmio_w8(uint32_t a,uint32_t v){fprintf(trace,"W8 %08x %02x\n",a,v);}
 void rt_mmio_w16(uint32_t a,uint32_t v){fprintf(trace,"W16 %08x %04x\n",a,v);}
 void rt_mmio_w32(uint32_t a,uint32_t v){fprintf(trace,"W32 %08x %08x\n",a,v);}
+#include <stdarg.h>
+void rt_log(const char *fmt, ...){va_list a;va_start(a,fmt);vprintf(fmt,a);va_end(a);exit(3);}
 void rt_check(PPCContext *c,uint32_t pc){
     fprintf(trace,"CHK %08x %lld\n",pc,(long long)c->budget);
     c->budget+=700;
@@ -206,7 +209,7 @@ with tempfile.TemporaryDirectory() as tmp:
         (tmp / 'localized.c').write_text('#define VIPER_WII_RAM_BASE_LOCAL 1\n' + (tmp / 'localized.c').read_text())
     flags = ['clang', '-O1', '-std=gnu11', '-frounding-math', '-ffp-contract=off', '-fno-strict-aliasing',
              '-Wno-unused-label', '-Wno-unused-variable', '-Wno-unused-but-set-variable',
-             '-Wno-parentheses-equality', '-I' + str(root / 'runtime'), '-I' + str(root / 'generated/gticlub2'), '-I' + str(root / 'wii')]
+             '-Wno-parentheses-equality', '-I' + str(root / 'runtime'), '-I' + str(root / 'generated/gticlub2'), '-I' + str(root / 'wii')] + os.environ.get('LOCALIZE_CFLAGS', '').split()
     objs = []
     for src in (root / 'generated/gticlub2/gl_000.c', root / 'generated/gticlub2/gl_table.c',
                 tmp / 'runtime.c', tmp / 'driver.c', tmp / 'localized.c'):

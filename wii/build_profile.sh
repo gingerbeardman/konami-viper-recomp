@@ -665,6 +665,41 @@ case "${WII_PERF_DIRECT_NO_VRAM:-0}" in
     1) flags="$flags -DVIPER_WII_DIRECT_NO_VRAM"; output="$output-dnovram" ;;
     *) echo 'WII_PERF_DIRECT_NO_VRAM must be 0 or 1' >&2; exit 2 ;;
 esac
+case "${WII_PERF_DIRECT_MASK:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRECT_MASK"; output="$output-dmask" ;;
+    *) echo 'WII_PERF_DIRECT_MASK must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_PRESERVE_SLOW:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_PRESERVE_SLOW"; output="$output-pslow" ;;
+    *) echo 'WII_PERF_PRESERVE_SLOW must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_PRESERVE_RSQRT:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_PRESERVE_RSQRT"; output="$output-prsq" ;;
+    *) echo 'WII_PERF_PRESERVE_RSQRT must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_PRESERVE_DTRI:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_PRESERVE_DTRI"; output="$output-pdtri" ;;
+    *) echo 'WII_PERF_PRESERVE_DTRI must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_DIRTY_SYNC:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRTY_SYNC"; output="$output-dsync" ;;
+    *) echo 'WII_PERF_DIRTY_SYNC must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_DIRECT_LOCAL:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRECT_LOCAL"; output="$output-dlocal" ;;
+    *) echo 'WII_PERF_DIRECT_LOCAL must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_DIRTY_SYNC_CHECK:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRTY_SYNC_CHECK"; output="$output-dsynccheck" ;;
+    *) echo 'WII_PERF_DIRTY_SYNC_CHECK must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;

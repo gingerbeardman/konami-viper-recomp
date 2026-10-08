@@ -30,6 +30,9 @@ extern "C" {
  * remember recent results by the input's exact bits. Only in round-to-nearest
  * (the result can depend on the rounding mode). Empty slots hold the true
  * answer for +0 (bits 0): 1/sqrt(+0) = +inf. */
+#ifdef VIPER_WII_PRESERVE_RSQRT
+#include "preserve_call.h"
+#endif
 typedef struct { uint64_t key; double val; } WiiRsqrtMemo;
 extern WiiRsqrtMemo wii_rsqrt_memo[64];
 static inline double wii_rsqrt_memoized(double x) {
@@ -37,7 +40,13 @@ static inline double wii_rsqrt_memoized(double x) {
     memcpy(&b, &x, sizeof b);
     WiiRsqrtMemo *m = &wii_rsqrt_memo[(unsigned)((b >> 29) ^ (b >> 35) ^ (b >> 41)) & 63];
     if (__builtin_expect(m->key == b && rt_round_nearest, 1)) return m->val;
+#ifdef VIPER_WII_PRESERVE_RSQRT
+    /* The miss through wii/preserve_call.h: callers keep their volatile
+     * registers across it. Same function, same result. */
+    double r = wii_pcall_d_d(wii_rsqrt_exact, x);
+#else
     double r = wii_rsqrt_exact(x);
+#endif
     if (rt_round_nearest) { m->key = b; m->val = r; }
     return r;
 }
