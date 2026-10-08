@@ -373,6 +373,35 @@ case "${WII_LIVE_DIRECT_NO_VRAM:-1}" in
     1) flags="$flags -DVIPER_WII_DIRECT_NO_VRAM"; output="$output-dnovram" ;;
     *) echo 'WII_LIVE_DIRECT_NO_VRAM must be 0 or 1' >&2; exit 2 ;;
 esac
+# f_gl_00028fc4 (the direct FIFO producer) register pressure and FIFO path,
+# all RAM/EFB exact; hardware, cumulative 2026-10-08 (branch wii-port):
+# register-preserving cold calls 2.506 -> 2.458 s, dirty-only write-backs
+# -> 2.423, local and grouped FIFO stores -> 2.377, local budget -> 2.373.
+case "${WII_LIVE_PRESERVE_SLOW:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_PRESERVE_SLOW"; output="$output-pslow" ;;
+    *) echo 'WII_LIVE_PRESERVE_SLOW must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_LIVE_DIRTY_SYNC:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRTY_SYNC"; output="$output-dsync" ;;
+    *) echo 'WII_LIVE_DIRTY_SYNC must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_LIVE_DIRECT_LOCAL:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRECT_LOCAL"; output="$output-dlocal" ;;
+    *) echo 'WII_LIVE_DIRECT_LOCAL must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_LIVE_DIRECT_GROUP:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRECT_GROUP"; output="$output-dgroup" ;;
+    *) echo 'WII_LIVE_DIRECT_GROUP must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_LIVE_DIRECT_BUDGET:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRECT_BUDGET"; output="$output-dbud" ;;
+    *) echo 'WII_LIVE_DIRECT_BUDGET must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_LIVE_DENSE_LR:-1}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_DENSE_LR"; output="$output-denselr" ;;

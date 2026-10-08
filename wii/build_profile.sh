@@ -725,6 +725,11 @@ case "${WII_PERF_INLINE_LEAF_28FC4:-0}" in
     1) flags="$flags -DVIPER_WII_INLINE_LEAF_28FC4"; output="$output-inleaf28" ;;
     *) echo 'WII_PERF_INLINE_LEAF_28FC4 must be 0 or 1' >&2; exit 2 ;;
 esac
+case "${WII_PERF_WATCHDOG:-1}" in
+    1) ;;
+    0) flags="$flags -DVIPER_WII_WATCHDOG_S=0"; output="$output-nowatchdog" ;;
+    *) echo 'WII_PERF_WATCHDOG must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;

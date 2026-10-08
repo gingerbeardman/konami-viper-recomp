@@ -176,7 +176,8 @@ int wii_net_report_send(const char *dir, const char *const *names) {
 static unsigned watchdog_seconds;
 static void *watchdog_main(void *arg) {
     (void)arg;
-    for (unsigned i = 0; i < watchdog_seconds; i++) usleep(1000000);
+    /* One sleep, so the thread never runs during the measured window. */
+    usleep(watchdog_seconds * 1000000u);
     char text[96];
     snprintf(text, sizeof text, "VIPER WII WATCHDOG no result after %u s; returned to the loader\n", watchdog_seconds);
     wii_net_report_text("boot.log", text);

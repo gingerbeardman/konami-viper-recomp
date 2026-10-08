@@ -139,7 +139,16 @@ GATHER_PRELUDE = r'''#ifndef LOCALIZE_GATHER_DEFINED
 #define LOCALIZE_GATHER_DEFINED
 static uint32_t gather_words[150], gather_ea;
 static unsigned gather_n;
+#if defined(VIPER_WII_GATHER_PRESERVE) && defined(VIPER_WII_RAM_BASE_LOCAL)
+#include "preserve_call.h"
+__attribute__((noinline)) static void gather_flush_words(void);
 static inline void gather_flush(void) {
+    if (UNLIKELY(gather_n)) wii_pcall_v_v(gather_flush_words);
+}
+__attribute__((noinline)) static void gather_flush_words(void) {
+#else
+static inline void gather_flush(void) {
+#endif
     if (!gather_n) return;
     unsigned n = gather_n;
     gather_n = 0;
@@ -161,10 +170,56 @@ static inline void gather_flush(void) {
         if (gather_n && (_gea != gather_ea + 4 * gather_n || gather_n == 150)) gather_flush(); \
         if (!gather_n) gather_ea = _gea; \
         gather_words[gather_n++] = bswap32(_gv); \
-    } else { if (_gea >= RAM_LIMIT) gather_flush(); ST32LE(_gea, _gv); } })
+    } else GATHER_ST32LE_OTHER(_gea, _gv); })
+#if defined(VIPER_WII_GATHER_PRESERVE) && defined(VIPER_WII_RAM_BASE_LOCAL)
+#define GATHER_ST32LE_OTHER(ea_, v_) do { \
+    if (LIKELY(NATIVE_IN_RAM(ea_, 4))) RST32(ea_, bswap32(v_)); \
+    else { if (ea_ >= RAM_LIMIT) gather_flush(); wii_pcall_v_uu(wii_ram_slow_st32, ea_, bswap32(v_)); } } while (0)
+#else
+#define GATHER_ST32LE_OTHER(ea_, v_) do { if (ea_ >= RAM_LIMIT) gather_flush(); ST32LE(ea_, v_); } while (0)
+#endif
 #define GATHER_FLUSHED(f) (gather_flush(), f)
+#if defined(VIPER_WII_GATHER_PRESERVE) && defined(VIPER_WII_RAM_BASE_LOCAL)
+/* As the direct prelude's VIPER_WII_PRESERVE_SLOW: the fast path is the
+ * accessor's own in-RAM-and-aligned test (GCC folds the accessor's copy),
+ * and everything else, exactly the original accessor, is a register-
+ * preserving call (wii/preserve_call.h). Device space flushes first. */
+#include "preserve_call.h"
+#define GATHER_SIZE_RLD8 1u
+#define GATHER_SIZE_RLD16 2u
+#define GATHER_SIZE_RLD32 4u
+#define GATHER_SIZE_RLD32LE 4u
+#define GATHER_SIZE_RLDF32 4u
+#define GATHER_SIZE_RLDF64 8u
+#define GATHER_SIZE_RST8 1u
+#define GATHER_SIZE_RST16 2u
+#define GATHER_SIZE_RST32 4u
+#define GATHER_SIZE_ST16LE 2u
+#define GATHER_SIZE_RSTF32 4u
+#define GATHER_SIZE_RSTF64 8u
+#define GATHER_SLOW_RLD8(a) wii_pcall_u_u(wii_ram_slow_ld8, (a))
+#define GATHER_SLOW_RLD16(a) wii_pcall_u_u(wii_ram_slow_ld16, (a))
+#define GATHER_SLOW_RLD32(a) wii_pcall_u_u(wii_ram_slow_ld32, (a))
+#define GATHER_SLOW_RLD32LE(a) bswap32(wii_pcall_u_u(wii_ram_slow_ld32, (a)))
+#define GATHER_SLOW_RLDF32(a) wii_pcall_d_u(wii_ram_slow_ldf32, (a))
+#define GATHER_SLOW_RLDF64(a) wii_pcall_d_u(wii_ram_slow_ldf64, (a))
+#define GATHER_SLOW_RST8(a, v) wii_pcall_v_uu(wii_ram_slow_st8, (a), (v))
+#define GATHER_SLOW_RST16(a, v) wii_pcall_v_uu(wii_ram_slow_st16, (a), (v))
+#define GATHER_SLOW_RST32(a, v) wii_pcall_v_uu(wii_ram_slow_st32, (a), (v))
+#define GATHER_SLOW_ST16LE(a, v) wii_pcall_v_uu(wii_ram_slow_st16, (a), bswap16((uint16_t)(v)))
+#define GATHER_SLOW_RSTF32(a, d) wii_pcall_v_ud(wii_ram_slow_stf32, (a), (d))
+#define GATHER_SLOW_RSTF64(a, d) wii_pcall_v_ud(wii_ram_slow_stf64, (a), (d))
+#define GATHER_IN_RAM(fn, a) (!((a) & (0xff000000u | (GATHER_SIZE_##fn - 1u))))
+#define GATHER_LOAD(fn, ea_) ({ uint32_t _gla = (ea_); __typeof__(fn(0)) _glv; \
+    if (LIKELY(GATHER_IN_RAM(fn, _gla))) _glv = fn(_gla); \
+    else { if (_gla >= RAM_LIMIT) gather_flush(); _glv = GATHER_SLOW_##fn(_gla); } _glv; })
+#define GATHER_STORE(fn, ea_, v_) ({ uint32_t _gsa = (ea_); \
+    if (LIKELY(GATHER_IN_RAM(fn, _gsa))) fn(_gsa, (v_)); \
+    else { if (_gsa >= RAM_LIMIT) gather_flush(); GATHER_SLOW_##fn(_gsa, (v_)); } })
+#else
 #define GATHER_LOAD(fn, ea_) ({ uint32_t _gla = (ea_); if (UNLIKELY(_gla >= RAM_LIMIT)) gather_flush(); fn(_gla); })
 #define GATHER_STORE(fn, ea_, v_) ({ uint32_t _gsa = (ea_); if (UNLIKELY(_gsa >= RAM_LIMIT)) gather_flush(); fn(_gsa, (v_)); })
+#endif
 #endif
 '''
 
