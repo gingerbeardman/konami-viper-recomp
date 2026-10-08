@@ -1,5 +1,6 @@
 """C code generation for recompiled PPC functions (runtime ABI: runtime/ppc_rt.h)."""
 import os
+import hashlib
 
 # debug probes: RECOMP_PROBES=addr,addr inserts a TRACE point (breakpoint-capable) before those insns
 PROBES = {int(x, 16) for x in os.environ.get('RECOMP_PROBES', '').split(',') if x}
@@ -116,6 +117,10 @@ class Emitter:
             self.w(f"goto L_{fn.entry:08x};")   # body contains code below the entry point
         # cycle accounting: each basic block charges its own instruction count when entered
         addrs = sorted(fn.insns)
+        idle_worker = (fn.name == 'f_g_00045dd8' and CYCLE_SCALE == 1 and
+            hashlib.sha256(b''.join(self.mod.word(a).to_bytes(4, 'big')
+                for a in addrs)).hexdigest() ==
+            '2fc30bc25e373a416dc3f639c01bb080467d1c2743b4f056a94700cc06cc90d8')
         starts = {fn.entry} | set(fn.labels)
         for a in addrs:
             i = fn.insns[a]
@@ -138,6 +143,10 @@ class Emitter:
             if a in fn.labels or a == fn.entry:
                 self.out.append(f"  L_{a:08x}:")
                 self.w(f"TRACE(c, {h(a)});")
+                if idle_worker and a == 0x45e1c:
+                    self.out.append('#if defined(VIPER_WII_IDLE_BATCH) && !defined(RT_TRACE) && !defined(VIPER_MEMORY_AUDIT)')
+                    self.w('rt_idle_worker_batch(c);')
+                    self.out.append('#endif')
             if a in blen:
                 self.w(f"c->budget -= {blen[a] * CYCLE_SCALE};")
             if i is None:
@@ -656,7 +665,7 @@ class Emitter:
     def i_fsqrt(self, i): self.fop(i, f"sqrt({F(i.rb)})", False)
     def i_fsqrts(self, i): self.fop(i, f"sqrt({F(i.rb)})", True)
     def i_fres(self, i): self.fop(i, f"1.0 / {F(i.rb)}", True)
-    def i_frsqrte(self, i): self.fop(i, f"1.0 / sqrt({F(i.rb)})", False)
+    def i_frsqrte(self, i): self.fop(i, f"rt_frsqrte({F(i.rb)})", False)
     def i_frsp(self, i): self.fop(i, F(i.rb), True)
     def i_fmr(self, i): self.fop(i, F(i.rb), False)
     def i_fneg(self, i): self.fop(i, f"-{F(i.rb)}", False)

@@ -23,6 +23,11 @@ void rt_sched_at(uint64_t cycle, SchedCb cb, void *arg);
 void rt_sched_cancel(SchedCb cb, void *arg);
 uint64_t rt_sched_next(void);
 void rt_sched_run(uint64_t now);
+#if defined(VIPER_WII) && defined(VIPER_WII_GX_PLANE_PROFILE)
+void rt_wii_lookup_profile(uint64_t *us,uint64_t *calls);
+uint64_t rt_wii_profile_ticks(void);
+uint64_t rt_wii_profile_microseconds(uint64_t ticks);
+#endif
 
 /* dispatch / fibers */
 void rt_register_module(const RtModuleInfo *m);

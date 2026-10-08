@@ -13,22 +13,48 @@
  * Fibers are host threads that pass a baton, so exactly one runs at a time.
  */
 #include "runtime.h"
+#ifdef VIPER_WII_CR_UNPACK
+#include "../wii/cr_unpack.h"
+#endif
+#ifdef VIPER_WII
+#include "../wii/thread.h"
+#else
 #include <pthread.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <fenv.h>
+#if defined(VIPER_WII) && defined(VIPER_WII_GX_PLANE_PROFILE)
+static uint64_t lookup_ticks,lookup_calls;
+void rt_wii_lookup_profile(uint64_t *us,uint64_t *calls){
+    *us=rt_wii_profile_microseconds(lookup_ticks);*calls=lookup_calls;
+}
+#endif
 
 PPCContext g_ctx;
 
 /* ============================================================ dispatch */
+#ifndef DISP_BITS
 #define DISP_BITS 16
+#endif
 #define DISP_SIZE (1u << DISP_BITS)
 typedef struct DispNode { const RtFunc *f; const RtModuleInfo *m; struct DispNode *next; } DispNode;
 static DispNode *g_disp[DISP_SIZE];
 
 static inline unsigned disp_hash(uint32_t a) { return (a * 2654435761u) >> (32 - DISP_BITS); }
 
+#ifdef VIPER_LOOKUP_CACHE
+/* (address, first code word) -> function, for targets with exactly one table
+ * entry of that address and first word: lookup_impl then returns it without
+ * a residency test, so the result depends on nothing else. Ambiguous overlay
+ * targets and patched code are never cached; registering a module clears it. */
+#define LOOKUP_CACHE_SIZE 1024u
+static struct { uint32_t addr, word; RtFn fn; } lookup_cache[LOOKUP_CACHE_SIZE];
+#endif
 void rt_register_module(const RtModuleInfo *m) {
+#ifdef VIPER_LOOKUP_CACHE
+    memset(lookup_cache, 0, sizeof lookup_cache);
+#endif
     for (unsigned i = 0; i < m->nfuncs; i++) {
         DispNode *n = (DispNode *)malloc(sizeof *n);
         n->f = &m->funcs[i];
@@ -47,8 +73,13 @@ static int module_resident(const RtModuleInfo *m) {
     return 1;
 }
 
-RtFn rt_lookup(uint32_t addr) {
+static RtFn lookup_impl(uint32_t addr) {
     uint32_t w = (addr < RAM_LIMIT) ? LD32(addr) : 0;
+#ifdef VIPER_LOOKUP_CACHE
+    unsigned slot = (addr >> 2) & (LOOKUP_CACHE_SIZE - 1);
+    if (LIKELY(lookup_cache[slot].fn && lookup_cache[slot].addr == addr && lookup_cache[slot].word == w))
+        return lookup_cache[slot].fn;
+#endif
     RtFn any = NULL, match = NULL;
     int nmatch = 0;
     for (DispNode *n = g_disp[disp_hash(addr)]; n; n = n->next) {
@@ -59,6 +90,11 @@ RtFn rt_lookup(uint32_t addr) {
         }
         any = n->f->fn;
     }
+#ifdef VIPER_LOOKUP_CACHE
+    if (match && nmatch == 1) {
+        lookup_cache[slot].addr = addr; lookup_cache[slot].word = w; lookup_cache[slot].fn = match;
+    }
+#endif
     if (match) return match;
     if (any && addr < RAM_LIMIT) {
         static uint32_t warned[64]; static int nw;
@@ -67,6 +103,17 @@ RtFn rt_lookup(uint32_t addr) {
         if (!seen && nw < 64) { warned[nw++] = addr; rt_log("warning: code at %08x modified in RAM (now %08x)\n", addr, w); }
     }
     return any; /* code in RAM differs (patched?) - still better than nothing */
+}
+
+RtFn rt_lookup(uint32_t addr) {
+#if defined(VIPER_WII) && defined(VIPER_WII_GX_PLANE_PROFILE)
+    uint64_t start=rt_wii_profile_ticks();
+    RtFn result=lookup_impl(addr);
+    lookup_ticks+=rt_wii_profile_ticks()-start;lookup_calls++;
+    return result;
+#else
+    return lookup_impl(addr);
+#endif
 }
 
 static void dispatch_miss(PPCContext *c, uint32_t target) {
@@ -171,8 +218,14 @@ static int g_nfibers;
 
 static void apply_rounding(uint32_t fpscr);
 
+#ifdef VIPER_FIBER_COUNT
+uint64_t rt_fiber_switches;   /* diagnostic: guest thread switches */
+#endif
 static void baton_to(Fiber *to) {
     /* called with g_lock held by the running fiber `self` */
+#ifdef VIPER_FIBER_COUNT
+    rt_fiber_switches++;
+#endif
     Fiber *self = g_cur;
     self->running = 0;
     to->running = 1;
@@ -184,8 +237,20 @@ static void baton_to(Fiber *to) {
     apply_rounding(g_ctx.fpscr);
 }
 
+#ifdef VIPER_WII_HEAP_POISON
+/* Test only: hardware does not clear memory, so a fresh fiber stack holds
+ * whatever the previous app left there (Dolphin starts zeroed). Fill the
+ * unused stack with junk so reads of never-written stack slots show up. */
+static __attribute__((noinline)) void poison_stack(void) {
+    volatile uint32_t junk[(100u << 10) / 4];
+    for (unsigned i = 0; i < sizeof junk / 4; i++) junk[i] = (i & 1) ? 0x66001000u : 0x61000000u;
+}
+#endif
 static void *fiber_main(void *arg) {
     Fiber *f = (Fiber *)arg;
+#ifdef VIPER_WII_HEAP_POISON
+    poison_stack();
+#endif
     PPCContext *c = &g_ctx;
     pthread_mutex_lock(&g_lock);
     for (;;) {
@@ -212,7 +277,11 @@ static void *fiber_main(void *arg) {
 static Fiber *fiber_new(void) {
     Fiber *f = (Fiber *)calloc(1, sizeof *f);
     f->id = g_nfibers++;
+#ifdef VIPER_WII
+    if (pthread_cond_init(&f->cv, NULL)) rt_fatal("cannot initialize Wii fiber condition");
+#else
     pthread_cond_init(&f->cv, NULL);
+#endif
     f->next = g_fibers;
     g_fibers = f;
     return f;
@@ -231,8 +300,19 @@ static Fiber *fiber_spawn(uint32_t pc) {
     f->start_pc = pc;
     pthread_attr_t at;
     pthread_attr_init(&at);
-    pthread_attr_setstacksize(&at, 8u << 20);
-    pthread_create(&f->th, &at, fiber_main, f);
+#ifndef VIPER_FIBER_STACK_SIZE
+#ifdef VIPER_WII
+#define VIPER_FIBER_STACK_SIZE (128u << 10)
+#else
+#define VIPER_FIBER_STACK_SIZE (8u << 20)
+#endif
+#endif
+#ifdef VIPER_WII
+    if (pthread_attr_setstacksize(&at, VIPER_FIBER_STACK_SIZE)) rt_fatal("Wii fiber stack must be 128 KiB");
+#else
+    pthread_attr_setstacksize(&at, VIPER_FIBER_STACK_SIZE);
+#endif
+    if (pthread_create(&f->th, &at, fiber_main, f)) rt_fatal("cannot create guest task fiber");
     pthread_attr_destroy(&at);
     if (rt_verbose()) rt_log("fiber %d created for pc %08x\n", f->id, pc);
     return f;
@@ -241,6 +321,9 @@ static Fiber *fiber_spawn(uint32_t pc) {
 /* Start guest execution at `pc` on a fiber; the calling (host main) thread returns
  * immediately and stays free for the frontend. */
 void rt_start(uint32_t pc) {
+#ifdef VIPER_WII
+    if (viper_wii_mutex_prepare(&g_lock)) rt_fatal("cannot initialize Wii fiber mutex");
+#endif
     pthread_mutex_lock(&g_lock);
     Fiber *f = fiber_spawn(pc);
     f->running = 1;
@@ -387,7 +470,7 @@ static void deliver(PPCContext *c, uint32_t pc) {
     }
 }
 
-/* virtual-time profiler (RT_PROFILE=start_seconds): cycles attributed to checkpoint PCs */
+/* Host-only virtual-time profiler; native uses aggregate device timers. */
 #define PROF_SIZE 8192
 static uint32_t g_prof_pc[PROF_SIZE];
 static uint64_t g_prof_cyc[PROF_SIZE];
@@ -413,6 +496,7 @@ void rt_profile_dump(void) {
     }
 }
 
+
 void rt_check(PPCContext *c, uint32_t pc) {
     if (UNLIKELY(g_prof_start != -1)) {
         if (g_prof_start == -2) g_prof_start = getenv("RT_PROFILE") ? atof(getenv("RT_PROFILE")) : -1;
@@ -437,7 +521,30 @@ void rt_mtmsr(PPCContext *c, uint32_t v, uint32_t next_pc) {
 
 /* timebase: bus clock / 4 ; bus = 2 x 33.8688 MHz, core = 6 x 33.8688 MHz */
 #define CYCLES_PER_TB 12
+#ifdef VIPER_MFTB_INCREMENTAL
+/* now / 12 without a 64-bit division (a libgcc call on 32-bit hosts): keep
+ * the last quotient and remainder and divide only the step since then,
+ * usually a few thousand cycles. Exactly now / 12; any backwards or huge
+ * step takes the full division. */
+static uint64_t tb_now, tb_quot;
+static uint32_t tb_rem;
+static uint64_t cycles_to_tb(uint64_t now) {
+    uint64_t step = now - tb_now;
+    if (LIKELY(now >= tb_now && step < 0x80000000u)) {
+        uint32_t d = (uint32_t)step + tb_rem;
+        tb_quot += d / CYCLES_PER_TB;
+        tb_rem = d % CYCLES_PER_TB;
+    } else {
+        tb_quot = now / CYCLES_PER_TB;
+        tb_rem = (uint32_t)(now % CYCLES_PER_TB);
+    }
+    tb_now = now;
+    return tb_quot;
+}
+uint64_t rt_timebase(void) { return g_ctx.tb_base + cycles_to_tb(rt_now()); }
+#else
 uint64_t rt_timebase(void) { return g_ctx.tb_base + rt_now() / CYCLES_PER_TB; }
+#endif
 
 uint32_t rt_mftb(PPCContext *c, int tbr) {
     (void)c;
@@ -477,6 +584,7 @@ void rt_mtspr(PPCContext *c, int spr, uint32_t v) {
     }
 }
 
+#if !(defined(VIPER_WII_INLINE_HELPERS) && defined(VIPER_WII))
 uint32_t rt_cr_pack(PPCContext *c) {
     uint32_t v = 0;
     for (int i = 0; i < 8; i++) v |= (uint32_t)(c->cr[i] & 15) << (28 - 4 * i);
@@ -484,9 +592,14 @@ uint32_t rt_cr_pack(PPCContext *c) {
 }
 
 void rt_cr_unpack(PPCContext *c, uint32_t v, uint32_t crm) {
+#ifdef VIPER_WII_CR_UNPACK
+    wii_cr_unpack(c, v, crm);
+#else
     for (int i = 0; i < 8; i++)
         if (crm & (0x80u >> i)) c->cr[i] = (v >> (28 - 4 * i)) & 15;
+#endif
 }
+#endif
 
 uint32_t rt_xer_pack(PPCContext *c) {
     return ((uint32_t)c->xer_so << 31) | ((uint32_t)c->xer_ov << 30) | ((uint32_t)c->xer_ca << 29) | c->xer_bc;
@@ -521,11 +634,34 @@ uint32_t rt_sraw(PPCContext *c, uint32_t v, uint32_t n) {
 void rt_dcbz(PPCContext *c, uint32_t ea) {
     (void)c;
     ea &= ~31u;
-    if (ea < RAM_LIMIT) memset(g_ram + (ea & RAM_MASK), 0, 32);
+    if (ea < RAM_LIMIT) {
+        MEMORY_ACCESS(ea & RAM_MASK, 32, 1);
+        memset(g_ram + (ea & RAM_MASK), 0, 32);
+    }
     else for (int i = 0; i < 32; i += 4) ST32(ea + i, 0);
 }
 
+#ifdef VIPER_INLINE_STRING_HELPERS
+void rt_lswi_slow(PPCContext *c, uint32_t ea, int rd, int nb) {
+#else
 void rt_lswi(PPCContext *c, uint32_t ea, int rd, int nb) {
+#endif
+#if defined(VIPER_WII_STRING_WORDS) && !defined(VIPER_MEMORY_AUDIT)
+    if(nb>0&&ea<RAM_LIMIT&&(unsigned)nb<=RAM_LIMIT-ea&&
+       (unsigned)nb<=RAM_SIZE-(ea&RAM_MASK)){
+        int n=0,r=rd&31;
+        for(;n+4<=nb;n+=4,r=(r+1)&31){
+            uint32_t value;memcpy(&value,g_ram+(ea&RAM_MASK)+n,4);
+            c->r[r]=guest_be32(value);
+        }
+        if(n<nb){
+            uint32_t value=0;
+            for(int i=0;n+i<nb;i++)value|=(uint32_t)g_ram[(ea&RAM_MASK)+n+i]<<(24-8*i);
+            c->r[r]=value;
+        }
+        return;
+    }
+#endif
     int r = (rd - 1) & 31;
     for (int n = 0; n < nb; n++) {
         if ((n & 3) == 0) { r = (r + 1) & 31; c->r[r] = 0; }
@@ -533,7 +669,22 @@ void rt_lswi(PPCContext *c, uint32_t ea, int rd, int nb) {
     }
 }
 
+#ifdef VIPER_INLINE_STRING_HELPERS
+void rt_stswi_slow(PPCContext *c, uint32_t ea, int rs, int nb) {
+#else
 void rt_stswi(PPCContext *c, uint32_t ea, int rs, int nb) {
+#endif
+#if defined(VIPER_WII_STRING_WORDS) && !defined(VIPER_MEMORY_AUDIT)
+    if(nb>0&&ea<RAM_LIMIT&&(unsigned)nb<=RAM_LIMIT-ea&&
+       (unsigned)nb<=RAM_SIZE-(ea&RAM_MASK)){
+        int n=0,r=rs&31;
+        for(;n+4<=nb;n+=4,r=(r+1)&31){
+            uint32_t value=guest_be32(c->r[r]);memcpy(g_ram+(ea&RAM_MASK)+n,&value,4);
+        }
+        for(int i=0;n+i<nb;i++)g_ram[(ea&RAM_MASK)+n+i]=(uint8_t)(c->r[r]>>(24-8*i));
+        return;
+    }
+#endif
     int r = (rs - 1) & 31;
     for (int n = 0; n < nb; n++) {
         if ((n & 3) == 0) r = (r + 1) & 31;
@@ -542,6 +693,7 @@ void rt_stswi(PPCContext *c, uint32_t ea, int rs, int nb) {
 }
 
 /* ============================================================ FPU */
+#if !(defined(VIPER_WII_NATIVE_FCTIW) && defined(VIPER_WII))
 double rt_fctiw(PPCContext *c, double v, int trunc) {
     int32_t r;
     if (v != v) r = (int32_t)0x80000000;
@@ -558,6 +710,7 @@ double rt_fctiw(PPCContext *c, double v, int trunc) {
     }
     return BITS_FPR(0xfff8000000000000ull | (uint32_t)r);
 }
+#endif
 
 void rt_mtfsf(PPCContext *c, uint32_t fm, uint32_t v) {
     uint32_t mask = 0;
@@ -567,8 +720,15 @@ void rt_mtfsf(PPCContext *c, uint32_t fm, uint32_t v) {
     rt_fpscr_changed(c);
 }
 
+/* Host is in round-to-nearest; exact fast paths (wii/rsqrt_exact.h) check it. */
+int rt_round_nearest = 1;
+#if defined(VIPER_WII_EXACT_RSQRT) && defined(VIPER_WII) && defined(VIPER_WII_RSQRT_MEMO)
+WiiRsqrtMemo wii_rsqrt_memo[64] = {[0 ... 63] = {0, __builtin_inf()}};
+#endif
+
 /* PPC FPSCR[RN] -> host rounding mode (per host thread, re-applied on fiber switches) */
 static void apply_rounding(uint32_t fpscr) {
+    rt_round_nearest = (fpscr & 3) == 0;
     static const int modes[4] = {FE_TONEAREST, FE_TOWARDZERO, FE_UPWARD, FE_DOWNWARD};
     fesetround(modes[fpscr & 3]);
 }

@@ -42,9 +42,41 @@ static struct {
     uint32_t iack, svr, eicr, pctpr;
     uint32_t gt_base[4];
     int gt_enable[4];
+#ifdef VIPER_SPARSE_EPIC_RAW
+    uint32_t *raw_pages[256]; /* Full address space, lazy 1 KiB pages. */
+#else
     uint32_t raw[0x40000 / 4];     /* backing store for unimplemented registers */
+#endif
     int line;
 } ep;
+
+/* Preserve fallback registers and partial-write RMW across the whole window. */
+static uint32_t epic_raw_read(uint32_t off) {
+    if (off<0x40000 || off>=0x80000) return 0;
+    unsigned word=(off-0x40000)>>2;
+#ifdef VIPER_SPARSE_EPIC_RAW
+    const uint32_t *page=ep.raw_pages[word>>8];
+    return page ? page[word&255] : 0;
+#else
+    return ep.raw[word];
+#endif
+}
+static void epic_raw_write(uint32_t off,uint32_t value) {
+    if (off<0x40000 || off>=0x80000) return;
+    unsigned word=(off-0x40000)>>2;
+#ifdef VIPER_SPARSE_EPIC_RAW
+    uint32_t *page=ep.raw_pages[word>>8];
+    if (!page) {
+        if (!value) return;
+        page=calloc(256,sizeof *page);
+        if (!page) rt_fatal("EPIC raw register allocation failed");
+        ep.raw_pages[word>>8]=page;
+    }
+    page[word&255]=value;
+#else
+    ep.raw[word]=value;
+#endif
+}
 
 static uint64_t g_irq_raised[EPIC_NUM], g_irq_taken[EPIC_NUM];
 
@@ -121,13 +153,13 @@ static uint32_t epic_reg_read(uint32_t off) {
         epic_update();
         return ep.active_irq >= 0 ? ep.iack : ep.svr;
     }
-    if (off >= 0x40000 && off < 0x80000) return ep.raw[(off - 0x40000) >> 2];
+    if (off >= 0x40000 && off < 0x80000) return epic_raw_read(off);
     return 0;
 }
 
 static void epic_reg_write(uint32_t off, uint32_t v) {
-    if (off >= 0x40000 && off < 0x80000) ep.raw[(off - 0x40000) >> 2] = v;
-    if (off == 0x41020) { ep.raw[(off - 0x40000) >> 2] = v & ~0x80000000u; return; }  /* GCR reset completes at once */
+    if (off >= 0x40000 && off < 0x80000) epic_raw_write(off,v);
+    if (off == 0x41020) { epic_raw_write(off,v & ~0x80000000u); return; }  /* GCR reset completes at once */
     if (off == 0x41030) { ep.eicr = v; if (v & (1u << 27)) rt_log("EPIC: serial interrupt mode requested\n"); return; }
     if (off == 0x410e0) { ep.svr = v & 0xff; return; }
     if (off >= 0x41110 && off < 0x41210 && ((off - 0x41110) & 0x3f) == 0x00) {
@@ -156,6 +188,9 @@ static void epic_reg_write(uint32_t off, uint32_t v) {
 }
 
 static void epic_init(void) {
+#ifdef VIPER_SPARSE_EPIC_RAW
+    for (unsigned i=0;i<256;i++) free(ep.raw_pages[i]);
+#endif
     memset(&ep, 0, sizeof ep);
     for (int i = 0; i < EPIC_NUM; i++) ep.irq[i].mask = 1;
     ep.active_irq = -1;
@@ -198,7 +233,12 @@ static void ffb_update(void) {
     g_analog[0] = (int16_t)g_ffb_pos;
 }
 
+#ifdef VIPER_WII
+void frontend_set_motor(uint8_t command); /* Wii Remote rumble (wii/main.c) */
+static void motor_write(uint8_t v) { ffb_update(); g_motor = v; frontend_set_motor(v); }
+#else
 static void motor_write(uint8_t v) { ffb_update(); g_motor = v; }
+#endif
 
 static void i2c_done(void *arg) {
     (void)arg;
@@ -287,7 +327,7 @@ static void eumb_write(uint32_t off, int size, uint32_t v) {
     }
     if (off >= 0x40000 && off < 0x80000) {
         uint32_t r = off & ~3u;
-        uint32_t old = (r >= 0x40000 && r < 0x80000) ? ep.raw[(r - 0x40000) >> 2] : 0;
+        uint32_t old = (r >= 0x40000 && r < 0x80000) ? epic_raw_read(r) : 0;
         if (size != 4) old = epic_reg_read(r);
         epic_reg_write(r, le_bus_write(old, (int)(off & 3), size, v));
         return;
@@ -349,7 +389,8 @@ static struct {
     uint32_t nsect;
     int ide_mode;
     uint8_t feature, count, sector, cyl_lo, cyl_hi, head, status, error, devctl;
-    uint8_t buf[SECTOR * 256];
+    /* Multi-sector commands refill this single sector at each boundary. */
+    uint8_t buf[SECTOR];
     int buf_pos, buf_len;            /* in bytes */
     int remaining;                   /* sectors left in the current command */
     uint32_t lba;
@@ -660,8 +701,27 @@ static void rtc_tick(void *arg) {
 
 static void rtc_init(void) {
     time_t t = time(NULL);
+#if defined(VIPER_WII) && defined(VIPER_WII_SCRIPTED_RACE)
+    /* Scripted renderer/cache comparisons need reproducible guest RAM. Keep
+     * the interactive port on the live clock; this epoch is diagnostic only. */
+    t=(time_t)1791103223;
+#endif
+#ifdef VIPER_DEVICE_TEST
+    /* Reproducible host device comparisons; native/desktop RTC stays live. */
+    const char *fixed=getenv("VIPER_RTC_EPOCH");
+    if (fixed) {
+        char *end;
+        long long value=strtoll(fixed,&end,10);
+        if (!*fixed || *end || value<0 || value>4102444800LL) rt_fatal("invalid diagnostic RTC epoch");
+        t=(time_t)value;
+    }
+#endif
     struct tm tm;
+#if defined(VIPER_WII) && defined(VIPER_WII_SCRIPTED_RACE)
+    gmtime_r(&t, &tm);
+#else
     localtime_r(&t, &tm);
+#endif
     rtc.control = 0;
     rtc.seconds = bcd(tm.tm_sec); rtc.minutes = bcd(tm.tm_min); rtc.hours = bcd(tm.tm_hour);
     rtc.day = bcd(tm.tm_wday + 1); rtc.date = bcd(tm.tm_mday); rtc.month = bcd(tm.tm_mon + 1);
@@ -935,6 +995,7 @@ static void sound_tick(void *arg) {
     rt_sched_at(rt_now() + (uint64_t)(CPU_HZ * 256.0 / 44100.0), sound_tick, NULL);
     if (!g_sound_irq_enabled) return;
     epic_raise(EPIC_IRQ3);
+    MEMORY_ACCESS(g_sound_buf, 0x800, 0);
     audio_push_block(g_ram + g_sound_buf);
     g_sound_buf ^= 0x800;
 }
@@ -1016,15 +1077,43 @@ static int mmio_logging_ea(uint32_t ea) {
     if (ea < g_mmio_lo || ea > g_mmio_hi) return 0;
     return g_mmio_log > 0 ? (g_mmio_log--, 1) : 0;
 }
-#define mmio_logging() mmio_logging_ea(ea)
+/* Preserve lazy environment initialization and log limits, but avoid calling
+ * the range-check helper on every bus access once logging is disabled. */
+#define mmio_logging() (g_mmio_log == 0 ? 0 : mmio_logging_ea(ea))
 static uint32_t hw_read_(uint32_t ea, int size);
 static void hw_write_(uint32_t ea, int size, uint32_t v);
+#ifdef VIPER_WII_MMIO_CENSUS
+/* Diagnostic: MMIO accesses by guest region (ea>>20) and host call site. */
+#define MMIO_CENSUS_SLOTS 4096
+static struct { uint32_t key; void *site; uint64_t n; } mmio_census[MMIO_CENSUS_SLOTS];
+static uint64_t mmio_census_dropped;
+static void mmio_census_hit(uint32_t key, void *site) {
+    unsigned h = (key * 2654435761u ^ (uint32_t)(uintptr_t)site * 40503u) % MMIO_CENSUS_SLOTS;
+    for (unsigned i = 0; i < MMIO_CENSUS_SLOTS; i++, h = (h + 1) % MMIO_CENSUS_SLOTS) {
+        if (mmio_census[h].n && (mmio_census[h].key != key || mmio_census[h].site != site)) continue;
+        mmio_census[h].key = key; mmio_census[h].site = site; mmio_census[h].n++; return;
+    }
+    mmio_census_dropped++;
+}
+void hw_mmio_census_log(void) {
+    rt_log("VIPER MMIO CENSUS dropped=%llu\n", (unsigned long long)mmio_census_dropped);
+    for (unsigned i = 0; i < MMIO_CENSUS_SLOTS; i++) if (mmio_census[i].n)
+        rt_log("VIPER MMIO CENSUS %s region=%03x site=%08lx n=%llu\n", (mmio_census[i].key >> 31) ? "W" : "R",
+               mmio_census[i].key & 0xfff, (unsigned long)(uintptr_t)mmio_census[i].site,
+               (unsigned long long)mmio_census[i].n);
+}
+#define MMIO_CENSUS(write, ea) mmio_census_hit(((uint32_t)(write) << 31) | ((ea) >> 20), __builtin_return_address(0))
+#else
+#define MMIO_CENSUS(write, ea) ((void)0)
+#endif
 uint32_t hw_read(uint32_t ea, int size) {
+    MMIO_CENSUS(0, ea);
     uint32_t v = hw_read_(ea, size);
     if (mmio_logging()) rt_log("mmio R%d %08x -> %0*x (lr=%08x)\n", size * 8, ea, size * 2, v, g_ctx.lr);
     return v;
 }
 void hw_write(uint32_t ea, int size, uint32_t v) {
+    MMIO_CENSUS(1, ea);
     if (mmio_logging()) rt_log("mmio W%d %08x <- %0*x (lr=%08x)\n", size * 8, ea, size * 2, v, g_ctx.lr);
     hw_write_(ea, size, v);
 }
@@ -1103,14 +1192,82 @@ static void hw_write_(uint32_t ea, int size, uint32_t v) {
     unmapped("bus", ea, size, v, 1);
 }
 
-void rt_mmio_w32(uint32_t ea, uint32_t v) { hw_write(ea, 4, v); }
-void rt_mmio_w16(uint32_t ea, uint32_t v) { hw_write(ea, 2, v); }
-void rt_mmio_w8(uint32_t ea, uint32_t v) { hw_write(ea, 1, v); }
-uint32_t rt_mmio_r32(uint32_t ea) { return hw_read(ea, 4); }
-uint32_t rt_mmio_r16(uint32_t ea) { return hw_read(ea, 2); }
-uint32_t rt_mmio_r8(uint32_t ea) { return hw_read(ea, 1); }
+#ifdef VIPER_WII_BULK_WRITER
+int rt_wii_bulk_lfb_allowed(void){return g_mmio_log==0;}
+#endif
+#ifdef VIPER_FAST_LANC_RAM
+/* LAN controller RAM is plain memory, and the game's link code copies it a
+ * byte at a time every frame. With logging initialized and off, access it
+ * directly instead of through the bus range chain; bytes and the 0x1fff
+ * wrap are exactly bytes_read/bytes_write over lanc_ram_read/write. */
+#define LANC_RAM_FAST(ea) (g_mmio_log == 0 && (ea) - 0xffe9a000u < 0x2000u)
+#define LANC_B(o) lanc.ram[(o) & 0x1fff]
+#else
+#define LANC_RAM_FAST(ea) 0
+#define LANC_B(o) lanc.ram[(o) & 0x1fff]
+#endif
+void rt_mmio_w32(uint32_t ea, uint32_t v) {
+    if (LANC_RAM_FAST(ea)) {
+        uint32_t o = ea & 0x1fff;
+        LANC_B(o) = v >> 24; LANC_B(o + 1) = v >> 16; LANC_B(o + 2) = v >> 8; LANC_B(o + 3) = v;
+        return;
+    }
+#ifdef VIPER_WII_DIRECT_LFB_WORD
+    /* Keep lazy logging initialization and every non-LFB device on the bus
+     * path. Full words ignore byte lanes, exactly as le_bus_write does. */
+    if (g_mmio_log == 0 && ea >= 0x84000000u && ea < 0x86000000u) {
+        MMIO_CENSUS(1, ea);
+        voodoo_lfb_write((ea - 0x84000000u) & ~3u, bswap32(v), 0xffffffffu);
+        return;
+    }
+#endif
+    hw_write(ea, 4, v);
+}
+void rt_mmio_w16(uint32_t ea, uint32_t v) {
+    if (LANC_RAM_FAST(ea)) { uint32_t o = ea & 0x1fff; LANC_B(o) = v >> 8; LANC_B(o + 1) = v; return; }
+    hw_write(ea, 2, v);
+}
+void rt_mmio_w8(uint32_t ea, uint32_t v) {
+    if (LANC_RAM_FAST(ea)) { LANC_B(ea) = v; return; }
+    hw_write(ea, 1, v);
+}
+uint32_t rt_mmio_r32(uint32_t ea) {
+    if (LANC_RAM_FAST(ea)) {
+        uint32_t o = ea & 0x1fff;
+        return ((uint32_t)LANC_B(o) << 24) | ((uint32_t)LANC_B(o + 1) << 16) | ((uint32_t)LANC_B(o + 2) << 8) | LANC_B(o + 3);
+    }
+    return hw_read(ea, 4);
+}
+uint32_t rt_mmio_r16(uint32_t ea) {
+    if (LANC_RAM_FAST(ea)) { uint32_t o = ea & 0x1fff; return ((uint32_t)LANC_B(o) << 8) | LANC_B(o + 1); }
+    return hw_read(ea, 2);
+}
+uint32_t rt_mmio_r8(uint32_t ea) {
+    if (LANC_RAM_FAST(ea)) return LANC_B(ea);
+    return hw_read(ea, 1);
+}
+#if defined(VIPER_WII_LANC_COPY) && defined(VIPER_FAST_LANC_RAM)
+/* n iterations of LD8(src+i) then ST8(dst+i) (the link code's byte copy at
+ * 0x3e070), in bulk: only when every source byte takes the LAN RAM fast path
+ * above (no side effects) and every destination byte is plain guest RAM, so
+ * the separate memories make the order irrelevant. Returns the last byte,
+ * or -1 (nothing done) when any byte would take another path. */
+int wii_lanc_copy_to_ram(uint32_t dst, uint32_t src, uint32_t n) {
+    uint32_t off = src - 0xffe9a000u;
+    if (!n || g_mmio_log || off >= 0x2000u || n > 0x2000u - off || dst >= RAM_SIZE || n > RAM_SIZE - dst)
+        return -1;
+    memcpy(g_ram + dst, lanc.ram + off, n);
+    return lanc.ram[off + n - 1];
+}
+#endif
 
 void epic_dump(void) {
+#ifdef VIPER_SPARSE_EPIC_RAW
+    unsigned raw_pages=0;
+    for (unsigned i=0;i<256;i++) raw_pages+=ep.raw_pages[i]!=NULL;
+    rt_log("VIPER EPIC RAW pages=%u bytes=%u directory_bytes=%u\n",
+           raw_pages,raw_pages*1024,(unsigned)sizeof ep.raw_pages);
+#endif
     for (int i = 0; i < EPIC_NUM; i++)
         if (g_irq_raised[i] || !ep.irq[i].mask)
             rt_log("  epic irq %2d: raised=%llu taken=%llu mask=%d prio=%d vec=%02x\n", i, (unsigned long long)g_irq_raised[i],
