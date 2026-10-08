@@ -13,6 +13,17 @@ $(OUT)/probe.elf: $(OUT)/probe.o
 	$(CC) $(LDFLAGS) $< $(LIBS) -o $@
 $(OUT)/probe.dol: $(OUT)/probe.elf
 	elf2dol $< $@
+lhs-probe: $(OUT)/lhs_probe.dol
+$(OUT)/lhs_probe.o: wii/lhs_probe.c wii/net_report.h
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -Iwii -c $< -o $@
+$(OUT)/lhs_net_report.o: wii/net_report.c wii/net_report.h
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -Iwii -c $< -o $@
+$(OUT)/lhs_probe.elf: $(OUT)/lhs_probe.o $(OUT)/lhs_net_report.o
+	$(CC) $(LDFLAGS) -L$(DEVKITPRO)/portlibs/ppc/lib $^ -lz $(LIBS) -o $@
+$(OUT)/lhs_probe.dol: $(OUT)/lhs_probe.elf
+	elf2dol $< $@
 $(OUT)/thread_probe.o: wii/thread_probe.c wii/thread.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -Iwii -frounding-math -ffp-contract=off -c $< -o $@
