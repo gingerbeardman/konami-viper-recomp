@@ -1,0 +1,6 @@
+# Hot functions (physical-Wii profile P) whose localized code is 2.3-3.9x the plain
+# code: Dolphin -0.65% (run.YCv7BV with fea4), hardware unknown. VIPER_WII_LOCALIZE_EXTRA.
+f_g_00041d2c
+f_g_000419d0
+f_s_009a09cc
+f_s_009a73b0

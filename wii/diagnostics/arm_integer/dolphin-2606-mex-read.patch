@@ -1,0 +1,20 @@
+--- a/Source/Core/Core/PowerPC/JitArm64/JitArm64_Integer.cpp
++++ b/Source/Core/Core/PowerPC/JitArm64/JitArm64_Integer.cpp
+@@ -1217,7 +1217,7 @@
+   }
+   else
+   {
+-    gpr.BindToRegister(d, d == a || d == b);
++    gpr.BindToRegister(d, d == a || (!mex && d == b));
+     {
+       Arm64GPRCache::ScopedARM64Reg RB;
+       if (mex)
+@@ -1494,7 +1494,7 @@
+   }
+   else
+   {
+-    gpr.BindToRegister(d, d == a || d == b);
++    gpr.BindToRegister(d, d == a || (!mex && d == b));
+     {
+       Arm64GPRCache::ScopedARM64Reg RB;
+       if (mex)
