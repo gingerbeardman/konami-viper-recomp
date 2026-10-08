@@ -57,6 +57,11 @@ int enh_restart_requested(void) { return 0; }
 void enh_track_debug_toggle(void) {}
 int enh_track_debug_position_text(char *text,size_t size) {(void)text;(void)size;return 0;}
 int enh_track_debug_heading_text(char *text,size_t size) {(void)text;(void)size;return 0;}
+int enh_gate_editor_mouse(float x,float y) {(void)x;(void)y;return 0;}
+int enh_gate_editor_active(void) {return 0;}
+int enh_gate_editor_button(int a) {(void)a;return 0;}
+void enh_gate_editor_axes(float a,float b,float c,float d,float e,float f,float t) {(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)t;}
+int enh_mission_retry(void) {return 0;}
 int enh_track_debug_step(int direction) {(void)direction;return 0;}
 void enh_draw_overlay(uint32_t *f, int w, int h) { (void)f; (void)w; (void)h; }
 uint64_t voodoo_get_frame(uint32_t *f, int n, int *w, int *h) { (void)f; (void)n; *w=*h=0; return 0; }
@@ -81,3 +86,6 @@ int main(void) {
     g_pad=NULL;
     puts("live paused gyro preview, sensitivity, recenter and suppression: passed");
 }
+
+uint64_t voodoo_get_frame_depth(uint32_t *f,uint16_t *d,int n,int *w,int *h,unsigned *m) { (void)d;*m=0;return voodoo_get_frame(f,n,w,h); }
+void enh_overlay_depth(const uint16_t *d,int w,int h,unsigned m) {(void)d;(void)w;(void)h;(void)m;}

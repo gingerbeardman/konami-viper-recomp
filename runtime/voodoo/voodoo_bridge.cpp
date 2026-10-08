@@ -124,6 +124,8 @@ std::unique_ptr<viper_voodoo> s_dev;
 bitmap_rgb32 s_bitmap;
 std::mutex s_frame_lock;
 std::vector<u32> s_frame;
+std::vector<u16> s_depth;
+u32 s_depth_mode;
 int s_frame_w, s_frame_h;
 u64 s_frame_count;
 
@@ -154,6 +156,8 @@ void publish_frame()
 		for (int y = 0; y < h; y++)
 			memcpy(&s_frame[size_t(y) * w], &s_bitmap.pix(vis.min_y + y, vis.min_x), size_t(w) * 4);
 	}
+	s_dev->diagnostic_depth(s_depth, vis);
+	s_depth_mode = s_dev->diagnostic_depth_mode();
 	s_frame_w = w;
 	s_frame_h = h;
 	s_frame_count++;
@@ -239,6 +243,18 @@ uint64_t voodoo_get_frame(uint32_t *dst, int max_pixels, int *w, int *h)
 	if (dst && s_frame_w * s_frame_h <= max_pixels)
 		memcpy(dst, s_frame.data(), s_frame.size() * 4);
 	return s_frame_count;
+}
+
+uint64_t voodoo_get_frame_depth(uint32_t *dst, uint16_t *depth, int max_pixels, int *w, int *h, unsigned *mode)
+{
+    std::lock_guard<std::mutex> lock(s_frame_lock);
+    *w = s_frame_w; *h = s_frame_h; *mode = s_depth_mode;
+    if (s_frame.size() <= size_t(max_pixels)) {
+        memcpy(dst, s_frame.data(), s_frame.size() * 4);
+        if (s_depth.size() == s_frame.size()) memcpy(depth, s_depth.data(), s_depth.size() * 2);
+        else std::fill_n(depth, s_frame.size(), 0xffff);
+    }
+    return s_frame_count;
 }
 
 void voodoo_stats(void)

@@ -8,6 +8,9 @@ float explorer_speed(void) { return 0; }
 float explorer_height(void) { return 0; }
 void explorer_toggle(void) {}
 void explorer_free_toggle(void) {}
+void explorer_drive(float f,float v) {(void)f;(void)v;}
+void explorer_look(float v) {(void)v;}
+void explorer_pitch(float v) {(void)v;}
 static int switch_layout=1;
 int frontend_switch_trigger_layout(void) { return switch_layout; }
 void frontend_set_switch_trigger_layout(int v) { switch_layout = v == 0 ? 0 : 1; }

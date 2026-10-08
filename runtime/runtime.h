@@ -66,6 +66,12 @@ int enh_start_held(void);                              /* START GAME: hold START
 int enh_quit_requested(void);
 void enh_track_debug_toggle(void);
 int enh_track_debug_step(int direction);
+int enh_mission_retry(void);
+int enh_gate_editor_active(void);
+int enh_gate_editor_mouse(float x,float y);
+int enh_gate_editor_button(int action);
+void enh_gate_editor_axes(float lx,float ly,float rx,float ry,float left_trigger,float right_trigger,float dt);
+enum { GATE_EDIT_SELECT, GATE_EDIT_ACCEPT, GATE_EDIT_ADD, GATE_EDIT_DELETE, GATE_EDIT_PREV, GATE_EDIT_NEXT, GATE_EDIT_ROLE_UP, GATE_EDIT_ROLE_DOWN, GATE_EDIT_RAISE, GATE_EDIT_LOWER, GATE_EDIT_SET_START, GATE_EDIT_ROTATE_LEFT, GATE_EDIT_ROTATE_RIGHT, GATE_EDIT_CAMERA };
 int enh_track_debug_position_text(char *text,size_t size);
 int enh_track_debug_heading_text(char *text,size_t size);
 void enh_draw_overlay(uint32_t *fb, int w, int h);     /* menu over a 0xAARRGGBB frame */
@@ -99,6 +105,8 @@ void voodoo_lfb_write(uint32_t off, uint32_t v, uint32_t mask);
 uint32_t voodoo_io_read(uint32_t off);
 void voodoo_io_write(uint32_t off, uint32_t v, uint32_t mask);
 uint64_t voodoo_get_frame(uint32_t *dst, int max_pixels, int *w, int *h);
+uint64_t voodoo_get_frame_depth(uint32_t *, uint16_t *, int, int *, int *, unsigned *);
+void enh_overlay_depth(const uint16_t *, int, int, unsigned);
 void voodoo_stats(void);
 void rt_eat_cycles(uint32_t n);
 

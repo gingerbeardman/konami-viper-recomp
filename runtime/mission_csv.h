@@ -1,4 +1,4 @@
-/* Mission CSV is read once at startup, before either runtime thread starts. */
+/* Mission CSV loads transactionally at startup and between mission runs. */
 #pragma once
 #include <ctype.h>
 #include <stdlib.h>
@@ -40,6 +40,7 @@ static int mission_csv_width(const char *s,float *width) {
     else { double v; if(!mission_csv_number(s,&v)||v<=0||v>200) return 0; *width=v; }
     return 1;
 }
+static unsigned g_mission_csv_revision;
 static void mission_csv_load(void) {
     if(!GAME_ENH_MISSION_STYLE) return;
     const char *path=getenv("RT_MISSIONS_CSV"); if(!path) path="missions.csv";
@@ -47,6 +48,7 @@ static void mission_csv_load(void) {
     char header[8192],line[8192],*headers[128],*fields[128];
     if(!fgets(header,sizeof header,f)) { fclose(f); return; }
     int nh=mission_csv_fields(header,headers), count=0,line_no=1;
+    int has_ids=0;for(int i=0;i<nh;i++) if(!strcasecmp(headers[i],"id")) has_ids=1;
     MissionDefinition loaded[96]={0};
     char names[96][96]={0}, briefs[96][192]={0}, break_labels[96][32]={0};
     while(fgets(line,sizeof line,f)) {
@@ -63,6 +65,12 @@ static void mission_csv_load(void) {
             rt_log("mission CSV: invalid enabled value at row %d; retaining previously loaded missions\n",line_no);
             count=0; break;
         }
+        if(has_ids) {
+            if(!mission_csv_number(CSV("id"),&v) || v<1 || v>0x3fffffff || floor(v)!=v) ok=0;
+            else d->id=(unsigned)v;
+            for(int i=0;i<count;i++) if(loaded[i].id==d->id) ok=0;
+        }
+        snprintf(d->legacy_names,sizeof d->legacy_names,"%s",CSV("legacy_names"));
         const char *name=CSV("name");
         ok &= *name!=0; snprintf(names[count],96,"%s",name);
         d->name=names[count]; d->briefing=briefs[count];
@@ -79,12 +87,35 @@ static void mission_csv_load(void) {
             char *next=models,*model;
             while((model=strsep(&next,";"))) ok &= mission_csv_number(model,&v)&&v<=15&&floor(v)==v;
         }
+        if(*CSV("obstacle_model")) {
+            d->obstacle=1;
+            ok &= mission_csv_number(CSV("obstacle_model"),&v)&&v>=0&&v<=15&&floor(v)==v;d->obstacle_model=(unsigned)v;
+            ok &= mission_csv_number(CSV("obstacle_x"),&v);d->obstacle_x=v;
+            ok &= mission_csv_number(CSV("obstacle_z"),&v);d->obstacle_z=v;
+            ok &= mission_csv_number(CSV("obstacle_heading"),&v);d->obstacle_heading=v;
+        }
         d->scenery_touch=!strcasecmp(d->type,"TOUCH") || !strcasecmp(d->type,"TAG");
         const char *event=CSV("target_event");
         if(!strcasecmp(event,"destroy")) d->vehicle_destroy=1;
         else if(!strcasecmp(event,"visit")) d->region_visit=1;
         else if(!strcasecmp(event,"touch")) d->scenery_touch=1;
         else if(*event && strcasecmp(event,"contact")) ok=0;
+        snprintf(d->protected_models,sizeof d->protected_models,"%s",CSV("protected_models"));
+        char controls[128];snprintf(controls,sizeof controls,"%s",CSV("forbidden_controls"));
+        char *control_next=controls,*control;
+        while(*controls && (control=strsep(&control_next,";"))) {
+            if(!strcasecmp(control,"accelerator")) d->forbidden_controls|=1;
+            else if(!strcasecmp(control,"brake")) d->forbidden_controls|=2;
+            else if(!strcasecmp(control,"handbrake")) d->forbidden_controls|=4;
+            else ok=0;
+        }
+        if(*CSV("collect_gap")) {ok &= mission_csv_number(CSV("collect_gap"),&v)&&v>0&&v<=60;d->collect_gap_ms=(unsigned)lround(v*1000);}
+        if(*CSV("no_turn_back")) {ok &= mission_csv_number(CSV("no_turn_back"),&v)&&v<=1;d->no_turn_back=(unsigned)v;}
+        d->park_length=6;d->park_angle=15;d->park_speed=2;
+        if(*CSV("park_seconds")) {ok &= mission_csv_number(CSV("park_seconds"),&v)&&v>0&&v<=30;d->park_ms=(unsigned)lround(v*1000);}
+        const char *park_keys[]={"park_length","park_angle","park_speed"};
+        float *park_values[]={&d->park_length,&d->park_angle,&d->park_speed};
+        for(unsigned i=0;i<3;i++) if(*CSV(park_keys[i])) {ok &= mission_csv_number(CSV(park_keys[i]),&v)&&v>0&&v<=180;*park_values[i]=v;}
         d->completion_delay_ms=750; d->hint_remaining=3; d->hint_idle_ms=30000;
         if(*CSV("completion_delay")) { ok &= mission_csv_number(CSV("completion_delay"),&v)&&v<=5; d->completion_delay_ms=(unsigned)lround(v*1000); }
         if(*CSV("hint_remaining")) { ok &= mission_csv_number(CSV("hint_remaining"),&v)&&v<=256&&floor(v)==v; d->hint_remaining=(unsigned)v; }
@@ -121,7 +152,7 @@ static void mission_csv_load(void) {
         else if(!strcasecmp(direction,"reverse") || !strcasecmp(direction,"opposite")) d->route_direction=-1;
         else ok=0;
         ok &= mission_csv_number(CSV("cp1"),&v)&&v<=10&&floor(v)==v; d->start_cp=(unsigned)v;
-        ok &= mission_csv_number(CSV("cp2"),&v)&&v>=1&&v<=10&&floor(v)==v; d->finish_cp=(unsigned)v; ok &= d->route_direction<0 ? d->finish_cp!=d->start_cp : d->finish_cp>d->start_cp;
+        ok &= mission_csv_number(CSV("cp2"),&v)&&v>=1&&v<=10&&floor(v)==v; d->finish_cp=(unsigned)v;
         d->contacts=UINT_MAX; if(*CSV("collisions") && strcasecmp(CSV("collisions"),"unlimited")) { ok &= mission_csv_number(CSV("collisions"),&v)&&v<UINT_MAX&&floor(v)==v; d->contacts=(unsigned)v; }
         d->collision_types=MISSION_HIT_ALL;
         if(*CSV("collision_types")) {
@@ -144,8 +175,10 @@ static void mission_csv_load(void) {
         if(d->gold_ms || d->silver_ms) ok &= d->gold_ms>0 && d->gold_ms<=d->silver_ms && d->silver_ms<=d->limit_ms;
         d->rolling_metres=0; d->rolling_speed=0;
         if(*CSV("rolling")) { ok &= mission_csv_number(CSV("rolling"),&v)&&v<=200; d->rolling_metres=(unsigned)v; }
+        if(*CSV("lead_in")) { ok &= mission_csv_number(CSV("lead_in"),&v)&&v<=500&&floor(v)==v; d->lead_in_metres=(unsigned)v; }
         if(*CSV("rolling_speed")) { ok &= mission_csv_number(CSV("rolling_speed"),&v)&&v<=300; d->rolling_speed=v/3.6; }
         if(d->rolling_metres) ok &= d->rolling_speed>0;
+        for(unsigned i=0;i<MISSION_MAX_GATES;i++) {d->gate_y[i]=NAN;d->gate_heading[i]=NAN;d->gate_height[i]=8;}
         char xs[256],zs[256],ws[256]; snprintf(xs,sizeof xs,"%s",CSV("gatex")); snprintf(zs,sizeof zs,"%s",CSV("gatez")); snprintf(ws,sizeof ws,"%s",CSV("gatew"));
         char *xp=xs,*zp=zs,*wp=ws;
         while(*xp && d->custom_gates<MISSION_MAX_GATES-1) {
@@ -158,6 +191,36 @@ static void mission_csv_load(void) {
         const char *order=CSV("gate_order");
         if(!strcasecmp(order,"any")) { d->any_order=1; ok &= d->custom_gates>0; }
         else if(*order && strcasecmp(order,"ordered")) ok=0;
+        const char *gatekeys[]={"gatey","gateh","gater","gatetype","gatetilt"};
+        for(unsigned key=0;key<5;key++) if(*CSV(gatekeys[key])) {
+            char list[2048];snprintf(list,sizeof list,"%s",CSV(gatekeys[key]));
+            char *next=list,*part;unsigned i=0;
+            while((part=strsep(&next,";"))) {
+                if(i>=d->custom_gates) {ok=0;break;}
+                if(key==3) {
+                    if(!strcasecmp(part,"waypoint")) d->gate_role[i]=0;
+                    else if(!strcasecmp(part,"fail")) d->gate_role[i]=1;
+                    else if(!strcasecmp(part,"finish")) d->gate_role[i]=2;
+                    else ok=0;
+                } else if(strcasecmp(part,"auto")) {
+                    char *end;float value=strtof(part,&end);ok &= *part && !*end && isfinite(value);
+                    if(key==0) d->gate_y[i]=value;
+                    if(key==1) {d->gate_height[i]=value;ok &= value>0 && value<=100;}
+                    if(key==2) d->gate_heading[i]=value;
+                    if(key==4) {d->gate_tilt[i]=value;ok &= fabsf(value)<=90;}
+                }
+                i++;
+            }
+            ok &= i==d->custom_gates;
+        }
+        unsigned finishes=0;for(unsigned i=0;i<d->custom_gates;i++) if(d->gate_role[i]==2) {
+            finishes++;for(unsigned j=i+1;j<d->custom_gates;j++) ok &= d->gate_role[j]==1;
+        }
+        ok &= finishes<=1;
+        /* An explicit finish gate replaces CP2, so checkpoint ordering only
+         * constrains missions that actually finish at a native checkpoint. */
+        if(!d->custom_gates && !finishes && !*CSV("endx"))
+            ok &= d->route_direction<0 ? d->finish_cp!=d->start_cp : d->finish_cp>d->start_cp;
         if(*CSV("endx") || *CSV("endz") || *CSV("endw")) {
             char *end; const char *x=CSV("endx"),*z=CSV("endz");
             d->custom_finish=1; d->end_x=strtof(x,&end); ok &= *x && !*end && isfinite(d->end_x);
@@ -223,9 +286,11 @@ static void mission_csv_load(void) {
                 *dest[i]=strtof(s,&end); ok &= *s && !*end && isfinite(*dest[i]); }
             d->custom_start=1;
             ok &= fabsf(d->start_x)<100000 && fabsf(d->start_z)<100000;
-            ok &= !d->rolling_metres; /* Explicit starts use their assigned initial speed. */
+            /* Rolling custom starts use these coordinates as the timing line. */
         }
 #undef CSV
+        if(d->park_ms) ok &= d->custom_gates>0 && d->gate_role[d->custom_gates-1]==2;
+        if(d->lead_in_metres) ok &= d->custom_start;
         if(d->wallride_distance) ok &= d->custom_gates==1 && d->custom_finish &&
             hypotf(d->end_x-d->gate_x[0],d->end_z-d->gate_z[0])>1;
         if(!ok) { rt_log("mission CSV: invalid row %d; retaining previously loaded missions\n",line_no); count=0; break; }
@@ -234,27 +299,34 @@ static void mission_csv_load(void) {
     fclose(f); if(count) { memcpy(g_mission_csv_names,names,sizeof names); memcpy(g_mission_csv_briefs,briefs,sizeof briefs); memcpy(g_mission_csv_break_labels,break_labels,sizeof break_labels);
         memcpy(k_missions,loaded,count*sizeof *loaded);
         for(int i=0;i<count;i++) { k_missions[i].name=g_mission_csv_names[i]; k_missions[i].briefing=g_mission_csv_briefs[i]; k_missions[i].break_label=g_mission_csv_break_labels[i]; }
-        g_mission_count=count; rt_log("mission CSV: loaded %d missions from %s\n",count,path); }
+        g_mission_count=count; ++g_mission_csv_revision; rt_log("mission CSV: loaded %d missions from %s\n",count,path); }
 }
 
-/* Preserve all other fields verbatim; find the row by name, never menu index. */
+/* Preserve other fields verbatim; locate the permanent ID, with legacy name fallback. */
 static int mission_csv_save_gold(const char *name,unsigned gold) {
     const char *path=getenv("RT_MISSIONS_CSV"); if(!path) path="missions.csv";
+    unsigned identity=0;
+    for(int i=0;i<MISSION_COUNT;i++) if(k_missions[i].name && !strcmp(k_missions[i].name,name)) {identity=k_missions[i].id;break;}
     FILE *in=fopen(path,"r"); if(!in) return 0;
     char temp[4096]; if(snprintf(temp,sizeof temp,"%s.tmp",path)>=(int)sizeof temp) { fclose(in); return 0; }
     FILE *out=fopen(temp,"w"); if(!out) { fclose(in); return 0; }
-    char line[8192],copy[8192],*fields[128]; int columns[3]={-1,-1,-1}, namecol=-1,found=0,ok=1;
+    char line[8192],copy[8192],*fields[128]; int columns[3]={-1,-1,-1}, namecol=-1,idcol=-1,found=0,ok=1;
     if(!fgets(line,sizeof line,in)) ok=0;
     else {
         fputs(line,out); strcpy(copy,line); int n=mission_csv_fields(copy,fields);
         for(int i=0;i<n;i++) { if(!strcasecmp(fields[i],"name")) namecol=i;
+            if(!strcasecmp(fields[i],"id")) idcol=i;
             const char *keys[]={"gold","silver","bronze"};
             for(int j=0;j<3;j++) if(!strcasecmp(fields[i],keys[j])) columns[j]=i; }
         if(namecol<0 || columns[0]<0 || columns[1]<0 || columns[2]<0) ok=0;
     }
     while(ok && fgets(line,sizeof line,in)) {
         strcpy(copy,line); int n=mission_csv_fields(copy,fields);
-        if(namecol>=n || strcmp(fields[namecol],name)) { fputs(line,out); continue; }
+        int matches=namecol<n && !strcmp(fields[namecol],name);
+        if(identity && idcol>=0) {
+            double value=0;matches=idcol<n && mission_csv_number(fields[idcol],&value) && value==identity;
+        }
+        if(!matches) { fputs(line,out); continue; }
         if(found++) { ok=0; break; } /* Ambiguous names must not overwrite two rows. */
         int col=0,quoted=0; const char *start=line,*p=line;
         for(;;p++) {

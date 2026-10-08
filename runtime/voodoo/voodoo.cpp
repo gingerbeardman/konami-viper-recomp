@@ -3615,3 +3615,22 @@ static_register_table_entry<voodoo_1_device> const voodoo_1_device::s_register_t
 	RESERVED_ENTRY_x8                                                                          // 3c0-3dc
 	RESERVED_ENTRY_x8                                                                          // 3e0-3fc
 };
+
+// Align the auxiliary buffer with the published colour picture, including widescreen.
+void voodoo_1_device::diagnostic_depth(std::vector<u16> &out, rectangle const &clip) const
+{
+    int n = m_hires_out_valid ? m_hires_scale : 1;
+    int margin = m_hires_out_valid ? m_wide : 0;
+    int w = (clip.width() + 2 * margin) * n, h = clip.height() * n;
+    out.assign(size_t(w) * h, 0xffff);
+    bool scaled = m_hires_out_valid && !m_hires_aux.empty();
+    u16 const *src = scaled ? m_hires_aux.data() : aux_buffer();
+    if (!src) return;
+    int stride = scaled ? (m_renderer->rowpixels() + 2 * margin) * n : m_renderer->rowpixels();
+    size_t count = scaled ? m_hires_aux.size() : (m_fbmask + 1 - m_auxoffs) / 2;
+    for (int y = 0; y < h; ++y) {
+        long offset = long(clip.min_y * n + y - m_yoffs * n) * stride + (clip.min_x - m_xoffs) * n;
+        if (offset >= 0 && size_t(offset + w) <= count)
+            std::copy_n(src + offset, w, out.data() + size_t(y) * w);
+    }
+}

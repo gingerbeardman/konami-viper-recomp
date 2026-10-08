@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <pthread.h>
 #include "race_restart.h"
 #include "mission_mode.h"
 #include "course_reverse_runtime.h"
@@ -207,6 +208,8 @@ static void name_confirm_hook(PPCContext *c) {
 
 /* Debug data is published by the guest and read by the SDL drawing thread. */
 static atomic_int g_track_debug, g_debug_teleport;
+static _Atomic float g_debug_gate_tilt[MISSION_MAX_GATES];
+static _Atomic float g_debug_gate_ground[MISSION_MAX_GATES][3];
 int enh_track_debug_step(int direction) {
     if(!atomic_load(&g_track_debug) || (!race_time_trial() && !mission_engaged()) || enh_paused() || enh_menu_active()) return 0;
     atomic_store(&g_debug_teleport,direction); return 1;
@@ -214,13 +217,13 @@ int enh_track_debug_step(int direction) {
 static _Atomic float g_debug_x, g_debug_y, g_debug_z, g_debug_heading;
 int enh_track_debug_position_text(char *text,size_t size) {
     if(!atomic_load(&g_track_debug) || (!race_time_trial() && !mission_engaged()) || !text || !size) return 0;
-    snprintf(text,size,"%.1f,%.1f",atomic_load(&g_debug_x),atomic_load(&g_debug_z));
+    snprintf(text,size,"%.0f,%.0f",roundf(atomic_load(&g_debug_x)),roundf(atomic_load(&g_debug_z)));
     return 1;
 }
 
 int enh_track_debug_heading_text(char *text,size_t size) {
     if(!atomic_load(&g_track_debug) || (!race_time_trial() && !mission_engaged()) || !text || !size) return 0;
-    snprintf(text,size,"%.1f",atomic_load(&g_debug_heading));
+    snprintf(text,size,"%.0f",roundf(atomic_load(&g_debug_heading)));
     return 1;
 }
 static atomic_uint g_debug_cp, g_debug_object, g_debug_gate_count;
@@ -229,7 +232,23 @@ static atomic_uint g_debug_vehicle_kind=UINT_MAX, g_debug_vehicle_index;
 static atomic_int g_debug_vehicle_parked;
 static _Atomic float g_debug_vehicle_x,g_debug_vehicle_z,g_debug_vehicle_distance;
 static _Atomic float g_debug_gate[MISSION_MAX_GATES][6];
+static _Atomic float g_debug_gate_height[MISSION_MAX_GATES];
+static atomic_uint g_debug_gate_role[MISSION_MAX_GATES];
+static void gate_editor_publish(PPCContext *c);
 static _Atomic float g_debug_camera[5];
+static _Atomic float g_debug_view[12],g_debug_projection[4],g_debug_viewport[4];
+static atomic_int g_debug_view_valid;
+static float g_mission_finish_camera[6];
+static int g_mission_finish_camera_saved;
+static void mission_finish_camera(void) {
+    if(mission_phase()!=MISSION_PASSED) {g_mission_finish_camera_saved=0;return;}
+    for(unsigned i=0;i<6;i++) {
+        unsigned address=0x8c1cf8+i*4;
+        if(!g_mission_finish_camera_saved) g_mission_finish_camera[i]=LDF32(address);
+        else STF32(address,g_mission_finish_camera[i]);
+    }
+    g_mission_finish_camera_saved=1;
+}
 static _Atomic float g_debug_object_x, g_debug_object_y, g_debug_object_z;
 static _Atomic unsigned char g_debug_object_name[48];
 static _Atomic unsigned char g_debug_solid_name[32];
@@ -276,9 +295,34 @@ static void track_debug_object_name(PPCContext *c,unsigned object) {
     }
     for(unsigned i=0;i<sizeof name;i++) atomic_store(&g_debug_object_name[i],(unsigned char)name[i]);
 }
-void enh_track_debug_toggle(void) { atomic_fetch_xor(&g_track_debug,1); }
+void enh_track_debug_toggle(void) {
+    if(!atomic_fetch_xor(&g_track_debug,1) && mission_engaged()) {
+        mission_cancel();atomic_store(&g_mission_explore_request,1);
+    }
+}
+/* Native view slot zero: inverse translation followed by a column-major
+ * world-to-camera rotation. Capture after the game builds it, before HUD view. */
+static void track_debug_view_capture(PPCContext *c) {
+    unsigned state=LD32(c->r[2]+0x6c);
+    if(!race_valid(state+0xa4,48)) {atomic_store(&g_debug_view_valid,0);return;}
+    for(unsigned i=0;i<12;i++) atomic_store(&g_debug_view[i],LDF32(state+0xa4+i*4));
+    for(unsigned i=0;i<4;i++) {
+        atomic_store(&g_debug_projection[i],LDF32(GAME_ENH_WIDE_PROJ_MATRIX+i*4));
+        atomic_store(&g_debug_viewport[i],LDF32(GAME_ENH_WIDE_VIEWPORT+i*4));
+    }
+    atomic_store(&g_debug_view_valid,1);
+}
+static void track_debug_camera_capture(void) {
+    const unsigned camera[]={0x8c1cf8,0x8c1cfc,0x8c1d00,0x8c1d04,0x8c1d08};
+    for(unsigned i=0;i<5;i++) atomic_store(&g_debug_camera[i],LDF32(camera[i]));
+}
 static void track_debug_tick(PPCContext *c) {
     if (!atomic_load(&g_track_debug) || (!race_time_trial() && !mission_engaged())) return;
+    /* Debugging a mission is unrestricted exploration, including when debug
+     * was already enabled before this mission loaded. */
+    if(mission_phase()==MISSION_RUNNING || mission_phase()==MISSION_ROLLING) {
+        mission_cancel();atomic_store(&g_mission_explore_request,1);
+    }
     unsigned car=LD32(c->r[2]+0x488);
     if (!race_valid(car,0x514)) return;
     int step=atomic_exchange(&g_debug_teleport,0);
@@ -288,16 +332,18 @@ static void track_debug_tick(PPCContext *c) {
             MissionRoadPoint p=g_mission_road[i]; float distance=hypotf(pos.x-p.x,pos.z-p.z);
             if(distance<nearest) { nearest=distance; current=along; } along+=p.length;
         }
-        float best=INFINITY,target=0; along=0;
+        float best=INFINITY,target=0; unsigned target_checkpoint=0; along=0;
         for(unsigned i=0;i<g_mission_road_count;i++) {
-            if(g_mission_road[i].checkpoint) {
+            unsigned marker=g_mission_road[i].checkpoint;
+            if(marker==1 || (marker>=3 && marker<=11)) {
                 float delta=fmodf((step>0 ? along-current : current-along)+g_mission_road_length,g_mission_road_length);
-                if(delta>8 && delta<best) { best=delta; target=along; }
+                if(delta>8 && delta<best) { best=delta; target=along; target_checkpoint=g_mission_road[i].checkpoint; }
             }
             along+=g_mission_road[i].length;
         }
         MissionRoadPoint p=mission_road_sample(target),ahead=mission_road_sample(target+12);
-        p.heading=atan2f(ahead.x-p.x,ahead.z-p.z); mission_place(c,p,0);
+        p.heading=atan2f(ahead.x-p.x,ahead.z-p.z);
+        if(isfinite(best) && mission_place(c,p,0)) ST8(car+0x4de,target_checkpoint);
     }
     atomic_store(&g_debug_x,LDF32(car+0x174));
     atomic_store(&g_debug_z,LDF32(car+0x178));
@@ -376,23 +422,25 @@ static void track_debug_tick(PPCContext *c) {
     atomic_store(&g_debug_vehicle_kind,kind);atomic_store(&g_debug_vehicle_index,index);
     atomic_store(&g_debug_vehicle_x,vx);atomic_store(&g_debug_vehicle_z,vz);
     atomic_store(&g_debug_vehicle_distance,nearest_vehicle);
-    const unsigned camera[]={0x8c1cf8,0x8c1cfc,0x8c1d00,0x8c1d04,0x8c1d08};
-    for (unsigned i=0;i<5;i++) atomic_store(&g_debug_camera[i],LDF32(camera[i]));
+    /* The camera hook captures the view after free-roam updates. */
     for (unsigned i=0;i<g_mission_run.gate_count;i++) {
         MissionGate g=g_mission_run.gates[i];
         float values[]={g.centre.x,g.centre.y,g.centre.z,g.nx,g.nz,g.half_width};
         for (unsigned j=0;j<6;j++) atomic_store(&g_debug_gate[i][j],values[j]);
+        atomic_store(&g_debug_gate_height[i],g.half_height);atomic_store(&g_debug_gate_role[i],0);
+        atomic_store(&g_debug_gate_tilt[i],g.tilt*57.2957795f);
     }
     atomic_store(&g_debug_gate_count,mission_engaged()?g_mission_run.gate_count:0);
+    if(!mission_engaged() || enh_gate_editor_active()) gate_editor_publish(c);
     atomic_store(&g_debug_gate_mask,g_mission_run.met_mask);
     atomic_store(&g_debug_gate_any,g_mission_run.any_order);
 }
 typedef struct { uint32_t addr; const char *name; } Hook;
 static const Hook k_hooks[] = GAME_ENH_HOOKS;
-enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_EXPLORER_CAMERA, HOOK_EXPLORER_RACE, HOOK_RACE_DISPATCH, HOOK_RACE_COUNTDOWN, HOOK_RACE_LAPS, HOOK_PRACTICE_HUD, HOOK_PRACTICE_HUD_END, HOOK_RACE_TIME_BONUS, HOOK_RACE_LAP_CLOCK, HOOK_PRACTICE_TEXT, HOOK_PRACTICE_CHECKPOINT, HOOK_SCENERY_VISIBILITY, HOOK_SCENERY_CELL_DISTANCE, HOOK_SCENERY_OBJECT_DISTANCE, HOOK_MISSION_BREAK, HOOK_MISSION_FURNITURE, HOOK_MISSION_SOLID, HOOK_MISSION_PROP, HOOK_MISSION_DODGE, HOOK_MISSION_DODGE_REACTIVE, HOOK_MISSION_SPAWN_FURNITURE, HOOK_MISSION_SPAWN_SOLID, HOOK_MISSION_SPAWN_PROP, HOOK_MISSION_WRONG_VOICE, HOOK_MISSION_WRONG_HUD, HOOK_MISSION_VEHICLE_DESTROY, HOOK_MISSION_DOG_SCARE, HOOK_MISSION_TOAST, HOOK_COURSE_CONFIRM, HOOK_COURSE_SIGN_31, HOOK_COURSE_SIGN_12, HOOK_COURSE_SIGN_30, HOOK_MISSION_TOUCH, HOOK_SCENERY_MODEL, HOOK_MISSION_SPAWN_BREAKABLE, HOOK_MISSION_FURNITURE_CONTACT, HOOK_MISSION_PLAYER_CONTACT };
+enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_EXPLORER_CAMERA, HOOK_EXPLORER_RACE, HOOK_RACE_DISPATCH, HOOK_RACE_COUNTDOWN, HOOK_RACE_LAPS, HOOK_PRACTICE_HUD, HOOK_PRACTICE_HUD_END, HOOK_RACE_TIME_BONUS, HOOK_RACE_LAP_CLOCK, HOOK_PRACTICE_TEXT, HOOK_PRACTICE_CHECKPOINT, HOOK_SCENERY_VISIBILITY, HOOK_SCENERY_CELL_DISTANCE, HOOK_SCENERY_OBJECT_DISTANCE, HOOK_MISSION_BREAK, HOOK_MISSION_FURNITURE, HOOK_MISSION_SOLID, HOOK_MISSION_PROP, HOOK_MISSION_DODGE, HOOK_MISSION_DODGE_REACTIVE, HOOK_MISSION_SPAWN_FURNITURE, HOOK_MISSION_SPAWN_SOLID, HOOK_MISSION_SPAWN_PROP, HOOK_MISSION_WRONG_VOICE, HOOK_MISSION_WRONG_HUD, HOOK_MISSION_VEHICLE_DESTROY, HOOK_MISSION_DOG_SCARE, HOOK_MISSION_TOAST, HOOK_COURSE_CONFIRM, HOOK_COURSE_SIGN_31, HOOK_COURSE_SIGN_12, HOOK_COURSE_SIGN_30, HOOK_MISSION_TOUCH, HOOK_SCENERY_MODEL, HOOK_MISSION_SPAWN_BREAKABLE, HOOK_MISSION_FURNITURE_CONTACT, HOOK_MISSION_PLAYER_CONTACT, HOOK_MISSION_NATIVE_CORNER, HOOK_DEBUG_VIEW };
 
 static int hook_kind(uint32_t pc) {
-    static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm", "explorer_camera", "explorer_race", "race_dispatch", "race_countdown", "race_laps", "practice_hud", "practice_hud_end", "race_time_bonus", "race_lap_clock", "practice_text", "practice_checkpoint", "scenery_visibility", "scenery_cell_distance", "scenery_object_distance", "mission_break", "mission_furniture", "mission_solid", "mission_prop", "mission_dodge", "mission_dodge_reactive", "mission_spawn_furniture", "mission_spawn_solid", "mission_spawn_prop", "mission_wrong_voice", "mission_wrong_hud", "mission_vehicle_destroy", "mission_dog_scare", "mission_toast", "course_confirm", "course_sign_31", "course_sign_12", "course_sign_30", "mission_touch", "scenery_model", "mission_spawn_breakable", "mission_furniture_contact", "mission_player_contact" };
+    static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm", "explorer_camera", "explorer_race", "race_dispatch", "race_countdown", "race_laps", "practice_hud", "practice_hud_end", "race_time_bonus", "race_lap_clock", "practice_text", "practice_checkpoint", "scenery_visibility", "scenery_cell_distance", "scenery_object_distance", "mission_break", "mission_furniture", "mission_solid", "mission_prop", "mission_dodge", "mission_dodge_reactive", "mission_spawn_furniture", "mission_spawn_solid", "mission_spawn_prop", "mission_wrong_voice", "mission_wrong_hud", "mission_vehicle_destroy", "mission_dog_scare", "mission_toast", "course_confirm", "course_sign_31", "course_sign_12", "course_sign_30", "mission_touch", "scenery_model", "mission_spawn_breakable", "mission_furniture_contact", "mission_player_contact", "mission_native_corner", "debug_view" };
     for (const Hook *h = k_hooks; h->name; h++)
         if (h->addr == pc)
             for (int k = 1; k < (int)(sizeof names / sizeof names[0]); k++)
@@ -449,6 +497,7 @@ void rt_hook(PPCContext *c, uint32_t pc) {
     case HOOK_MISSION_SPAWN_PROP: if(g_enhanced) mission_target_spawn_hook(c,3); break;
     case HOOK_MISSION_SPAWN_BREAKABLE: if(g_enhanced) mission_target_spawn_hook(c,5); break;
     case HOOK_MISSION_FURNITURE: if(g_enhanced) mission_target_hook(c,1); break;
+    case HOOK_MISSION_NATIVE_CORNER: if(g_enhanced) mission_native_corner_hook(c); break;
     case HOOK_MISSION_PLAYER_CONTACT: if(g_enhanced) mission_player_contact_hook(c); break;
     case HOOK_MISSION_FURNITURE_CONTACT: if(g_enhanced) mission_authored_scenery_contact(c,1); break;
     case HOOK_MISSION_TOUCH:
@@ -496,12 +545,13 @@ void rt_hook(PPCContext *c, uint32_t pc) {
         }
         break;
     case HOOK_PRACTICE_HUD_END: if (g_enhanced) race_practice_hud_end_hook(c); break;
-    case HOOK_EXPLORER_CAMERA: if (g_enhanced) explorer_camera(c, g_frame); break;
+    case HOOK_EXPLORER_CAMERA: if (g_enhanced) {explorer_camera(c, g_frame);mission_finish_camera();track_debug_camera_capture();} break;
     case HOOK_EXPLORER_RACE: if (g_enhanced) { course_reverse_race(c); explorer_race(c); mission_race_hook(c); } break;
     case HOOK_COURSE_CONFIRM: if(g_enhanced) course_reverse_confirm(c); break;
     case HOOK_NAME_INDEX: if (g_enhanced) name_index_hook(c); break;
     case HOOK_NAME_CONFIRM: if (g_enhanced) name_confirm_hook(c); break;
     case HOOK_ATTRACT: attract_hook(); break;
+    case HOOK_DEBUG_VIEW: if(g_enhanced) track_debug_view_capture(c); break;
     case HOOK_PROJECTION: {                  /* the current slot has just been written */
         uint32_t s = LD8(GAME_ENH_WIDE_PROJ_SLOT);
         if (!g_enhanced || s > 1) break;
@@ -991,7 +1041,7 @@ int enh_restart_requested(void) { return g_apply == 2; }
 
 /* ------------------------------------------------------------------ pause (Esc in play) */
 int enh_paused(void) { return g_paused || mission_result(); }
-int enh_inputs_owned(void) { return g_returning || race_restart_pending() || mission_phase() == MISSION_COUNTDOWN || mission_phase() == MISSION_ROLLING || mission_result(); }
+int enh_inputs_owned(void) { return enh_gate_editor_active() || g_returning || race_restart_pending() || mission_phase() == MISSION_COUNTDOWN || mission_phase() == MISSION_ROLLING || mission_phase()==MISSION_PASSED || mission_result(); }
 
 /* Esc from the frontend: 1 if the enhanced mode handled it (pause, or back in a submenu) */
 int enh_escape(void) {
@@ -1056,11 +1106,28 @@ static int pause_items(int *items) {
 
 /* A mission retry needs the complete native teardown, not a partial restoration
  * of pre-race control records: traffic and timing own additional live state. */
+static void mission_selector_reload(void);
+static int g_mission_reload_force;
 static void mission_reload(int index) {
+    unsigned selected=mission_identity((unsigned)index);
+    mission_cancel();
+    atomic_store(&g_mission_explore_request,0);atomic_store(&g_mission_exploring,0);
+    atomic_store(&g_track_debug,0);
+    if(explorer_active()) {if(explorer_free()) explorer_free_toggle();else explorer_toggle();}
+    g_mission_reload_force=1;mission_selector_reload();
+    for(int i=0;i<MISSION_COUNT;i++) if(selected==mission_identity((unsigned)i)) {index=i;break;}
+    if(index>=MISSION_COUNT) index=MISSION_COUNT-1;
     mission_request(index);
     race_restart_cancel();
     g_mission_after_return=1; g_returning=1; g_return_t0=0;
     g_mission_pause_menu=0; g_paused=0;
+}
+
+int enh_mission_retry(void) {
+    if(!g_enhanced || enh_gate_editor_active() || !mission_engaged() || !race_restart_available() ||
+       g_returning || g_mission_pause_menu) return 0;
+    mission_reload(atomic_load(&g_mission_selected));
+    return 1;
 }
 
 static int g_mission_time_save_error;
@@ -1150,7 +1217,7 @@ static void pause_action(int action) {
         else if (g_pause_cursor == 1) { g_pause_controls = 1; g_controls_cursor = 0; }
         else if (items[g_pause_cursor] == T_RESTART_RACE) {
             if (explorer_active()) { if (explorer_free()) explorer_free_toggle(); else explorer_toggle(); }
-            if (mission_engaged()) mission_reload(atomic_load(&g_mission_selected));
+            if (mission_engaged() || atomic_load(&g_mission_exploring)) mission_reload(atomic_load(&g_mission_selected));
             else { race_restart_request(); g_paused = 0; }
         }
         else if (items[g_pause_cursor] == T_MISSION_PRACTICE) {
@@ -1161,7 +1228,9 @@ static void pause_action(int action) {
         }
         else if (items[g_pause_cursor] == T_TRACK_DEBUG) enh_track_debug_toggle();
         else if (items[g_pause_cursor] == T_UNLIMITED_LAPS) race_unlimited_toggle();
-        else if (items[g_pause_cursor] == T_MISSIONS) { g_mission_pause_menu=1; }
+        else if (items[g_pause_cursor] == T_MISSIONS) {
+            mission_cancel();g_mission_pause_menu=1;
+        }
         else {
             mission_cancel(); race_restart_cancel();
             if (GAME_ENH_TEST_GAME_MODE >= 0) { g_returning = 1; g_return_t0 = 0; }
@@ -1318,13 +1387,17 @@ extern int16_t g_analog[4];
 void nvram_save(void);
 
 static void menu_tick(void) {
+    if(enh_gate_editor_active()) {
+        g_analog[0]=0;g_analog[1]=-200;g_analog[2]=g_analog[3]=200;
+        g_in[3]=g_in[4]=0xff;return;
+    }
     /* SDL publishes the live held controls when ownership ends. Only headless
      * runs need neutral inputs; a guest-side clear can race that first publish. */
     if (atomic_exchange(&g_mission_auto_release,0) && g_headless) {
         g_analog[0]=0; g_analog[1]=g_analog[2]=g_analog[3]=-200;
         g_in[3]=g_in[4]=0xff;
     }
-    if (mission_phase() == MISSION_COUNTDOWN || mission_result()) {
+    if (mission_phase() == MISSION_COUNTDOWN || mission_phase()==MISSION_PASSED || mission_result()) {
         g_analog[0]=0; g_analog[1]=g_analog[2]=g_analog[3]=-200;
         g_in[3]=g_in[4]=0xff;
     }
@@ -1462,7 +1535,35 @@ static void practice_native_entry(PPCContext *c, RtFn draw, uint32_t text, int r
     draw(c);
 }
 
+/* Overlay positions are published to the guest thread. Its own formatter
+ * and text queue render the diagnostic glyphs with the HUD texture/filter. */
+typedef struct { int column,row;uint32_t colour;char text[96]; } DebugNativeText;
+static DebugNativeText g_debug_text_pending[96],g_debug_text_published[96];
+static unsigned g_debug_text_pending_count,g_debug_text_published_count;
+static pthread_mutex_t g_debug_text_mutex=PTHREAD_MUTEX_INITIALIZER;
+static void debug_native_text_hook(PPCContext *live) {
+    static uint64_t frame=UINT64_MAX;
+    if(!atomic_load(&g_track_debug) || frame==g_frame) return;
+    frame=g_frame;
+    RtFn draw=rt_lookup(GAME_ENH_PRACTICE_TEXT_RENDER);
+    unsigned sp=live->r[1];if(!draw || sp<8192 || sp>=RAM_SIZE) return;
+    DebugNativeText lines[96];unsigned count;
+    pthread_mutex_lock(&g_debug_text_mutex);
+    count=g_debug_text_published_count;memcpy(lines,g_debug_text_published,count*sizeof *lines);
+    pthread_mutex_unlock(&g_debug_text_mutex);
+    uint8_t saved[8192];memcpy(saved,g_ram+sp-sizeof saved,sizeof saved);
+    PPCContext c=*live;c.r[1]=sp-256;c.budget=10000000;c.unwind=0;
+    unsigned text=sp-128;
+    for(unsigned i=0;i<count && !c.unwind;i++) {
+        memcpy(g_ram+text,lines[i].text,strlen(lines[i].text)+1);
+        c.r[3]=lines[i].column;c.r[4]=lines[i].row;c.r[5]=lines[i].colour;c.r[6]=text;
+        draw(&c);
+    }
+    memcpy(g_ram+sp-sizeof saved,saved,sizeof saved);
+}
+
 static void practice_text_hook(PPCContext *live) {
+    debug_native_text_hook(live);
     int mission=mission_engaged();
     if (!mission && !race_practice_active(live)) return;
     uint32_t format = live->r[6];
@@ -1496,6 +1597,7 @@ static void practice_text_hook(PPCContext *live) {
         snprintf(progress,sizeof progress,"%u OF %u",
             d->break_count || total ? atomic_load(&g_mission_broken) : atomic_load(&g_mission_gate),
             d->break_count ? d->break_count : total ? total : atomic_load(&g_mission_gates));
+        if(d->handbrake_turn) snprintf(progress,sizeof progress,"%u OF 1",atomic_load(&g_mission_native_success));
         if(d->speed_goal) snprintf(progress,sizeof progress,"%u / %.0f KM/H",atomic_load(&g_mission_speed),d->speed_goal);
         if(d->roll_degrees) {
             if(g_mission_roll_landed) snprintf(progress,sizeof progress,"COMPLETE");
@@ -1504,7 +1606,7 @@ static void practice_text_hook(PPCContext *live) {
         practice_time_text(time,sizeof time,atomic_load(&g_mission_elapsed));
         practice_native_entry(&c,draw,text,2,"MISSION",d->name);
         if(!c.unwind) practice_native_entry(&c,draw,text,8,
-            d->break_count ? d->break_label : total ? d->target_label : d->speed_goal ? "TOP SPEED" : d->roll_degrees ? "ROLL" : "WAYPOINTS",progress);
+            d->break_count ? d->break_label : total ? d->target_label : d->speed_goal ? "TOP SPEED" : d->roll_degrees ? "ROLL" : d->handbrake_turn ? "TOAST" : "WAYPOINTS",progress);
         if(!c.unwind) practice_native_entry(&c,draw,text,14,"TIME",time);
         unsigned nearest=atomic_load(&g_mission_nearest_item);
         if(!c.unwind && mission_phase()==MISSION_RUNNING && nearest!=UINT_MAX) {
@@ -1554,18 +1656,49 @@ static void mission_icon(uint32_t *fb,int x,int y,int w,int h,int sx,int sy,int 
 }
 static void mission_badge(uint32_t *fb,int x,int y,int size,uint32_t colour,int near) {
     int px=(int)(x*g_ui),py=(int)(y*g_ui),n=(int)(size*g_ui),height=near ? n*3/2 : n;
-    unsigned digit=colour==0xffd800 ? 1 : colour==0xc0c0c0 ? 2 : 3;
-    static const unsigned numerals[]={0,0x2497,0x73e7,0x73cf}; /* 3 x 5 */
+    unsigned digit=colour==0xe0f4ff ? 4 : colour==0xffd800 ? 1 : colour==0xc0c0c0 ? 2 : 3;
+    static const unsigned numerals[]={0,0x2c97,0x73e7,0x73cf,0x7be4}; /* 3 x 5; platinum P */
+    /* Subpixel coverage keeps the small circles round at their cardinal points
+     * and lets the shield retain a fine outline at native resolution. */
     for(int j=0;j<height;j++) for(int i=0;i<n;i++) {
-        float u=(i+.5f)/n,v=(j+.5f)/height,r=hypotf(u-.5f,v-.5f);
-        int inside=near ? (v>=.22f*(1-2*fabsf(u-.5f)) && v<=1-.66f*fabsf(u-.5f)) : r<.48f;
-        int dx=px+i,dy=py+j;
-        uint32_t ink=near ? (u<.5f ? 0xffe02e : 0x20c862) : r>.32f && r<.39f ? ((colour>>1)&0x7f7f7f) : colour;
-        if(!near && u>=.35f && u<.65f && v>=.25f && v<.75f) {
-            int gx=(int)((u-.35f)*10),gy=(int)((v-.25f)*10);
-            if(numerals[digit] & (1u<<(14-gy*3-gx))) ink=0x483e28;
+        unsigned red=0,green=0,blue=0,coverage=0;
+        for(int sy=0;sy<4;sy++) for(int sx=0;sx<4;sx++) {
+            float u=(i+(sx+.5f)/4)/n,v=(j+(sy+.5f)/4)/height;
+            float r=hypotf(u-.5f,v-.5f);
+            int inside=near ? (v>=.22f*(1-2*fabsf(u-.5f)) && v<=1-.66f*fabsf(u-.5f)) : r<.48f;
+            if(!inside) continue;
+            uint32_t ink=near ? (u<.5f ? 0xffe02e : 0x20c862) :
+                r>.32f && r<.39f ? ((colour>>1)&0x7f7f7f) : colour;
+            if(near) {
+                float top=.22f*(1-2*fabsf(u-.5f)),bottom=1-.66f*fabsf(u-.5f);
+                float edge=fminf(fminf(u,1-u),fminf((v-top)/1.0925f,(bottom-v)/1.1982f));
+                if(edge<.6f/size) ink=0xffffff;
+            }
+            if(!near && u>=.35f && u<.65f && v>=.25f && v<.75f) {
+                int gx=(int)((u-.35f)*10),gy=(int)((v-.25f)*10);
+                if(numerals[digit] & (1u<<(14-gy*3-gx))) ink=0x483e28;
+            }
+            red+=ink>>16&255;green+=ink>>8&255;blue+=ink&255;coverage++;
         }
-        if(inside && dx>=0&&dx<g_fbw&&dy>=0&&dy<g_fbh) blend(&fb[dy*g_fbw+dx],ink,255);
+        int dx=px+i,dy=py+j;
+        if(coverage && dx>=0&&dx<g_fbw&&dy>=0&&dy<g_fbh)
+            blend(&fb[dy*g_fbw+dx],(red/coverage<<16)|(green/coverage<<8)|(blue/coverage),coverage*255/16);
+    }
+}
+static void mission_checkmark(uint32_t *fb,int x,int y,int size,uint32_t colour) {
+    int px=(int)(x*g_ui),py=(int)(y*g_ui),n=(int)ceilf(size*g_ui);
+    const float points[3][2]={{.12f,.48f},{.38f,.75f},{.88f,.18f}};
+    for(int j=0;j<n;j++) for(int i=0;i<n;i++) {
+        float u=(i+.5f)/n,v=(j+.5f)/n,distance=1;
+        for(int segment=0;segment<2;segment++) {
+            float ax=points[segment][0],ay=points[segment][1];
+            float dx=points[segment+1][0]-ax,dy=points[segment+1][1]-ay;
+            float t=fmaxf(0,fminf(1,((u-ax)*dx+(v-ay)*dy)/(dx*dx+dy*dy)));
+            distance=fminf(distance,hypotf(u-ax-t*dx,v-ay-t*dy));
+        }
+        int sx=px+i,sy=py+j;
+        unsigned alpha=(unsigned)(255*fmaxf(0,fminf(1,(.10f-distance)*n+.5f)));
+        if(alpha && sx>=0&&sx<g_fbw&&sy>=0&&sy<g_fbh) blend(&fb[sy*g_fbw+sx],colour,alpha);
     }
 }
 static void mission_menu_text(uint32_t *fb,int w,int h,int x,int y,const char *s,uint32_t colour,float scale) {
@@ -1574,7 +1707,7 @@ static void mission_menu_text(uint32_t *fb,int w,int h,int x,int y,const char *s
     g_ui=original;
 }
 static void mission_page_dots(uint32_t *fb,int w,int page,int pages) {
-    float centre_y=282*g_ui;
+    float centre_y=306*g_ui;
     for(int p=0;p<pages;p++) {
         float centre_x=(w*.5f+(p-(pages-1)*.5f)*14)*g_ui;
         float radius=2.5f*g_ui;
@@ -1583,57 +1716,85 @@ static void mission_page_dots(uint32_t *fb,int w,int page,int pages) {
                 float distance=hypotf(x+.5f-centre_x,y+.5f-centre_y);
                 if(distance<=radius && (p==page || distance>=radius-g_ui) &&
                    x>=0 && x<g_fbw && y>=0 && y<g_fbh)
-                    blend(&fb[y*g_fbw+x],0xc0c0c0,255);
+                    blend(&fb[y*g_fbw+x],0xffffff,255);
             }
     }
 }
+/* Reload only between runs, on the UI thread that owns mission selection. */
+static uint64_t g_mission_reload_toast_until;
+static int g_mission_reload_failed;
+static void mission_selector_reload(void) {
+    static unsigned polls,previous_hash;
+    if(mission_engaged()) return;
+    int force=g_mission_reload_force;g_mission_reload_force=0;
+    if(!force && (polls++%30)) return;
+    const char *path=getenv("RT_MISSIONS_CSV");if(!path) path="missions.csv";
+    FILE *file=fopen(path,"rb");if(!file) return;
+    unsigned hash=2166136261u;int ch;
+    while((ch=fgetc(file))!=EOF) hash=(hash^(unsigned char)ch)*16777619u;
+    int failed=ferror(file);fclose(file);if(failed || (!force && hash==previous_hash)) return;
+    previous_hash=hash;
+    unsigned selected=g_mission_cursor<MISSION_COUNT ? mission_identity((unsigned)g_mission_cursor) : 0;
+    unsigned revision=g_mission_csv_revision;
+    mission_csv_load();
+    g_mission_reload_failed=revision==g_mission_csv_revision;
+    if(!g_mission_reload_failed) for(unsigned i=0;i<g_mission_record_count;i++)
+        g_mission_records[i].mission=mission_migrate_identity(g_mission_records[i].mission);
+    g_mission_reload_toast_until=rt_now()+3*CPU_HZ;
+    if(selected) for(int i=0;i<MISSION_COUNT;i++) if(selected==mission_identity((unsigned)i)) { g_mission_cursor=i;break; }
+    if(g_mission_cursor>MISSION_COUNT+1) g_mission_cursor=MISSION_COUNT+1;
+}
 static void mission_draw_selector(uint32_t *fb, int w, int h) {
+    mission_selector_reload();
     dim_rect(fb,w,h,0,0,w,h,190);
     draw_centered(fb,w,h,FONT_MEDIUM,24,T(T_MISSIONS),0xffd800);
     int first=(g_mission_cursor/10)*10;
-    mission_menu_text(fb,w,h,38,58,"NO.",0x00ff00,.5f);
-    mission_menu_text(fb,w,h,78,58,"MISSION",0x00ff00,.5f);
-    mission_menu_text(fb,w,h,w-281,58,"LOCATION",0x00ff00,.4f);
-    mission_menu_text(fb,w,h,w-233,58,"MODE",0x00ff00,.5f);
-    mission_menu_text(fb,w,h,w-185,58,"CAR",0x00ff00,.5f);
-    mission_menu_text(fb,w,h,w-146,58,"GEAR",0x00ff00,.5f);
-    mission_menu_text(fb,w,h,w-115,58,"TYPE",0x00ff00,.55f);
-    mission_menu_text(fb,w,h,w-64,58,"BEST",0x00ff00,.55f);
+    const int inset=12; /* Narrow the name column and centre the table. */
+    mission_menu_text(fb,w,h,38+inset,64,"NO.",0x00ff00,.55f);
+    mission_menu_text(fb,w,h,78+inset,64,"MISSION",0x00ff00,.55f);
+    mission_menu_text(fb,w,h,w-344-inset,64,"LOCATION",0x00ff00,.55f);
+    mission_menu_text(fb,w,h,w-282-inset,64,"MODE",0x00ff00,.55f);
+    mission_menu_text(fb,w,h,w-217-inset,64,"CAR",0x00ff00,.55f);
+    mission_menu_text(fb,w,h,w-164-inset,64,"GEAR",0x00ff00,.55f);
+    mission_menu_text(fb,w,h,w-115-inset,64,"TYPE",0x00ff00,.55f);
+    mission_menu_text(fb,w,h,w-64-inset,64,"BEST",0x00ff00,.55f);
     for (int i=first; i<=MISSION_COUNT+1 && i<first+10; i++) {
-        int y=78+(i-first)*20;
+        int y=84+(i-first)*21;
         uint32_t colour=i==g_mission_cursor ? 0xffd800 : 0xffffff;
-        if(i==g_mission_cursor) dim_rect(fb,w,h,32,y-2,w-32,y+18,90);
+        if(i==g_mission_cursor) dim_rect(fb,w,h,32+inset,y-2,w-32-inset,y+18,90);
         if(i>=MISSION_COUNT) {
-            mission_menu_text(fb,w,h,78,y,i==MISSION_COUNT ? "CLEAR MISSION RECORDS" : T(T_BACK),colour,.55f);
+            mission_menu_text(fb,w,h,78+inset,y,i==MISSION_COUNT ? "CLEAR MISSION RECORDS" : T(T_BACK),
+                i==MISSION_COUNT ? (i==g_mission_cursor ? 0xff7070 : 0xe84848) : colour,.55f);
             continue;
         }
         const MissionDefinition *d=&k_missions[i];
         char number[12]; snprintf(number,sizeof number,"%02d",i+1);
         float original_ui=g_ui;g_ui*=.6f;
-        draw_text(fb,w,h,FONT_MEDIUM,60,(int)((y-3)/.6f),number,colour);
+        draw_text(fb,w,h,FONT_MEDIUM,60+(int)(inset/.6f),(int)((y-3)/.6f),number,colour);
         g_ui=original_ui;
         unsigned best=mission_menu_best(i);
-        if(best) mission_badge(fb,63,y+1,10,mission_medal(d,best) ?
-            best<=d->gold_ms ? 0xffd800 : best<=d->silver_ms ? 0xc0c0c0 : 0xcd7f32 : 0x40ff40,0);
-        mission_menu_text(fb,w,h,78,y,d->name,colour,.55f);
+        if(best) {
+            if(!d->gold_ms) mission_checkmark(fb,63+inset,y+1,10,0x40ff40);
+            else mission_badge(fb,62+inset,y,12,mission_medal_colour(d,best),0);
+        }
+        mission_menu_text(fb,w,h,78+inset,y,d->name,colour,.55f);
         static const char *const locations[]={"TOWN","COAST","MOUNT"};
-        mission_menu_text(fb,w,h,w-281,y,locations[d->region],colour,.5f);
+        mission_menu_text(fb,w,h,w-344-inset,y,locations[d->region],colour,.55f);
         static const int cars[5][4]={{0,112,80,36},{88,220,80,36},{88,148,80,36},{168,148,80,36},{160,112,80,36}};
         int sx=cars[d->car][0],sy=cars[d->car][1];
         if(d->tuned && d->car==0) sx=80;
         else if(d->tuned && (d->car==2 || d->car==3)) sy=184;
-        mission_icon_tinted(fb,w-233,y,40,16,88,256,96,32,d->traffic ? 0xc0c0c0 : 0xffd800);
-        mission_icon(fb,w-187,y,32,15,sx,sy,80,36);
-        if(d->tuned) mission_icon(fb,w-163,y+10,10,4,214,242,40,10);
-        mission_icon(fb,w-143,y,20,14,d->transmission ? 0 : 70,48,d->transmission ? 56 : 35,36);
+        mission_icon_tinted(fb,w-287-inset,y-2,60,20,88,256,96,32,d->traffic ? 0xc0c0c0 : 0xffd800);
+        mission_icon(fb,w-217-inset,y-2,44,20,sx,sy,80,36);
+        if(d->tuned) mission_icon(fb,w-184-inset,y+12,11,4,214,242,40,10);
+        mission_icon(fb,w-164-inset,y-2,d->transmission ? 31 : 20,20,d->transmission ? 0 : 70,48,d->transmission ? 56 : 35,36);
         const char *type=*d->type ? d->type : "DRIVE";
         if(!strcasecmp(type,"JUMP") || !strcasecmp(type,"TURN")) type="STUNT";
-        mission_menu_text(fb,w,h,w-115,y,type,colour,.55f);
+        mission_menu_text(fb,w,h,w-115-inset,y,type,colour,.55f);
         if((d->limit_ms || d->vehicle_destroy) && best) {
             char time[24]; snprintf(time,sizeof time,"%.2f",best/1000.0);
-            float time_scale=fminf(.55f,48.f/fmaxf(1,text_width(FONT_SMALL,time)));
-            mission_menu_text(fb,w,h,w-64,y,time,colour,time_scale);
-            if(mission_near_gold(d,best)) mission_badge(fb,w-19,y+1,10,0,1);
+            mission_menu_text(fb,w,h,w-64-inset,y,time,colour,.55f);
+            if(mission_near_gold(d,best)) mission_badge(fb,w-19-inset,y-3,10,0,1);
         }
     }
     mission_page_dots(fb,w,first/10,(MISSION_COUNT+11)/10);
@@ -1651,56 +1812,91 @@ static void mission_draw_selector(uint32_t *fb, int w, int h) {
             uint32_t colours[]={0xffd800,0xc0c0c0,0xcd7f32}; int width=0;
             for(int j=0;j<3;j++) { snprintf(tiers[j],sizeof tiers[j],"%s %.0f S",names[j],times[j]/1000.0); width+=text_width(FONT_SMALL,tiers[j]); }
             int x=(w-width-24)/2;
-            for(int j=0;j<3;j++) { draw_text(fb,w,h,FONT_SMALL,x,298,tiers[j],colours[j]); x+=text_width(FONT_SMALL,tiers[j])+12; }
-        } else draw_centered(fb,w,h,FONT_SMALL,298,limits,0xc0c0c0);
+            for(int j=0;j<3;j++) { draw_text(fb,w,h,FONT_SMALL,x,352,tiers[j],colours[j]); x+=text_width(FONT_SMALL,tiers[j])+12; }
+        } else draw_centered(fb,w,h,FONT_SMALL,352,limits,0xc0c0c0);
     }
-    draw_centered(fb,w,h,FONT_SMALL,336,g_mission_cursor<MISSION_COUNT ?
-        k_missions[g_mission_cursor].briefing : "CHOOSE A MISSION",0xc0c0c0);
-    if(g_mission_time_save_error) draw_centered(fb,w,h,FONT_SMALL,310,"COULD NOT SAVE CSV",0xc0c0c0);
-    const char *page_hint="SHIFT UP / DOWN: PAGE";
-    mission_menu_text(fb,w,h,(w-(int)(text_width(FONT_SMALL,page_hint)*.5f))/2,323,page_hint,0xc0c0c0,.5f);
-    if(g_mission_clear_error) draw_centered(fb,w,h,FONT_SMALL,310,"COULD NOT CLEAR RECORDS",0xffd800);
+    draw_centered(fb,w,h,FONT_SMALL,326,g_mission_cursor<MISSION_COUNT ?
+        k_missions[g_mission_cursor].briefing : "CHOOSE A MISSION",0xffffff);
+    if(rt_now()<g_mission_reload_toast_until) {
+        dim_rect(fb,w,h,w/2-130,2,260,18,220);
+        mission_menu_text(fb,w,h,w/2-120,4,g_mission_reload_failed ?
+            "CSV RELOAD FAILED - DATA RETAINED" : "MISSION DATA RELOADED",0xffffff,.5f);
+    }
+    if(g_mission_time_save_error) draw_centered(fb,w,h,FONT_SMALL,378,"COULD NOT SAVE CSV",0xc0c0c0);
+    if(g_mission_clear_error) draw_centered(fb,w,h,FONT_SMALL,378,"COULD NOT CLEAR RECORDS",0xffd800);
     if(g_mission_clear_confirm) {
         dim_rect(fb,w,h,0,0,w,h,220);
-        draw_centered(fb,w,h,FONT_SMALL,115,"CLEAR ALL MISSION RECORDS?",0xffd800);
+        draw_centered(fb,w,h,FONT_SMALL,115,"CLEAR ALL MISSION RECORDS?",0xff7070);
         draw_centered(fb,w,h,FONT_SMALL,155,"TIMES AND MEDALS WILL BE REMOVED",0xffffff);
         draw_centered(fb,w,h,FONT_SMALL,215,"CANCEL",g_mission_clear_yes ? 0xffffff : 0xffd800);
-        draw_centered(fb,w,h,FONT_SMALL,250,"CLEAR RECORDS",g_mission_clear_yes ? 0xffd800 : 0xffffff);
+        draw_centered(fb,w,h,FONT_SMALL,250,"CLEAR RECORDS",g_mission_clear_yes ? 0xff7070 : 0xe84848);
     }
 }
 
-static int debug_font_alpha(int ax,int ay,float x,float y) {
-    int ix=(int)floorf(x),iy=(int)floorf(y);float tx=x-ix,ty=y-iy;
-    int sample[4];
-    for(int i=0;i<4;i++) {
-        int sx=ix+(i&1),sy=iy+(i>>1);
-        sample[i]=sx<0 || sx>=8 || sy<0 || sy>=16 ? 0 : g_system_font[(ay+sy)*128+ax+sx];
-    }
-    return (int)lroundf((sample[0]*(1-tx)+sample[1]*tx)*(1-ty)+(sample[2]*(1-tx)+sample[3]*tx)*ty);
-}
+#include "gate_editor.h"
+
 static void debug_text(uint32_t *fb,int w,int h,int x,int y,const char *text,uint32_t colour) {
-    if(!g_system_font_ready) return;
-    /* The original course/time renderer uses this ASCII 8x16 system atlas. */
-    float scale=g_ui*.75f;int width=(int)ceilf(8*scale),height=(int)ceilf(16*scale);
-    (void)w;(void)h;
-    for(unsigned i=0;text[i];i++) {
-        unsigned ch=(unsigned char)text[i]&127;
-        int ax=(ch&15)*8,ay=(ch>>4)*16;
-        int left=(int)lroundf(x*g_ui+i*8*scale),top=(int)lroundf(y*g_ui);
-        for(int pass=0;pass<2;pass++) for(int py=0;py<height;py++) for(int px=0;px<width;px++) {
-            int a=debug_font_alpha(ax,ay,(px+.5f)/scale-.5f,(py+.5f)/scale-.5f);
-            int dx=left+px+(pass?0:1),dy=top+py+(pass?0:1);
-            if(dx>=0 && dx<g_fbw && dy>=0 && dy<g_fbh && a)
-                blend(&fb[dy*g_fbw+dx],pass?colour:0,pass?a:a*3/5);
-        }
-    }
+    (void)fb;(void)h;
+    if(g_debug_text_pending_count==96) return;
+    DebugNativeText *line=&g_debug_text_pending[g_debug_text_pending_count++];
+    /* Native characters occupy 8 x 16 pixels on an 8-pixel position grid.
+     * Widescreen adds a centred margin to the game's 512-pixel canvas. */
+    line->column=(int)lroundf((x-(w-512)*.5f)/8.f);
+    line->row=(int)lroundf(y/8.f);line->colour=colour;
+    int fit=(w-x)/8;
+    /* The native queue wraps at 64 columns even in a wider viewport. */
+    if(fit>64-line->column) fit=64-line->column;
+    if(fit<0) fit=0;if(fit>95) fit=95;
+    snprintf(line->text,sizeof line->text,"%.*s",fit,text);
 }
 
+static const uint16_t *g_overlay_depth;
+static int g_overlay_depth_w, g_overlay_depth_h;
+static unsigned g_overlay_depth_mode;
+static float g_debug_project_depth;
+void enh_overlay_depth(const uint16_t *depth, int w, int h, unsigned mode) {
+    g_overlay_depth=depth;g_overlay_depth_w=w;g_overlay_depth_h=h;g_overlay_depth_mode=mode;
+}
+static unsigned debug_depth_value(float depth) {
+    if (g_overlay_depth_mode == 1) {
+        /* Voodoo's floating W encoding, matching compute_wfloat(). */
+        uint64_t iw=(uint64_t)(281474976710656.0 / depth);
+        if (!iw) return 65535;
+        int exp=__builtin_clzll(iw)-16;
+        if(exp<0) return 0;if(exp>=16) return 65535;
+        return ((exp<<12)|((iw>>(35-exp))^0x1fff))+1;
+    }
+    float a=g_distance_slot[0].depth[0],b=g_distance_slot[0].depth[1];
+    if(!g_distance_slot[0].valid) return 65535;
+    if(g_distance_slot[0].applied) {
+        double n=g_distance_slot[0].near,f=g_distance_slot[0].far*k_draw_distance[g_distance_slot[0].applied];
+        a=-(f+n)/(f-n);b=-2*f*n/(f-n);
+    }
+    float z=(( -a+b/depth )*.5f+.5f)*65535.f;
+    if(g_overlay_depth_mode==3) {
+        uint32_t iz=(uint32_t)(fmaxf(0,fminf(65535,z))*4096.f);
+        if(iz&0xf0000000) return 0;
+        if(!(iz&0x0ffff000)) return 65535;
+        int exp=__builtin_clz(iz)-4;
+        return ((exp<<12)|((iz>>(15-exp))^0x1fff))+1;
+    }
+    return (unsigned)fmaxf(0,fminf(65535,z));
+}
 static void debug_dot(uint32_t *fb,int x,int y,uint32_t colour) {
-    int px=(int)(x*g_ui),py=(int)(y*g_ui),size=(int)ceilf(g_ui);
+    /* Projection and native text use 384-high logical coordinates. Convert
+     * once for the colour/depth framebuffer, which may render at 2x or 4x. */
+    int px=(int)lroundf(x*g_ui),py=(int)lroundf(y*g_ui),size=(int)ceilf(g_ui);
     for (int dy=0;dy<size;dy++) for (int dx=0;dx<size;dx++)
         if (px+dx>=0 && px+dx<g_fbw && py+dy>=0 && py+dy<g_fbh)
-            blend(&fb[(py+dy)*g_fbw+px+dx],colour,255);
+            {
+            int alpha=255;
+            if(g_overlay_depth && g_overlay_depth_w==g_fbw && g_overlay_depth_h==g_fbh) {
+                unsigned scene=g_overlay_depth[(py+dy)*g_fbw+px+dx];
+                unsigned gate=debug_depth_value(g_debug_project_depth);
+                if(scene!=65535 && gate>scene+16) alpha=128;
+            }
+            blend(&fb[(py+dy)*g_fbw+px+dx],colour,alpha);
+        }
 }
 /* Project diagnostic markers using the native camera's -Z forward convention. */
 static int debug_project(float x,float y,float z,int w,int h,int *sx,int *sy) {
@@ -1710,15 +1906,28 @@ static int debug_project(float x,float y,float z,int w,int h,int *sx,int *sy) {
     float right=cosf(yaw)*dx-sinf(yaw)*dz,forward=-sinf(yaw)*dx-cosf(yaw)*dz;
     float depth=cosf(pitch)*forward+sinf(pitch)*dy;
     float up=cosf(pitch)*dy-sinf(pitch)*forward;
-    if (!isfinite(depth) || depth<1) return 0;
+    if ((!isfinite(depth) || depth<1) && !atomic_load(&g_debug_view_valid)) return 0;
     float focal=h*.9f;
     float px=w*.5f+right*focal/depth,py=h*.5f-up*focal/depth;
+    int native=atomic_load(&g_debug_view_valid);
+    if(native) {
+        float v[12];for(unsigned i=0;i<12;i++) v[i]=atomic_load(&g_debug_view[i]);
+        right=v[0]+v[3]*x+v[6]*y+v[9]*z;
+        up=v[1]+v[4]*x+v[7]*y+v[10]*z;
+        depth=-(v[2]+v[5]*x+v[8]*y+v[11]*z);
+        if(!isfinite(depth)||depth<1) return 0;
+        px=(w-512)*.5f+atomic_load(&g_debug_viewport[1])+atomic_load(&g_debug_viewport[0])*
+            (atomic_load(&g_debug_projection[0])*right/depth-atomic_load(&g_debug_projection[1]));
+        py=atomic_load(&g_debug_viewport[3])-atomic_load(&g_debug_viewport[2])*
+            (atomic_load(&g_debug_projection[2])*up/depth-atomic_load(&g_debug_projection[3]));
+    }
     if (!isfinite(px)||!isfinite(py)||px<0||px>=w||py<0||py>=h) return 0;
-    if(enh_mirrored()) px=w-1-px;
+    if(!native && enh_mirrored()) px=w-1-px;
+    g_debug_project_depth=depth;
     *sx=(int)px; *sy=(int)py; return 1;
 }
 static void debug_draw_gates(uint32_t *fb,int w,int h) {
-    for(unsigned i=0;i<atomic_load(&g_debug_item_count);i++) {
+    for(unsigned i=0;!enh_gate_editor_active() && i<atomic_load(&g_debug_item_count);i++) {
         int x,y;char label[32];
         if(!debug_project(atomic_load(&g_debug_item[i][0]),atomic_load(&g_debug_item[i][1]),
             atomic_load(&g_debug_item[i][2]),w,h,&x,&y)) continue;
@@ -1730,25 +1939,79 @@ static void debug_draw_gates(uint32_t *fb,int w,int h) {
         float x=atomic_load(&g_debug_gate[i][0]),y=atomic_load(&g_debug_gate[i][1]);
         float z=atomic_load(&g_debug_gate[i][2]),nx=atomic_load(&g_debug_gate[i][3]);
         float nz=atomic_load(&g_debug_gate[i][4]),half=atomic_load(&g_debug_gate[i][5]);
+        float half_height=atomic_load(&g_debug_gate_height[i]);if(half_height<=0) half_height=4;
+        float tilt=atomic_load(&g_debug_gate_tilt[i])*.01745329252f,ct=cosf(tilt),st=sinf(tilt);
+        unsigned role=atomic_load(&g_debug_gate_role[i]);
+        int selected=enh_gate_editor_active() && (g_author_edit_start ? i==g_author_count : i==g_author_selected);
+        uint32_t gate_colour=role==3 ? 0x40ffff : role==1 ? 0xff5050 : role==2 ? 0x40ff40 : 0xffd800;
+        if(enh_gate_editor_active()) {
+            /* World-spaced dots give the plane a visible surface and
+             * perspective, including when it is tilted towards horizontal. */
+            int columns=(int)fminf(64,fmaxf(2,ceilf(half*2)));
+            int rows=(int)fminf(32,fmaxf(2,ceilf(half_height*2)));
+            for(int row=1;row<rows;row++) for(int column=1;column<columns;column++) {
+                float u=2.f*column/columns,side=half*(u-1);
+                float height=half_height*(2.f*row/rows-1);
+                int segment=u<=1?0:1;float blend=u-segment;
+                float ground=atomic_load(&g_debug_gate_ground[i][segment])*(1-blend)+
+                    atomic_load(&g_debug_gate_ground[i][segment+1])*blend;
+                int underground=isfinite(ground) && y+height*ct<ground;
+                uint32_t colour=underground?0xbfc3c8:selected?0xffffff:gate_colour;
+                int px,py;
+                if(debug_project(x+nz*side-nx*height*st,y+height*ct,z-nx*side-nz*height*st,w,h,&px,&py))
+                    debug_dot(fb,px,py,colour);
+            }
+        }
         for (int edge=0;edge<4;edge++) for (int t=0;t<=80;t++) {
-            float side=half*(t/40.f-1),height=0;
-            if (edge==1) height=4;
-            if (edge>=2) { side=edge==2?-half:half; height=t/20.f; }
+            float side=half*(t/40.f-1),height=-half_height;
+            if (edge==1) height=half_height;
+            if (edge>=2) { side=edge==2?-half:half; height=half_height*(t/40.f-1); }
+            float u=half>0 ? (side/half+1) : 1;
+            int segment=u<=1 ? 0 : 1;float blend=u-segment;
+            float ground=atomic_load(&g_debug_gate_ground[i][segment])*(1-blend)+
+                atomic_load(&g_debug_gate_ground[i][segment+1])*blend;
+            int underground=isfinite(ground) && y+height*ct<ground;
+            uint32_t editor_colour=underground ? (selected ? 0xbfc3c8 : 0xff60ff) : selected ? 0xffffff : gate_colour;
             int sx,sy;
-            if (debug_project(x+nz*side,y+height,z-nx*side,w,h,&sx,&sy))
-                debug_dot(fb,sx,sy,atomic_load(&g_debug_gate_any) ?
+            if (debug_project(x+nz*side-nx*height*st,y+height*ct,z-nx*side-nz*height*st,w,h,&sx,&sy))
+                debug_dot(fb,sx,sy,enh_gate_editor_active() ? editor_colour : atomic_load(&g_debug_gate_any) ?
                     (atomic_load(&g_debug_gate_mask)&(1u<<i) ? 0x40ff40 : 0xffd800) :
                     i==atomic_load(&g_mission_gate)?0xffd800:0x40ff40);
         }
+        if(enh_gate_editor_active()) for(int t=0;t<=80;t++) {
+            float u=t/40.f,side=half*(u-1);int segment=u<=1?0:1;float blend=u-segment;
+            float ground=atomic_load(&g_debug_gate_ground[i][segment])*(1-blend)+
+                atomic_load(&g_debug_gate_ground[i][segment+1])*blend;
+            int px,py;
+            if(isfinite(ground) && fabsf(ground-y)<=half_height &&
+               debug_project(x+nz*side,ground,z-nx*side,w,h,&px,&py)) debug_dot(fb,px,py,0x40ffff);
+        }
         int sx,sy; char label[32];
+        if(role==3 && enh_gate_editor_active()) {
+            float heading=g_author_start.heading*.01745329252f;
+            /* Heading is independent of the fixed checkpoint plane. */
+            for(unsigned t=0;t<=60;t++) {
+                float distance=t/10.f;
+                int px,py;
+                if(debug_project(x+sinf(heading)*distance,y+1,z+cosf(heading)*distance,w,h,&px,&py))
+                    debug_dot(fb,px,py,0xffffff);
+            }
+            for(int side=-1;side<=1;side+=2) for(unsigned t=0;t<=20;t++) {
+                float back=t/10.f;
+                int px,py;
+                if(debug_project(x+sinf(heading)*(6-back)+side*cosf(heading)*back*.5f,y+1,
+                    z+cosf(heading)*(6-back)-side*sinf(heading)*back*.5f,w,h,&px,&py)) debug_dot(fb,px,py,0xffffff);
+            }
+        }
         if (debug_project(x,y+5,z,w,h,&sx,&sy)) {
-            snprintf(label,sizeof label,"GATE %u",i+1);
-            debug_text(fb,w,h,sx,sy,label,0xffd800);
+            snprintf(label,sizeof label,role==3 ? "START" : role==1 ? "FAIL %u" : role==2 ? "FINISH %u" : "GATE %u",i+1);
+            debug_text(fb,w,h,sx,sy,label,gate_colour);
         }
     }
 }
 void enh_draw_overlay(uint32_t *fb, int w, int h) {
     if (!g_enhanced) return;
+    g_debug_text_pending_count=0;
     g_fbw = w;
     g_fbh = h;
     g_ui = h >= 768 ? (float)h / 384.0f : 1.0f;     /* lay out in 384-high logical units */
@@ -1759,7 +2022,7 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
         draw_centered(fb, w, h, FONT_MEDIUM, h / 2 - font_height(FONT_MEDIUM) / 2, T(g_apply == 1 || g_apply == 2 ? T_APPLYING : T_LOADING), 0xffffff);
         return;
     }
-    if (explorer_active()) {
+    if (explorer_active() && !enh_gate_editor_active()) {
         char status[80];
         snprintf(status, sizeof status, explorer_free() ?
                  "F7 EXIT  F6 DRONE  %.0f KM/H  %.0f M" :
@@ -1792,14 +2055,13 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
             if (medal) {
                 snprintf(status,sizeof status,"%s MEDAL",medal);
                 reason=status;
-                result_colour=elapsed<=d->gold_ms ? 0xffd800 :
-                    elapsed<=d->silver_ms ? 0xc0c0c0 : 0xcd7f32;
+                result_colour=mission_medal_colour(d,elapsed);
             }
             draw_centered(fb,w,h,FONT_MEDIUM,130,reason,result_colour);
+            if(phase==MISSION_PASSED && mission_near_gold(d,elapsed))
+                mission_badge(fb,(w+text_width(FONT_MEDIUM,reason))/2+12,133,14,0,1);
             snprintf(status,sizeof status,"TIME %.2f SEC   CONTACTS %u",elapsed/1000.0,atomic_load(&g_mission_contacts));
             draw_centered(fb,w,h,FONT_SMALL,185,status,0xffffff);
-            if(phase==MISSION_PASSED && mission_near_gold(d,elapsed))
-                mission_badge(fb,(w-text_width(FONT_SMALL,status))/2+text_width(FONT_SMALL,"TIME 00.00 SEC")+4,187,14,0,1);
             unsigned best=atomic_load(&g_mission_best);
             if (best) {
                 const char *best_medal=mission_medal(d,best);
@@ -1832,42 +2094,75 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
     if (enh_menu_active()) draw_menu(fb, w, h);
     if (atomic_load(&g_track_debug) && (race_time_trial() || mission_engaged())) {
         if(!g_paused) debug_draw_gates(fb,w,h);
-        char label[128]; int y=16, x=w/2;
+        char label[128]; int y=16, x=w/2-6*8;
         unsigned gates=atomic_load(&g_debug_gate_count);
         unsigned vehicle=atomic_load(&g_debug_vehicle_kind);
         char model[48];for(unsigned i=0;i<sizeof model;i++) model[i]=(char)atomic_load(&g_debug_object_name[i]);
         model[sizeof model-1]=0;
         char solid[32];for(unsigned i=0;i<sizeof solid;i++) solid[i]=(char)atomic_load(&g_debug_solid_name[i]);
         solid[sizeof solid-1]=0;
-        dim_rect(fb,w,h,x,y-2,w,28+13*gates+(vehicle!=UINT_MAX ? 13 : 0)+(*model ? 13 : 0)+(*solid ? 13 : 0),190);
-        snprintf(label,sizeof label,"X %.1f Y %.1f Z %.1f H %.1f CP %u",
-            atomic_load(&g_debug_x),atomic_load(&g_debug_y),atomic_load(&g_debug_z),
-            atomic_load(&g_debug_heading),atomic_load(&g_debug_cp));
-        debug_text(fb,w,h,x,y,label,0x40ff40); y+=13;
+        (void)gates;
+        int flying=enh_gate_editor_active() && g_author_flying;
+        float debug_x=flying?atomic_load(&g_debug_camera[0]):atomic_load(&g_debug_x);
+        float debug_z=flying?atomic_load(&g_debug_camera[2]):atomic_load(&g_debug_z);
+        float debug_y=flying?atomic_load(&g_debug_camera[1]):atomic_load(&g_debug_y);
+        float debug_heading=flying?remainderf(atomic_load(&g_debug_camera[4])*57.2957795f+180,360):atomic_load(&g_debug_heading);
+        snprintf(label,sizeof label,"%s %u X %.1f Z %.1f",
+            flying?"CAM CP":"CP",atomic_load(&g_debug_cp),debug_x,debug_z);
+        debug_text(fb,w,h,x,y,label,0x40ff40); y+=16;
+        snprintf(label,sizeof label,"Y %.1f H %.1f",
+            debug_y,debug_heading);
+        debug_text(fb,w,h,x,y,label,0x40ff40); y+=16;
         snprintf(label,sizeof label,"OBJ %08X X %.1f Z %.1f",
             atomic_load(&g_debug_object),atomic_load(&g_debug_object_x),atomic_load(&g_debug_object_z));
-        debug_text(fb,w,h,x,y,label,0x40ffff); y+=13;
-        if(*model) { debug_text(fb,w,h,x,y,model,0x40ffff);y+=13; }
-        if(*solid) { debug_text(fb,w,h,x,y,solid,0xffd800);y+=13; }
+        debug_text(fb,w,h,x,y,label,0x40ffff); y+=16;
+        if(*model) { debug_text(fb,w,h,x,y,model,0x40ffff);y+=16; }
+        if(*solid) { debug_text(fb,w,h,x,y,solid,0xffd800);y+=16; }
         if(vehicle!=UINT_MAX) {
             static const unsigned models[]={13,14,0,1,2,3,5,7,10,11,12,15,8,4,6,9};
             snprintf(label,sizeof label,atomic_load(&g_debug_vehicle_parked) ? "PARKED %u MODEL %02u %.0f M X %.1f Z %.1f" : "CAR %u MODEL %02u %.0f M X %.1f Z %.1f",
                 atomic_load(&g_debug_vehicle_parked) ? atomic_load(&g_debug_vehicle_index) : vehicle,
                 atomic_load(&g_debug_vehicle_parked) ? vehicle : models[vehicle],atomic_load(&g_debug_vehicle_distance),
                 atomic_load(&g_debug_vehicle_x),atomic_load(&g_debug_vehicle_z));
-            debug_text(fb,w,h,x,y,label,0x40ffff);y+=13;
+            debug_text(fb,w,h,x,y,label,0x40ffff);y+=16;
         }
         for (unsigned i=0;i<atomic_load(&g_debug_gate_count);i++) {
-            MissionGate gate={{atomic_load(&g_debug_gate[i][0]),atomic_load(&g_debug_gate[i][1]),
-                atomic_load(&g_debug_gate[i][2])},atomic_load(&g_debug_gate[i][3]),
-                atomic_load(&g_debug_gate[i][4]),atomic_load(&g_debug_gate[i][5]),4};
-            snprintf(label,sizeof label,"G%u%s X %.1f Z %.1f W %.1f",
-                i+1,atomic_load(&g_debug_gate_any) ?
-                    (atomic_load(&g_debug_gate_mask)&(1u<<i) ? " DONE" : "") :
-                    i==atomic_load(&g_mission_gate)?" NEXT":"",gate.centre.x,gate.centre.z,gate.half_width*2);
-            debug_text(fb,w,h,x,y,label,0xffd800); y+=13;
+            unsigned role=atomic_load(&g_debug_gate_role[i]);
+            int selected=enh_gate_editor_active() && (g_author_edit_start ? i==g_author_count : i==g_author_selected);
+            uint32_t colour=role==1?0xff5050:role==2?0x40ff40:role==3?0x40ffff:0xffd800;
+            char prefix[24];snprintf(prefix,sizeof prefix,role==3?"START ":"G%u %s ",i+1,role==1?"FAIL":role==2?"FINISH":"WAYPOINT");
+            debug_text(fb,w,h,x,y,prefix,colour);
+            snprintf(label,sizeof label,"X %.0f Z %.0f W %.0f",
+                atomic_load(&g_debug_gate[i][0]),atomic_load(&g_debug_gate[i][2]),atomic_load(&g_debug_gate[i][5])*2);
+            debug_text(fb,w,h,x+(int)strlen(prefix)*8,y,label,selected?0xffffff:colour);y+=16;
         }
     }
+    if(enh_gate_editor_active()) {
+        char edit[128];int x=w/2-48,y=220;
+        pthread_mutex_lock(&g_author_mutex);
+        snprintf(edit,sizeof edit,"%s M%u %u OF %u",g_author_flying?"FLY CAMERA":"EDIT GATE",g_author_mission,g_author_count?g_author_selected+1:0,g_author_count);
+        debug_text(fb,w,h,x,y,edit,0x00ff00);y+=16;
+        if(g_author_edit_start) {
+            snprintf(edit,sizeof edit,"START CP %d R %.1f SPEED %.0f",g_author_start_cp,g_author_start.heading,g_author_start_speed);
+            debug_text(fb,w,h,x,y,edit,0xffffff);y+=16;
+            debug_text(fb,w,h,x,y,"DPAD ROTATE RIGHT STICK SPEED",0xffffff);y+=16;
+        } else if(g_author_count) {
+            AuthorGate gate=g_author_gates[g_author_selected];
+            snprintf(edit,sizeof edit,"W %.1f H %.1f R %.1f %s",gate.width,gate.height,gate.heading,gate.role==1?"FAIL":gate.role==2?"FINISH":"WAYPOINT");
+            debug_text(fb,w,h,x,y,edit,0xffffff);y+=16;
+        }
+        debug_text(fb,w,h,x,y,"A ADD X DELETE B PREV Y NEXT",0xffffff);y+=16;
+        debug_text(fb,w,h,x,y,"L3 CAMERA/GATE L R ROLE",0xffffff);y+=16;
+        snprintf(edit,sizeof edit,"HOME SET START CP %u",g_author_start_cp>=0 ? (unsigned)g_author_start_cp : atomic_load(&g_debug_cp));
+        debug_text(fb,w,h,x,y,edit,0xffffff);y+=16;
+        debug_text(fb,w,h,x,y,"START SAVE SELECT CANCEL",0xffffff);y+=16;
+        if(g_author_error) debug_text(fb,w,h,x,y,g_author_error==2 ? "NO TRACK SURFACE UNDER CURSOR" : "SAVE FAILED - CHECK GATE ORDER",0xff5050);
+        pthread_mutex_unlock(&g_author_mutex);
+    }
+    pthread_mutex_lock(&g_debug_text_mutex);
+    g_debug_text_published_count=g_debug_text_pending_count;
+    memcpy(g_debug_text_published,g_debug_text_pending,g_debug_text_pending_count*sizeof *g_debug_text_pending);
+    pthread_mutex_unlock(&g_debug_text_mutex);
     if (g_set.show_gyro &&
         g_booted && !g_paused && !enh_menu_active() && !g_starting &&
         !enh_in_attract() && !enh_name_entry_active()) {

@@ -504,6 +504,8 @@ public:
 		pix = m_hires_out.data(); w = m_hires_out_w; h = m_hires_out_h;
 		return true;
 	}
+	void diagnostic_depth(std::vector<u16> &out, rectangle const &clip) const;
+	u32 diagnostic_depth_mode() const { return m_reg.fbz_mode().wbuffer_select() | (m_reg.fbz_mode().depth_float_select() << 1); }
 	// recomp debug: raw framebuffer/texture memory (RT_VOODOO_VRAMDUMP)
 	u8 const *debug_fbram() const { return m_fbram; }
 	u32 debug_fbsize() const { return m_fbmask + 1; }

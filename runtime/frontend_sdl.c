@@ -197,6 +197,8 @@ int frontend_shift_up_held(void) {
 static void update_rumble(int active);
 static int g_rumble_testing;
 static int g_menu_repeat_button = -1;
+static int g_gate_repeat_button=-1,g_gate_repeat_action=-1;
+static Uint32 g_gate_repeat_at;
 /* Check actual window flags as well as focus events: some SDL backends do not
  * deliver every focus transition. Retry while inactive if play begins there. */
 static void input_focus(int focused) {
@@ -400,6 +402,16 @@ double frontend_stick_position(void) {
 double frontend_steering_position(void) { return g_analog[0] / (double)ANALOG_RANGE; }
 
 static void apply_inputs(double dt) {
+    if(enh_gate_editor_active()) {
+        if(g_pad && g_input_focus) enh_gate_editor_axes(
+            controller_axis(SDL_GameControllerGetAxis(g_pad,SDL_CONTROLLER_AXIS_LEFTX),.15,1),
+            controller_axis(SDL_GameControllerGetAxis(g_pad,SDL_CONTROLLER_AXIS_LEFTY),.15,1),
+            controller_axis(SDL_GameControllerGetAxis(g_pad,SDL_CONTROLLER_AXIS_RIGHTX),.15,1),
+            controller_axis(SDL_GameControllerGetAxis(g_pad,SDL_CONTROLLER_AXIS_RIGHTY),.15,1),
+            controller_trigger(SDL_GameControllerGetAxis(g_pad,SDL_CONTROLLER_AXIS_TRIGGERLEFT),g_trigger_deadzone),
+            controller_trigger(SDL_GameControllerGetAxis(g_pad,SDL_CONTROLLER_AXIS_TRIGGERRIGHT),g_trigger_deadzone),dt);
+        g_analog[0]=0;g_analog[1]=-ANALOG_RANGE;g_analog[2]=g_analog[3]=ANALOG_RANGE;return;
+    }
     /* Menu confirmation can consume a pedal button's down event. These controls
      * represent held state, so reconcile them with the device every frame. */
     int pad_active = g_pad && g_input_focus;
@@ -671,6 +683,7 @@ int frontend_run(int scale) {
     g_frontend_active = 1;
 
     static uint32_t frame[2048 * 2048], raw[2048 * 2048];
+    static uint16_t scene_depth[2048 * 2048];
     uint64_t last_frame = 0, last_tick = SDL_GetPerformanceCounter(), last_save = last_tick;
     int running = 1, fs_applied = 0, restart = 0, text_on = 1;
     while (running) {
@@ -767,6 +780,35 @@ int frontend_run(int scale) {
                     test_rumble(); break;  /* Switch Capture: test the transport independently of game FFB. */
                 }
 #endif
+                if(ev.cbutton.button==SDL_CONTROLLER_BUTTON_BACK && enh_gate_editor_button(GATE_EDIT_SELECT)) break;
+                if(enh_gate_editor_active()) {
+                    int action=-1;
+                    switch(ev.cbutton.button) {
+                    case SDL_CONTROLLER_BUTTON_START:action=GATE_EDIT_ACCEPT;break;
+                    case SDL_CONTROLLER_BUTTON_GUIDE:action=GATE_EDIT_SET_START;break;
+                    case SDL_CONTROLLER_BUTTON_LEFTSTICK:action=GATE_EDIT_CAMERA;break;
+                    case SDL_CONTROLLER_BUTTON_A:action=GATE_EDIT_ADD;break;
+                    case SDL_CONTROLLER_BUTTON_X:action=GATE_EDIT_DELETE;break;
+                    case SDL_CONTROLLER_BUTTON_B:action=GATE_EDIT_PREV;break;
+                    case SDL_CONTROLLER_BUTTON_Y:action=GATE_EDIT_NEXT;break;
+                    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:action=GATE_EDIT_ROLE_UP;break;
+                    case SDL_CONTROLLER_BUTTON_DPAD_UP:action=GATE_EDIT_RAISE;break;
+                    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:action=GATE_EDIT_ROLE_DOWN;break;
+                    case SDL_CONTROLLER_BUTTON_DPAD_DOWN:action=GATE_EDIT_LOWER;break;
+                    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:action=GATE_EDIT_ROTATE_LEFT;break;
+                    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:action=GATE_EDIT_ROTATE_RIGHT;break;
+                    }
+                    if(action>=0) {
+                        enh_gate_editor_button(action);
+                        int repeats=action==GATE_EDIT_ROTATE_LEFT || action==GATE_EDIT_ROTATE_RIGHT ||
+                            action==GATE_EDIT_RAISE || action==GATE_EDIT_LOWER ||
+                            action==GATE_EDIT_PREV || action==GATE_EDIT_NEXT;
+                        g_gate_repeat_button=repeats?ev.cbutton.button:-1;
+                        g_gate_repeat_action=action;g_gate_repeat_at=SDL_GetTicks()+350;
+                    }
+                    break;
+                }
+                if(ev.cbutton.button==SDL_CONTROLLER_BUTTON_Y && enh_mission_retry()) break;
                 if (pad_pause_press(ev.cbutton.button)) break;
                 if(g_enhanced && (ev.cbutton.button==SDL_CONTROLLER_BUTTON_DPAD_UP || ev.cbutton.button==SDL_CONTROLLER_BUTTON_DPAD_DOWN) &&
                    enh_track_debug_step(ev.cbutton.button==SDL_CONTROLLER_BUTTON_DPAD_UP ? 1 : -1)) break;
@@ -779,9 +821,14 @@ int frontend_run(int scale) {
                     enh_name_step(ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? -1 : 1);
                 else pad_button(ev.cbutton.button, 1);
                 break;
+            case SDL_MOUSEBUTTONDOWN:
+                if(ev.button.button==SDL_BUTTON_LEFT && enh_gate_editor_active())
+                    enh_gate_editor_mouse((float)ev.button.x/tw,(float)ev.button.y/th);
+                break;
             case SDL_CONTROLLERBUTTONUP:
                 if (pad_matches(ev.cbutton.which)) {
                     if (g_menu_repeat_button == ev.cbutton.button) g_menu_repeat_button = -1;
+                    if(g_gate_repeat_button==ev.cbutton.button) g_gate_repeat_button=-1;
                     pad_button(ev.cbutton.button, 0);
                 }
                 break;
@@ -790,6 +837,12 @@ int frontend_run(int scale) {
         }
         window_focus(SDL_GetWindowFlags(win));
         menu_pad_repeat(SDL_GetTicks());
+        if(!g_input_focus || !g_pad || !enh_gate_editor_active()) g_gate_repeat_button=-1;
+        if(g_gate_repeat_button>=0 && (Sint32)(SDL_GetTicks()-g_gate_repeat_at)>=0) {
+            if(SDL_GameControllerGetButton(g_pad,g_gate_repeat_button)) {
+                enh_gate_editor_button(g_gate_repeat_action);g_gate_repeat_at=SDL_GetTicks()+80;
+            } else g_gate_repeat_button=-1;
+        }
         update_rumble((SDL_GetWindowFlags(win) & SDL_WINDOW_INPUT_FOCUS) &&
                       !enh_paused() && !enh_menu_active() && !enh_turbo() && !enh_inputs_owned());
         uint64_t now = SDL_GetPerformanceCounter();
@@ -804,7 +857,9 @@ int frontend_run(int scale) {
         int fresh = cnt != last_frame && w > 0 && h > 0;
         if (fresh) {
             last_frame = cnt;
-            voodoo_get_frame(raw, 2048 * 2048, &w, &h);
+            unsigned depth_mode;
+            last_frame = voodoo_get_frame_depth(raw, scene_depth, 2048 * 2048, &w, &h, &depth_mode);
+            enh_overlay_depth(scene_depth, w, h, depth_mode);
             if (w != tw || h != th) {
                 /* Fit new windows to the game aspect ratio, but preserve restored user dimensions. */
                 if (!restored_window && (long)w * th != (long)h * tw && !(SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP)) {

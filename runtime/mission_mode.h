@@ -13,18 +13,22 @@ extern int16_t g_analog[4];
 enum { MISSION_HIT_WALL=1, MISSION_HIT_CAR=2, MISSION_HIT_SCENERY=4, MISSION_HIT_BREAKABLE=8, MISSION_HIT_ALL=15 };
 typedef struct {
     const char *name, *briefing, *break_label;
+    unsigned id;
+    char legacy_names[192];
     unsigned start_cp, finish_cp;
     unsigned limit_ms, contacts, collision_types, collision_delay_ms;
     unsigned car, transmission, region, traffic;
     unsigned completion_delay_ms, hint_remaining, hint_idle_ms;
     unsigned gold_ms, silver_ms;
-    unsigned rolling_metres;
+    unsigned rolling_metres, lead_in_metres;
     float rolling_speed;
     unsigned custom_gates, custom_finish, any_order;
     unsigned break_count, break_type;
     float break_radius, break_x[32], break_z[32];
     float end_x, end_z, end_width;
     float gate_x[MISSION_MAX_GATES], gate_z[MISSION_MAX_GATES], gate_width[MISSION_MAX_GATES];
+    float gate_y[MISSION_MAX_GATES],gate_height[MISSION_MAX_GATES],gate_heading[MISSION_MAX_GATES],gate_tilt[MISSION_MAX_GATES];
+    unsigned gate_role[MISSION_MAX_GATES]; /* 0 waypoint, 1 failure, 2 finish */
     char target_models[256], target_label[32], type[24],target_vehicles[64],parked_models[64];
     unsigned vehicle_destroy, region_visit, scenery_touch;
     unsigned target_count, target_at_finish, tuned, custom_start;
@@ -38,15 +42,25 @@ typedef struct {
     float wallride_distance;
     float landing_x,landing_z,landing_y,landing_radius,landing_height;
     unsigned landing, handbrake_turn;
+    unsigned obstacle, obstacle_model;
+    float obstacle_x,obstacle_z,obstacle_heading;
+    unsigned forbidden_controls, collect_gap_ms, no_turn_back, park_ms;
+    float park_length, park_angle, park_speed;
+    char protected_models[256];
     float turn_x,turn_z,turn_radius;
 } MissionDefinition;
 static MissionDefinition k_missions[96];
 /* Inclusive thresholds; zero means this mission has no medal tiers. */
 static const char *mission_medal(const MissionDefinition *d, unsigned elapsed) {
     if (!d->gold_ms || elapsed>d->limit_ms) return NULL;
+    if (d->gold_ms>500 && elapsed<=d->gold_ms-500) return "PLATINUM";
     if (elapsed<=d->gold_ms) return "GOLD";
     if (elapsed<=d->silver_ms) return "SILVER";
     return "BRONZE";
+}
+static uint32_t mission_medal_colour(const MissionDefinition *d,unsigned elapsed) {
+    if(d->gold_ms>500 && elapsed<=d->gold_ms-500) return 0xe0f4ff;
+    return elapsed<=d->gold_ms ? 0xffd800 : elapsed<=d->silver_ms ? 0xc0c0c0 : 0xcd7f32;
 }
 #define MISSION_COUNT g_mission_count
 static int g_mission_count;
@@ -64,6 +78,8 @@ static float g_mission_max_speed, g_mission_jump_height;
 static unsigned g_mission_two_wheel_ms;
 static atomic_uint g_mission_two_wheel_display;
 static int g_mission_two_wheel_previous,g_mission_turn_active,g_mission_landed,g_mission_turn_button_previous;
+static uint64_t g_mission_turn_release_at;
+static int g_mission_rolling_direction;
 static float g_mission_turn_previous,g_mission_turn_angle;
 static unsigned g_mission_turn_contacts;
 static float g_mission_landing_y;
@@ -76,11 +92,12 @@ static int g_mission_wall_previous;
 static MissionRun g_mission_run; /* guest thread only */
 static atomic_int g_mission_selection_applied;
 static atomic_int g_mission_phase, g_mission_request, g_mission_selected;
-static atomic_uint g_mission_elapsed, g_mission_contacts, g_mission_gate, g_mission_gates;
+static atomic_uint g_mission_elapsed, g_mission_contacts, g_mission_gate, g_mission_gates, g_mission_native_success;
 static atomic_uint g_mission_countdown, g_mission_distance;
 static atomic_uint g_mission_gate_times[MISSION_MAX_GATES];
 static atomic_uint_fast64_t g_mission_result_at;
-static uint64_t g_mission_countdown_end, g_mission_last_collect_ms;
+static uint64_t g_mission_countdown_end, g_mission_last_collect_ms, g_mission_park_since;
+static float g_mission_challenge_heading;
 static atomic_uint g_mission_nearest_item;
 static MissionGate g_mission_entry;
 static atomic_int g_mission_auto_steer, g_mission_auto_release;
@@ -95,10 +112,25 @@ static MissionRecord g_mission_records[256];
 static unsigned g_mission_record_count;
 static char g_mission_save_path[1024];
 
-static unsigned mission_identity(unsigned selected) {
+static unsigned mission_name_identity(const char *name) {
     unsigned id=2166136261u;
-    for(const unsigned char *p=(const unsigned char*)k_missions[selected].name;*p;p++) id=(id^*p)*16777619u;
+    for(const unsigned char *p=(const unsigned char*)name;*p;p++) id=(id^*p)*16777619u;
     return id | 0x80000000u;
+}
+static unsigned mission_identity(unsigned selected) {
+    return k_missions[selected].id ? 0x40000000u|k_missions[selected].id :
+        mission_name_identity(k_missions[selected].name);
+}
+static unsigned mission_migrate_identity(unsigned identity) {
+    if(identity<(unsigned)MISSION_COUNT) return mission_identity(identity);
+    if(!(identity&0x80000000u)) return identity;
+    for(unsigned i=0;i<(unsigned)MISSION_COUNT;i++) {
+        if(identity==mission_name_identity(k_missions[i].name)) return mission_identity(i);
+        char aliases[192];snprintf(aliases,sizeof aliases,"%s",k_missions[i].legacy_names);
+        char *next=aliases,*alias;
+        while((alias=strsep(&next,";"))) if(*alias && identity==mission_name_identity(alias)) return mission_identity(i);
+    }
+    return identity;
 }
 static void mission_progress_init(const char *settings) {
     mission_csv_load();
@@ -112,7 +144,7 @@ static void mission_progress_init(const char *settings) {
         MissionRecord record; char extra;
         if (sscanf(line,"%u %u %u %u %c",&record.course,&record.car,&record.mission,&record.best,&extra)==4 &&
             record.car<256 && record.best>0)
-            { if(record.mission<(unsigned)MISSION_COUNT) record.mission=mission_identity(record.mission);
+            { record.mission=mission_migrate_identity(record.mission);
               g_mission_records[g_mission_record_count++]=record; }
     }
     fclose(f);
@@ -181,6 +213,7 @@ static int mission_result(void) {
 }
 static int mission_engaged(void) { return mission_phase() >= MISSION_LOADING; }
 static atomic_int g_mission_explore_request;
+static atomic_int g_mission_exploring;
 static void mission_cancel(void) {
     atomic_store(&g_race_mission_practice,0);
     atomic_store(&g_mission_request, -1);
@@ -500,8 +533,9 @@ static void mission_target_spawn_hook(PPCContext *c,unsigned family) {
         }
     }
 }
+static void mission_publish(void);
 static void mission_target_hook(PPCContext *c,unsigned family) {
-    if(!mission_available()||mission_phase()!=MISSION_RUNNING||!g_mission_target_count) return;
+    if(!mission_available()||mission_phase()!=MISSION_RUNNING) return;
     unsigned kind=family==1?c->r[27]:family==2?c->r[28]:c->r[26];
     unsigned live=family==1?c->r[28]:c->r[30];
     unsigned collider=family==1?c->r[26]:family==2?c->r[31]:c->r[28];
@@ -511,6 +545,13 @@ static void mission_target_hook(PPCContext *c,unsigned family) {
     if(getenv("RT_MISSION_TARGET_LOG")) rt_log("mission target event: family %u kind %u live %x collider %x other %x player %x\n",family,kind,live,collider,counterpart,LD32(car+0x4d8));
     /* Contact records point at the collider body, twelve bytes past its links. */
     if(counterpart!=LD32(car+0x4d8)+0xc) return;
+    const MissionDefinition *definition=&k_missions[g_mission_selected];
+    for(unsigned m=0;m<sizeof k_mission_models/sizeof *k_mission_models;m++)
+        if(k_mission_models[m].family==family && k_mission_models[m].kind==kind &&
+           mission_model_selected(definition->protected_models,k_mission_models[m].name)) {
+            g_mission_run.phase=MISSION_OBJECTIVE_FAILED;mission_publish();return;
+        }
+
     for(unsigned i=0;i<g_mission_target_count;i++) {
         MissionTarget *t=&g_mission_targets[i];
         if(t->met||t->family!=family||t->kind!=kind) continue;
@@ -673,6 +714,32 @@ static void mission_break_hook(PPCContext *c) {
         }
     }
 }
+/* CSV input restrictions and a stopping bay defined by the final gate. */
+static void mission_special_tick(const MissionDefinition *d,unsigned car,uint64_t ms) {
+    if(g_mission_run.phase!=MISSION_RUNNING && g_mission_run.phase!=MISSION_PASSED) return;
+    if(((d->forbidden_controls&1) && g_analog[1]>-180) ||
+       ((d->forbidden_controls&2) && g_analog[2]>-180) ||
+       ((d->forbidden_controls&4) && g_analog[3]>-180) ||
+       (d->no_turn_back && fabsf(remainderf(LDF32(car+0xc4)-g_mission_challenge_heading,6.2831853f))>1.5707963f) ||
+       (d->collect_gap_ms && g_mission_last_collect_ms && !mission_auto_collection_complete(d) &&
+        ms-g_mission_last_collect_ms>d->collect_gap_ms)) {
+        g_mission_run.phase=MISSION_OBJECTIVE_FAILED;return;
+    }
+    if(!d->park_ms || !g_mission_run.gate_count) return;
+    MissionGate gate=g_mission_run.gates[g_mission_run.gate_count-1];
+    MissionPosition pos=mission_car_position(car);
+    float x=pos.x-gate.centre.x,z=pos.z-gate.centre.z;
+    float angle=fabsf(remainderf(LDF32(car+0xc4)-atan2f(gate.nx,gate.nz),6.2831853f))*57.2957795f;
+    int parked=fabsf(x*gate.nz-z*gate.nx)<=gate.half_width &&
+        fabsf(x*gate.nx+z*gate.nz)<=d->park_length*.5f &&
+        fabsf(pos.y+1-gate.centre.y)<=gate.half_height+1 &&
+        fabs(LDF32(car+0xac))*3.6f<=d->park_speed && angle<=d->park_angle;
+    if(!parked) g_mission_park_since=0;
+    else if(!g_mission_park_since) g_mission_park_since=ms;
+    int complete=parked && ms-g_mission_park_since>=d->park_ms;
+    if(g_mission_run.next_gate>=g_mission_run.gate_count)
+        g_mission_run.phase=complete ? MISSION_PASSED : MISSION_RUNNING;
+}
 static void mission_check_objective(void) {
     const MissionDefinition *d=&k_missions[atomic_load(&g_mission_selected)];
     /* Judge after the normal rules so collision/time failures take priority
@@ -687,7 +754,8 @@ static void mission_check_objective(void) {
     if(d->landing && d->custom_gates && g_mission_run.phase==MISSION_PASSED && !g_mission_landed)
         g_mission_run.phase=MISSION_RUNNING;
     if((d->landing || d->handbrake_turn) && g_mission_landed && g_mission_run.phase==MISSION_RUNNING &&
-       (!d->landing || g_mission_run.next_gate>=g_mission_run.gate_count)) g_mission_run.phase=MISSION_PASSED;
+       (!d->landing || g_mission_run.next_gate>=g_mission_run.gate_count) &&
+       (!d->handbrake_turn || !d->custom_finish)) g_mission_run.phase=MISSION_PASSED;
     if(g_mission_run.phase==MISSION_PASSED && ((d->two_wheel_ms && g_mission_two_wheel_ms<d->two_wheel_ms) ||
        (d->roll_degrees && !g_mission_roll_landed) ||
        (d->wallride_distance && g_mission_wall_distance<d->wallride_distance) ||
@@ -827,6 +895,13 @@ static int mission_on_two_wheels(PPCContext *c,unsigned car) {
     }
     return (mask==5 || mask==10) && fabs(LDF32(car+0xac))>1.4f;
 }
+/* JAB a7900: native corner success, after route, speed and clean-contact
+ * checks, before choosing the spoken language. Never infer this from audio. */
+static void mission_native_corner_hook(PPCContext *c) {
+    if(g_mission_run.phase!=MISSION_RUNNING || c->r[27]!=LD32(c->r[2]+0x488)) return;
+    const MissionDefinition *d=&k_missions[atomic_load(&g_mission_selected)];
+    if(d->handbrake_turn) g_mission_landed=1;
+}
 static void mission_stunt_tick(PPCContext *c,unsigned car,const MissionDefinition *d,uint64_t ms) {
     MissionPosition p=mission_car_position(car);
     if(getenv("RT_MISSION_STUNT_LOG")) {
@@ -911,31 +986,11 @@ static void mission_stunt_tick(PPCContext *c,unsigned car,const MissionDefinitio
            fabsf(p.y-g_mission_landing_y)<=d->landing_height && mission_ground(c,p.x,p.z,&ground) && fabsf(p.y-ground)<.6f)
             g_mission_landed=1;
     }
-    if(d->handbrake_turn) {
-        float yaw=LDF32(car+0x1b0),ground; int brake=g_analog[3]>0;
-        int in_zone=hypotf(p.x-d->turn_x,p.z-d->turn_z)<=d->turn_radius;
-        if(!g_mission_turn_active && brake && !g_mission_turn_button_previous && in_zone && fabs(LDF32(car+0xac))>=5.5f) {
-            g_mission_turn_active=1; g_mission_turn_previous=yaw; g_mission_turn_angle=0;
-            g_mission_turn_contacts=g_mission_run.contacts;
-        }
-        if(g_mission_turn_active) {
-            float delta=remainderf(yaw-g_mission_turn_previous,6.28318530718f);
-            g_mission_turn_angle+=delta; g_mission_turn_previous=yaw;
-            float angle=fabsf(g_mission_turn_angle)*57.2957795f;
-            if(!in_zone || g_mission_run.contacts!=g_mission_turn_contacts || angle>d->handbrake_turn+20) g_mission_turn_active=0;
-            else if(!brake) {
-                if(angle>=d->handbrake_turn-10 && angle<=d->handbrake_turn+15 &&
-                   fabs(LDF32(car+0xac))>=1.4f && mission_ground(c,p.x,p.z,&ground) && fabsf(p.y-ground)<.8f)
-                    g_mission_landed=1;
-                g_mission_turn_active=0;
-            }
-        }
-        g_mission_turn_button_previous=brake;
-    }
+
 }
 static void mission_publish(void) {
     const MissionDefinition *d=&k_missions[atomic_load(&g_mission_selected)];
-    if(g_mission_run.phase==MISSION_PASSED && (mission_auto_collection_complete(d) || d->landing) && !atomic_load(&g_mission_result_at))
+    if(g_mission_run.phase==MISSION_PASSED && !atomic_load(&g_mission_result_at))
         atomic_store(&g_mission_result_at,rt_now()+(uint64_t)d->completion_delay_ms*(CPU_HZ/1000));
     if(g_mission_run.phase==MISSION_CONTACT_FAILED && !atomic_load(&g_mission_result_at)) {
         unsigned delay=k_missions[atomic_load(&g_mission_selected)].collision_delay_ms;
@@ -946,6 +1001,7 @@ static void mission_publish(void) {
            !atomic_load(&g_mission_gate_times[i])) atomic_store(&g_mission_gate_times[i],(unsigned)g_mission_run.elapsed_ms);
     atomic_store(&g_mission_elapsed,(unsigned)g_mission_run.elapsed_ms);
     atomic_store(&g_mission_contacts,g_mission_run.contacts);
+    atomic_store(&g_mission_native_success,d->handbrake_turn && g_mission_landed);
     atomic_store(&g_mission_gate,g_mission_run.next_gate);
     atomic_store(&g_mission_gates,g_mission_run.gate_count);
     if(g_mission_run.any_order) {
@@ -961,29 +1017,71 @@ static void mission_publish(void) {
     } else atomic_store(&g_mission_distance,0);
     atomic_store(&g_mission_phase,g_mission_run.phase);
 }
+/* Register authored obstacles through the native TCAR catalog so rendering,
+ * streaming and collision use the same placement. Retry snapshots may retain
+ * our last record; replace it rather than accumulating cars. */
+static unsigned g_mission_obstacle_catalog,g_mission_obstacle_index,g_mission_obstacle_descriptor;
+static int mission_place_obstacle(PPCContext *live,const MissionDefinition *d) {
+    unsigned catalog=LD32(live->r[2]+0x380);
+    if(!race_valid(catalog,0x308+128*36)) return !d->obstacle;
+    unsigned count=LD32(catalog+4);
+    if(catalog==g_mission_obstacle_catalog && count==g_mission_obstacle_index+1 &&
+       LD32(catalog+0x308+g_mission_obstacle_index*36)==g_mission_obstacle_descriptor)
+        ST32(catalog+4,--count);
+    g_mission_obstacle_catalog=0;
+    if(!d->obstacle) return 1;
+    if(count>=128) return 0;
+    unsigned groups=LD32(live->r[2]+0x40),descriptor=0;
+    if(!race_valid(groups,4) || LD32(groups)>128) return 0;
+    for(unsigned i=1;i<LD32(groups);i++) {
+        unsigned group=groups+i*36;
+        if(!race_valid(group,36)) return 0;
+        if(LD32(group+8)==31 && d->obstacle_model<LD32(group+16)) {
+            descriptor=LD32(group+20)+d->obstacle_model*16;break;
+        }
+    }
+    float y;
+    RtFn create=rt_lookup(0x5b56c); unsigned sp=live->r[1];
+    if(!race_valid(descriptor,16) || !create || sp<16384 || sp>=RAM_SIZE ||
+       !mission_ground(live,d->obstacle_x,d->obstacle_z,&y)) return 0;
+    uint8_t saved[8192];memcpy(saved,g_ram+sp-sizeof saved,sizeof saved);
+    unsigned scratch=sp-256;memset(g_ram+scratch,0,64);
+    STF32(scratch,d->obstacle_x);STF32(scratch+4,y);STF32(scratch+8,d->obstacle_z);
+    STF32(scratch+16,d->obstacle_heading*.01745329252f);
+    PPCContext c=*live;c.r[1]=sp-512;c.budget=10000000;c.unwind=0;
+    c.r[3]=scratch;c.r[4]=scratch+12;c.r[5]=descriptor;c.r[6]=1;c.r[7]=0;c.r[8]=0;
+    memset(g_ram+catalog+0x308+count*36,0,36);
+    create(&c);memcpy(g_ram+sp-sizeof saved,saved,sizeof saved);
+    if(c.unwind || LD32(catalog+4)!=count+1) return 0;
+    g_mission_obstacle_catalog=catalog;g_mission_obstacle_index=count;
+    g_mission_obstacle_descriptor=descriptor;
+    return 1;
+}
 static void mission_begin(PPCContext *c, uint32_t car) {
     memset(&g_mission_run,0,sizeof g_mission_run);
+    g_mission_run.vehicle_height=2;
     g_mission_break_mask=0; atomic_store(&g_mission_broken,0);
     g_mission_target_count=g_mission_target_goal=0;
     atomic_store(&g_mission_target_total,0); atomic_store(&g_mission_speed,0);
-    g_mission_max_speed=g_mission_jump_height=0; g_mission_last_collect_ms=0;
+    g_mission_max_speed=g_mission_jump_height=0; g_mission_last_collect_ms=0;g_mission_park_since=0;
     g_mission_two_wheel_ms=0; g_mission_two_wheel_previous=0; atomic_store(&g_mission_two_wheel_display,0);
     g_mission_roll_angle=g_mission_roll_previous=0;
     g_mission_roll_airborne=g_mission_roll_landed=0;g_mission_roll_vector_valid=0;
     g_mission_wall_distance=0; g_mission_wall_previous=0;
     g_mission_turn_active=g_mission_landed=g_mission_turn_button_previous=0;
+    g_mission_turn_release_at=0;
     atomic_store(&g_mission_nearest_item,UINT_MAX);
     atomic_store(&g_mission_result_at,0);
     for(unsigned i=0;i<MISSION_MAX_GATES;i++) atomic_store(&g_mission_gate_times[i],0);
     g_mission_run.phase=MISSION_SETUP_FAILED;
     const MissionDefinition *d=&k_missions[atomic_load(&g_mission_selected)];
     if (!mission_read_road(LD32(0x8c0188))) { mission_publish(); return; }
-    if(!mission_find_targets(c,d)) { mission_publish(); return; }
+    if(!mission_place_obstacle(c,d) || !mission_find_targets(c,d)) { mission_publish(); return; }
     g_mission_landing_y=d->landing_y;
     if(d->landing && !isfinite(g_mission_landing_y) && !mission_ground(c,d->landing_x,d->landing_z,&g_mission_landing_y)) { mission_publish(); return; }
     atomic_store(&g_race_mission_practice,g_mission_target_goal && !d->target_at_finish);
     const unsigned recipe[]={d->start_cp,d->finish_cp,d->limit_ms,d->contacts,d->collision_types,
-        d->car,d->transmission,d->region,d->gold_ms,d->silver_ms,d->rolling_metres,(unsigned)(d->rolling_speed*1000),d->break_count,d->break_type,d->tuned,d->target_count,d->target_at_finish,d->custom_start,d->contact_targets,d->traffic,16};
+        d->car,d->transmission,d->region,d->gold_ms,d->silver_ms,d->rolling_metres,d->lead_in_metres,(unsigned)(d->rolling_speed*1000),d->break_count,d->break_type,d->tuned,d->target_count,d->target_at_finish,d->custom_start,d->contact_targets,d->traffic,16};
     for (unsigned i=0;i<sizeof recipe/sizeof *recipe;i++)
         g_mission_course_key=(g_mission_course_key^recipe[i])*16777619u;
     for(const unsigned char *s=(const unsigned char*)d->target_models;*s;s++)
@@ -1010,6 +1108,7 @@ static void mission_begin(PPCContext *c, uint32_t car) {
         for(unsigned j=0;j<3;j++) { unsigned bits; memcpy(&bits,&values[j],sizeof bits); g_mission_course_key=(g_mission_course_key^bits)*16777619u; }
     }
     int direction=d->route_direction<0 ? -1 : 1;
+    g_mission_rolling_direction=direction;
     if(direction<0) g_mission_course_key=(g_mission_course_key^0x726576u)*16777619u;
     g_mission_car_key=LD8(car);
     atomic_store(&g_mission_best,mission_menu_best((unsigned)atomic_load(&g_mission_selected)));
@@ -1048,10 +1147,11 @@ static void mission_begin(PPCContext *c, uint32_t car) {
         MissionRoadPoint p=mission_road_sample(dist), ahead=mission_road_sample(dist+direction);
         float dx=ahead.x-p.x, dz=ahead.z-p.z, norm=hypotf(dx,dz), y;
         if (norm<.01f || !mission_ground(c,p.x,p.z,&y)) { mission_publish(); return; }
-        g_mission_run.gates[i]=(MissionGate){{p.x,y,p.z},dx/norm,dz/norm,18,4};
+        g_mission_run.gates[i]=(MissionGate){{p.x,y,p.z},dx/norm,dz/norm,18,4,0};
     }
     if (d->custom_gates || d->custom_finish) {
         MissionGate finish=g_mission_run.gates[count-1];
+        unsigned ordered=0;int explicit_finish=0;
         for (unsigned i=0;i<d->custom_gates+d->custom_finish;i++) {
             float gx=i<d->custom_gates ? d->gate_x[i] : d->end_x;
             float gz=i<d->custom_gates ? d->gate_z[i] : d->end_z;
@@ -1078,17 +1178,29 @@ static void mission_begin(PPCContext *c, uint32_t car) {
              * gives a gate direction; ordinary road/finish gates retain their
              * own road heading rather than inheriting the spawn heading. */
             if(d->custom_start && nearest_gap>18 && an>.01f) { nx=ax/an; nz=az/an; nearest=0; }
-            if(!isfinite(nearest) || !mission_ground(c,gx,gz,&y)) { mission_publish(); return; }
-            g_mission_run.gates[i]=(MissionGate){{gx,y,gz},nx,nz,width/2,4};
+            if(!isfinite(nearest)) { mission_publish(); return; }
+            if(i<d->custom_gates && isfinite(d->gate_y[i])) y=d->gate_y[i];
+            else if(!mission_ground(c,gx,gz,&y)) { mission_publish(); return; }
+            unsigned role=i<d->custom_gates ? d->gate_role[i] : 2;
+            if(i<d->custom_gates && isfinite(d->gate_heading[i]) && d->gate_height[i]>0) {
+                float heading=d->gate_heading[i]*.01745329252f;nx=sinf(heading);nz=cosf(heading);
+            }
+            if(i<d->custom_gates && d->gate_height[i]>0 && isfinite(d->gate_y[i])) y=d->gate_y[i];
+            float height=i<d->custom_gates && d->gate_height[i]>0 ? d->gate_height[i]/2 : 4;
+            MissionGate gate={{gx,y,gz},nx,nz,width/2,height,0};
+            if(i<d->custom_gates) gate.tilt=d->gate_tilt[i]*.01745329252f;
+            if(role==1) g_mission_run.failure_gates[g_mission_run.failure_gate_count++]=gate;
+            else {g_mission_run.gates[ordered++]=gate;if(role==2) explicit_finish=1;}
         }
-        count=d->custom_gates+1; if(!d->custom_finish) g_mission_run.gates[count-1]=finish;
-        if(d->any_order) { count=d->custom_gates; g_mission_run.any_order=1; }
+        count=ordered;
+        if(!explicit_finish && !d->any_order) g_mission_run.gates[count++]=finish;
+        if(d->any_order) g_mission_run.any_order=1;
     }
     MissionRoadPoint entry=mission_road_sample(start), entry_ahead=mission_road_sample(start+direction);
     float entry_dx=entry_ahead.x-entry.x, entry_dz=entry_ahead.z-entry.z;
     float entry_norm=hypotf(entry_dx,entry_dz), entry_y;
     if (entry_norm<.01f || !mission_ground(c,entry.x,entry.z,&entry_y)) { mission_publish(); return; }
-    g_mission_entry=(MissionGate){{entry.x,entry_y,entry.z},entry_dx/entry_norm,entry_dz/entry_norm,18,4};
+    g_mission_entry=(MissionGate){{entry.x,entry_y,entry.z},entry_dx/entry_norm,entry_dz/entry_norm,18,4,0};
     g_mission_roll_distance=start-direction*(float)d->rolling_metres;
     MissionRoadPoint spawn=mission_road_sample(g_mission_roll_distance);
     /* Derive the actual travel heading from geometry, rather than a table
@@ -1099,7 +1211,7 @@ static void mission_begin(PPCContext *c, uint32_t car) {
         /* Custom coordinates can be far from the nominal checkpoint. Seed the
          * native tracker at their actual road node so streaming and recovery
          * follow the new position, including on parallel return lanes. */
-        float nearest=INFINITY;
+        float nearest=INFINITY,along=0,entry_distance=0;
         float heading=d->start_heading*.01745329252f;
         for(unsigned j=0;j<g_mission_road_count;j++) {
             MissionRoadPoint a=g_mission_road[j],b=g_mission_road[(j+1)%g_mission_road_count];
@@ -1108,13 +1220,32 @@ static void mission_begin(PPCContext *c, uint32_t car) {
             float gap=hypotf(d->start_x-a.x-t*dx,d->start_z-a.z-t*dz);
             float alignment=n>.01f ? (dx*sinf(heading)+dz*cosf(heading))/n : 0;
             float score=gap+fmaxf(0,-alignment)*25;
-            if(score<nearest) { nearest=score; spawn=a; }
+            if(score<nearest) { nearest=score; spawn=a;entry_distance=along+t*a.length;g_mission_rolling_direction=alignment<0 ? -1 : 1; }
+            along+=a.length;
         }
         spawn.x=d->start_x; spawn.z=d->start_z; spawn.heading=heading;
         float spawn_y;
         if(!mission_ground(c,spawn.x,spawn.z,&spawn_y)) {
             rt_log("mission: no terrain at custom start %.1f, %.1f\n",spawn.x,spawn.z);
             mission_publish(); return;
+        }
+        if(d->lead_in_metres) {
+            /* The authored point belongs to the challenge. Move the timing
+             * line upstream along the road; auto-drive must end before it. */
+            entry_distance-=g_mission_rolling_direction*d->lead_in_metres;
+            spawn=mission_road_sample(entry_distance);
+            MissionRoadPoint ahead=mission_road_sample(entry_distance+g_mission_rolling_direction*12);
+            heading=atan2f(ahead.x-spawn.x,ahead.z-spawn.z);spawn.heading=heading;
+            if(!mission_ground(c,spawn.x,spawn.z,&spawn_y)) {mission_publish();return;}
+        }
+        if(d->rolling_metres) {
+            MissionRoadPoint line=mission_road_sample(entry_distance),line_ahead=mission_road_sample(entry_distance+g_mission_rolling_direction*12);
+            float line_heading=atan2f(line_ahead.x-line.x,line_ahead.z-line.z);
+            g_mission_entry=(MissionGate){{spawn.x,spawn_y,spawn.z},sinf(line_heading),cosf(line_heading),18,4,0};
+            g_mission_roll_distance=entry_distance-g_mission_rolling_direction*d->rolling_metres;
+            spawn=mission_road_sample(g_mission_roll_distance);
+            MissionRoadPoint ahead=mission_road_sample(g_mission_roll_distance+g_mission_rolling_direction*12);
+            spawn.heading=atan2f(ahead.x-spawn.x,ahead.z-spawn.z);
         }
     }
     if (!mission_place(c,spawn,d->rolling_speed)) { mission_publish(); return; }
@@ -1125,13 +1256,16 @@ static void mission_begin(PPCContext *c, uint32_t car) {
         ST32(timing+0xd0,LD32(route+0x2c));
         ST8(timing+0xcc,0); ST8(timing+0xcd,0); ST8(timing+0xce,0);
     }
-    g_mission_run.required_pass_mask=d->custom_gates ? (1u<<d->custom_gates)-1 : 0;
+    unsigned waypoints=0;
+    for(unsigned i=0;i<d->custom_gates;i++) if(d->gate_role[i]!=1) waypoints++;
+    g_mission_run.required_pass_mask=waypoints ? (1u<<waypoints)-1 : 0;
     g_mission_run.gate_count=count; g_mission_run.limit_ms=d->limit_ms;
     g_mission_run.contact_limit=d->contacts;
     /* Whole-course collection runs may cross the finish and continue another lap. */
-    if((g_mission_target_goal && !d->target_at_finish) || d->handbrake_turn) g_mission_run.gate_count=0;
-    if(d->landing) g_mission_run.gate_count=d->custom_gates;
+    if((g_mission_target_goal && !d->target_at_finish) || (d->handbrake_turn && !d->custom_finish)) g_mission_run.gate_count=0;
+    if(d->landing) g_mission_run.gate_count=waypoints;
     g_mission_run.previous=mission_car_position(car);
+    g_mission_challenge_heading=LDF32(car+0xc4);
     g_mission_run.phase=d->rolling_metres ? MISSION_ROLLING : MISSION_RUNNING;
     g_mission_trace_marker=UINT_MAX; g_mission_trace_gate=UINT_MAX;
     g_mission_roll_started=mission_now_ms();
@@ -1156,6 +1290,7 @@ static void mission_explore_tick(PPCContext *c) {
             atomic_store(&g_race_unlimited_laps,1);
             atomic_store(&g_practice_reset,1);
             atomic_store(&g_mission_explore_request,0);
+            atomic_store(&g_mission_exploring,1);
             rt_log("mission: continuing in unlimited Time Attack at current position\n");
         }
     }
@@ -1181,16 +1316,21 @@ static void mission_tick(PPCContext *c) {
         MissionPosition pos=mission_car_position(car);
         if (mission_crossing(g_mission_entry,g_mission_run.previous,pos)>=0) {
             g_mission_run.phase=MISSION_RUNNING; g_mission_run.started=ms;
+            g_mission_challenge_heading=LDF32(car+0xc4);
+            atomic_store(&g_mission_auto_steer,0);
             atomic_store(&g_mission_auto_release,1);
             g_mission_run.last_sample=ms; g_mission_run.previous=pos;
             mission_publish(); rt_log("mission: rolling start handed over at entry checkpoint\n");
-        } else if (ms-g_mission_roll_started>10000 || mission_car_contact(car)) {
+        /* Respawn can leave a contact flag set on the first physics frame.
+         * Let the approach recover from contact; only a timed-out approach
+         * is a setup failure. Mission collision judging starts at handover. */
+        } else if (ms-g_mission_roll_started>10000) {
             g_mission_run.phase=MISSION_SETUP_FAILED; mission_publish();
-            rt_log("mission: rolling approach blocked or timed out\n");
+            rt_log("mission: rolling approach timed out\n");
         } else {
             /* Follow the short approach with native physics and ordinary controls. */
             const MissionDefinition *d=&k_missions[atomic_load(&g_mission_selected)];
-            int direction=d->route_direction<0 ? -1 : 1;
+            int direction=g_mission_rolling_direction;
             float nearest=INFINITY, distance=0, along=g_mission_roll_distance;
             for (unsigned i=0;i<g_mission_road_count;i++) {
                 MissionRoadPoint a=g_mission_road[i], b=g_mission_road[(i+1)%g_mission_road_count];
@@ -1201,7 +1341,17 @@ static void mission_tick(PPCContext *c) {
                 if (progress<=d->rolling_metres+20 && gap<nearest) { nearest=gap; along=distance+t*a.length; }
                 distance+=a.length;
             }
-            MissionRoadPoint target=mission_road_sample(along+direction*12);
+            /* Aim roughly one second ahead, rather than chasing a point
+             * immediately in front of a fast car through the entry line. */
+            float lookahead=fmaxf(12,fminf(40,(float)fabs(LDF32(car+0xac))));
+            MissionRoadPoint target=mission_road_sample(along+direction*lookahead);
+            /* Approach the timing line along its authored heading. Road
+             * lookahead can turn around the next bend before handover. */
+            if(d->custom_start && hypotf(pos.x-g_mission_entry.centre.x,pos.z-g_mission_entry.centre.z)<lookahead) {
+                float heading=d->start_heading*.01745329252f;
+                target.x=g_mission_entry.centre.x+sinf(heading)*lookahead;
+                target.z=g_mission_entry.centre.z+cosf(heading)*lookahead;
+            }
             float desired=atan2f(target.x-pos.x,target.z-pos.z);
             float error=remainderf(desired-LDF32(car+0xc4),6.28318530717958647692f);
             atomic_store(&g_mission_auto_steer,(int)lroundf(fmaxf(-200,fminf(200,-error*160))));
@@ -1246,6 +1396,7 @@ static void mission_tick(PPCContext *c) {
                 (now.x-gate.centre.x)*gate.nz-(now.z-gate.centre.z)*gate.nx,now.y-gate.centre.y);
         }
         mission_rules_step(&g_mission_run,mission_car_position(car),mission_counted_contact(car),judge_ms);
+        mission_special_tick(d,car,ms);
         mission_check_objective();
         mission_actor_tick(c);
         mission_collection_hint(d,mission_car_position(car),ms);
@@ -1278,6 +1429,7 @@ static void mission_checkpoint_hook(PPCContext *c) {
     if (!race_valid(car,0x514) || c->r[3]!=car+0x4dc) return;
     const MissionDefinition *d=&k_missions[atomic_load(&g_mission_selected)];
     if(d->custom_finish || d->any_order || (g_mission_target_goal && !d->target_at_finish)) return;
+    for(unsigned i=0;i<d->custom_gates;i++) if(d->gate_role[i]==2) return;
     unsigned marker=d->finish_cp==1 ? 3 : d->finish_cp+1;
     rt_log("mission: native checkpoint event marker %u, expected %u, gates %u/%u\n",LD8(c->r[3]+2),marker,g_mission_run.next_gate,g_mission_run.gate_count);
     if (LD8(c->r[3]+2)!=marker ||
@@ -1287,6 +1439,7 @@ static void mission_checkpoint_hook(PPCContext *c) {
     if (g_mission_run.phase==MISSION_RUNNING || g_mission_run.phase==MISSION_PASSED) {
         g_mission_run.next_gate=g_mission_run.gate_count;
         g_mission_run.phase=MISSION_PASSED;
+        mission_special_tick(d,car,ms);
         mission_check_objective();
         if(g_mission_run.phase==MISSION_PASSED) mission_save_completion();
         rt_log("mission: native finish checkpoint %u accepted, %u ms\n",d->finish_cp,(unsigned)g_mission_run.elapsed_ms);

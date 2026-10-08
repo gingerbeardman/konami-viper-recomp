@@ -95,51 +95,21 @@ int main(int argc,char **argv) {
     g_mission_run.phase=MISSION_TIME_FAILED; mission_check_objective();
     assert(g_mission_run.phase==MISSION_TIME_FAILED);
     g_mission_run.phase=MISSION_RUNNING;g_mission_run.gate_count=0;g_mission_landed=0;
-    /* A perfect handbrake turn needs a clean, grounded release near 180
-     * degrees. Sliding past the zone, hitting scenery or over-rotating fails. */
+    /* Only the native success branch earns a turn. No host angle, button,
+     * radius or collision criteria are applied to the native verdict. */
     MissionDefinition turn={.handbrake_turn=180,.turn_radius=25};
-    STF32(test_car+0x174,0);STF32(test_car+0x178,0);STF32(test_car+0x17c,10);
-    STF32(test_car+0xac,10);STF32(test_car+0x1b0,0);
-    g_mission_turn_active=g_mission_landed=0;g_mission_run.contacts=0;g_analog[3]=200;
-    mission_stunt_tick(&c,test_car,&turn,200);
-    STF32(test_car+0x1b0,1.57079632679f);mission_stunt_tick(&c,test_car,&turn,216);
-    STF32(test_car+0x1b0,3.14159265359f);mission_stunt_tick(&c,test_car,&turn,232);
-    assert(!g_mission_landed);g_analog[3]=-200;mission_stunt_tick(&c,test_car,&turn,248);
-    assert(g_mission_landed);
-    for(unsigned failure=0;failure<3;failure++) {
-        g_mission_turn_active=g_mission_landed=0;g_mission_run.contacts=0;g_analog[3]=200;
-        STF32(test_car+0x174,0);STF32(test_car+0x1b0,0);
-        mission_stunt_tick(&c,test_car,&turn,300);
-        STF32(test_car+0x1b0,1.57079632679f);mission_stunt_tick(&c,test_car,&turn,316);
-        if(failure==0) g_mission_run.contacts=1;
-        if(failure==1) STF32(test_car+0x174,26);
-        STF32(test_car+0x1b0,failure==2 ? 3.66519142919f : 3.14159265359f);
-        mission_stunt_tick(&c,test_car,&turn,332);
-        g_analog[3]=-200;mission_stunt_tick(&c,test_car,&turn,348);
-        assert(!g_mission_landed && !g_mission_turn_active);
-    }
-    /* A collision cancels the entire press, rather than restarting the
-     * angular reference while the same handbrake input remains held. */
-    g_mission_turn_active=g_mission_landed=g_mission_turn_button_previous=0;
-    g_mission_run.contacts=0;g_analog[3]=200;
-    STF32(test_car+0x174,0);STF32(test_car+0x1b0,0);
-    mission_stunt_tick(&c,test_car,&turn,350);assert(g_mission_turn_active);
-    g_mission_run.contacts=1;mission_stunt_tick(&c,test_car,&turn,351);
-    assert(!g_mission_turn_active);
-    mission_stunt_tick(&c,test_car,&turn,352);assert(!g_mission_turn_active);
-    g_analog[3]=0;mission_stunt_tick(&c,test_car,&turn,353);
-    g_analog[3]=200;mission_stunt_tick(&c,test_car,&turn,354);
-    assert(g_mission_turn_active); /* A fresh press starts a fresh attempt. */
-    g_analog[3]=0;mission_stunt_tick(&c,test_car,&turn,355);
-    /* Releasing early ends the attempt; later unbraked rotation cannot count. */
-    g_mission_turn_active=g_mission_landed=0;g_mission_run.contacts=0;g_analog[3]=200;
-    STF32(test_car+0x174,0);STF32(test_car+0x1b0,0);
-    mission_stunt_tick(&c,test_car,&turn,360);
-    STF32(test_car+0x1b0,1.57079632679f);mission_stunt_tick(&c,test_car,&turn,376);
-    g_analog[3]=0;mission_stunt_tick(&c,test_car,&turn,392);
-    assert(!g_mission_turn_active && !g_mission_landed);
-    STF32(test_car+0x1b0,3.14159265359f);mission_stunt_tick(&c,test_car,&turn,408);
-    assert(!g_mission_landed);
+    k_missions[0]=turn;atomic_store(&g_mission_selected,0);
+    ST32(c.r[2]+0x488,test_car);c.r[27]=test_car;
+    g_mission_landed=0;g_analog[3]=0;g_mission_run.contacts=4;
+    mission_stunt_tick(&c,test_car,&turn,200);assert(!g_mission_landed);
+    c.r[27]=test_car+4096;mission_native_corner_hook(&c);assert(!g_mission_landed);
+    c.r[27]=test_car;g_mission_run.phase=MISSION_ROLLING;
+    mission_native_corner_hook(&c);assert(!g_mission_landed);
+    g_mission_run.phase=MISSION_RUNNING;mission_native_corner_hook(&c);
+    assert(g_mission_landed);mission_publish();assert(atomic_load(&g_mission_native_success)==1);
+    g_mission_landed=0;mission_publish();assert(atomic_load(&g_mission_native_success)==0);
+    k_missions[0]=(MissionDefinition){0};
+    mission_native_corner_hook(&c);assert(!g_mission_landed);
     STF32(test_car+0x174,0);g_mission_run.contacts=0;
     /* Accumulate only grounded side pairs: ordinary driving and jumps cannot
      * earn two-wheel time, and a gap in contact cannot bridge two samples. */
@@ -418,6 +388,28 @@ int main(int argc,char **argv) {
     assert(strstr(contents,"OTHER,other,1,3,5"));
     assert(strstr(contents,"TARGET,\"quoted, description\",9.000,11.000,13.000"));
     assert(!mission_csv_save_gold("MISSING",10000));
-    unsetenv("RT_MISSIONS_CSV"); remove(csv);
+    /* Permanent IDs migrate old name records and survive rename/reorder. */
+    f=fopen(csv,"w");assert(f);
+    fputs("id,name,description,legacy_names,car,transmission,course,cp1,cp2\n101,RENAMED,TEST,OLD NAME,1,at,town,0,1\n202,OTHER,TEST,,1,at,town,0,1\n",f);fclose(f);
+    const char *progress="/private/tmp/mission-id-progress-test";
+    const char *records="/private/tmp/mission-id-progress-test.missions";
+    f=fopen(records,"w");assert(f);
+    fprintf(f,"7 0 %u 5000\n",mission_name_identity("OLD NAME"));fclose(f);
+    mission_progress_init(progress);
+    fprintf(stderr,"DEBUG ids %u car %u aliases %s count %d records %u recordid %u wanted %u best %u\n",k_missions[0].id,k_missions[0].car,k_missions[0].legacy_names,MISSION_COUNT,g_mission_record_count,g_mission_records[0].mission,mission_identity(0),mission_menu_best(0));
+    assert(k_missions[0].id==101 && mission_menu_best(0)==5000);
+    unsigned stable=mission_identity(0);assert(stable==(0x40000000u|101));
+    f=fopen(csv,"w");assert(f);
+    fputs("id,name,description,legacy_names,car,transmission,course,cp1,cp2\n202,OTHER,TEST,,1,at,town,0,1\n101,RENAMED AGAIN,TEST,OLD NAME,1,at,town,0,1\n",f);fclose(f);
+    mission_progress_init(progress);
+    assert(mission_identity(1)==stable && mission_menu_best(1)==5000 && !mission_menu_best(0));
+    atomic_store(&g_mission_selected,1);g_mission_course_key=7;g_mission_car_key=0;
+    g_mission_run.elapsed_ms=4000;mission_save_completion();mission_progress_init(progress);
+    assert(mission_menu_best(1)==4000); /* The new ID is persisted too. */
+    unsigned revision=g_mission_csv_revision;
+    f=fopen(csv,"w");assert(f);
+    fputs("id,name,car,transmission,course,cp1,cp2\n101,A,1,at,town,0,1\n101,B,1,at,town,0,1\n",f);fclose(f);
+    mission_csv_load();assert(g_mission_csv_revision==revision && MISSION_COUNT==2);
+    remove(records);unsetenv("RT_MISSIONS_CSV"); remove(csv);
     free(g_ram); puts("mission targets: discovery, 55 chairs, player ownership, deduplication, automatic/finish objectives, speed and jump thresholds passed");
 }

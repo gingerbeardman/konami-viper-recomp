@@ -443,3 +443,56 @@ When a scenery class includes unwanted objects, append a native placement index
 to select individual instances: `target_models=hitA:2;hitB:4`. An unqualified
 name, such as `hitA`, still selects every placement in that class. Indices belong
 to their own class and are independent of the mission order.
+
+### Permanent mission IDs
+
+Every mission in `missions.csv` has a unique positive integer `id`. Keep that ID
+when renaming, reordering or tuning the mission. Give a new mission a new unused
+ID; do not recycle IDs from deleted missions. IDs are separate from the menu row
+numbers. Duplicate or missing IDs reject a reload and retain the previous data.
+
+Progress and selection follow the ID. Existing name-based saves migrate using
+the current name or the semicolon-separated `legacy_names` field. Keep those
+legacy names until older saves have migrated. CSV files without an `id` column
+remain compatible with the older name-based format.
+
+### Player-controlled stunt approaches
+
+`lead_in` is the distance in metres along the road before the authored custom
+`startx,startz` challenge anchor where player control and timing begin. The
+anchor and objective gates stay in place. `rolling` is the additional approach
+before that handover; it is the only part driven automatically. `lead_in`
+requires a custom start, ranges from 0 to 500, and defaults to 0 for existing
+missions. The authored heading selects the road's travel direction; the
+approach heading is calculated from the road ahead.
+
+Mission 23 uses an 80m player-controlled lead-in, preceded by 30m of auto-drive
+at 60km/h. Its cliff waypoint and bridge landing remain player objectives.
+
+### Gate editor
+
+With track debug enabled, Select opens the editor for the selected mission.
+It opens a free-roam camera: left stick moves forward/back and turns, right
+stick looks, and triggers raise/lower the camera. Click the left stick to
+switch between camera movement and gate editing. A adds a gate five metres
+ahead of the camera and selects it for editing. X deletes, B selects previous,
+and Y selects next. In gate editing, left stick moves the gate, right stick
+changes width/height, D-pad left/right rotates, triggers tilt from upright
+to flat, D-pad up/down changes elevation, and shoulders cycle waypoint,
+failure and finish. Magenta edges are below the sampled road surface; cyan
+marks the road intersection.
+
+Home chooses the current checkpoint as the start and selects its fixed-size
+marker. D-pad left/right adjusts heading; right-stick up/down adjusts rolling
+speed in km/h. Zero disables rolling. Start saves gates and start settings
+to the mission's permanent CSV ID; Select discards the draft. Saved gates
+remain visible during track debug exploration. Gate geometry uses optional
+`gatey`, `gateh`, `gater`, `gatetilt` and `gatetype` semicolon lists. Tilt is
+in degrees: zero is upright, 90 is flat.
+
+Authored parked-car obstacles use `obstacle_model` (native TCAR model 0–15),
+`obstacle_x`, `obstacle_z`, and `obstacle_heading` (degrees). Leave the model blank
+for no obstacle. The native terrain supplies its height; native car rendering,
+streaming and collision handle the placement. Retries replace the placement.
+STUNT DRIVER (permanent ID 59) replaces the disabled reverse-gear draft and uses
+this placement above the Town steps. Its initial gates need playtesting.

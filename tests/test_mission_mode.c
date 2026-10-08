@@ -45,8 +45,14 @@ static void mock_ground(PPCContext *c) {
     c->f[1]=invalid_terrain ? 500 : 10;
     if(invalid_terrain) c->r[3]=0;
 }
+static void mock_obstacle(PPCContext *c) {
+    unsigned catalog=LD32(c->r[2]+0x380),n=LD32(catalog+4),p=catalog+0x308+n*36;
+    ST32(p,c->r[5]);memcpy(g_ram+p+4,g_ram+c->r[3],12);
+    memcpy(g_ram+p+16,g_ram+c->r[4],12);ST32(catalog+4,n+1);
+}
 RtFn rt_lookup(uint32_t address) {
     switch (address) {
+    case 0x5b56c: return mock_obstacle;
     case 0x55168: return mock_cleanup;
     case 0x3b320: return mock_bank;
     case 0x8d8ac: return mock_sound;
@@ -64,6 +70,9 @@ int main(int argc, char **argv) {
     assert(k_missions[0].limit_ms==21000);
     assert(k_missions[2].limit_ms==21000 && k_missions[2].gold_ms==17000 && k_missions[2].silver_ms==19000);
     assert(strcmp(mission_medal(&k_missions[0],17000),"GOLD")==0);
+    assert(strcmp(mission_medal(&k_missions[0],16500),"PLATINUM")==0);
+    assert(strcmp(mission_medal(&k_missions[0],16501),"GOLD")==0);
+    assert(mission_medal_colour(&k_missions[0],16500)==0xe0f4ff);
     assert(strcmp(mission_medal(&k_missions[0],17001),"SILVER")==0);
     assert(strcmp(mission_medal(&k_missions[0],19000),"SILVER")==0);
     assert(strcmp(mission_medal(&k_missions[0],19001),"BRONZE")==0);
@@ -123,8 +132,11 @@ int main(int argc, char **argv) {
     mission_request(1); mission_tick(&c); assert(mission_phase()==MISSION_ARMED);
     mission_race_hook(&c); mission_tick(&c); assert(mission_phase()==MISSION_ROLLING && placed==2);
     assert(LDF32(test_car+0x174)==225); /* 75 m before native section CP4 */
+    /* A first-frame respawn contact must allow the rolling approach to continue. */
+    ST8(test_car+0x3a4,1);
     STF32(test_car+0x174,280); STF32(test_car+0xc4,0); clock_ms+=300; mission_tick(&c);
     assert(mission_phase()==MISSION_ROLLING && atomic_load(&g_mission_auto_steer)<0);
+    ST8(test_car+0x3a4,0);
     assert(!g_mission_run.elapsed_ms && !g_mission_run.contacts && !g_mission_run.next_gate);
     STF32(test_car+0x174,305); clock_ms+=1000; mission_tick(&c);
     assert(mission_phase()==MISSION_RUNNING && g_mission_run.started==clock_ms);
@@ -287,6 +299,45 @@ int main(int argc, char **argv) {
     end_run.previous=(MissionPosition){1040,10,0};
     mission_rules_step(&end_run,(MissionPosition){1060,10,0},0,clock_ms+1000);
     assert(end_run.phase==MISSION_PASSED);
+    /* Editor roles remain separate: fail planes never enter the ordered
+     * waypoint list, and an explicit finish replaces the native endpoint. */
+    MissionDefinition editor_saved=k_missions[0];
+    k_missions[0].custom_finish=0;
+    k_missions[0].gate_role[0]=1;k_missions[0].gate_role[1]=2;
+    mission_begin(&c,test_car);
+    assert(g_mission_run.failure_gate_count==1 && g_mission_run.gate_count==1);
+    MissionRun editor_run=g_mission_run;editor_run.phase=MISSION_RUNNING;
+    editor_run.started=clock_ms;editor_run.last_sample=clock_ms;
+    editor_run.previous=(MissionPosition){890,10,0};
+    mission_rules_step(&editor_run,(MissionPosition){910,10,0},0,clock_ms+1000);
+    assert(editor_run.phase==MISSION_OBJECTIVE_FAILED);
+    editor_run=g_mission_run;editor_run.phase=MISSION_RUNNING;
+    editor_run.started=clock_ms;editor_run.last_sample=clock_ms;
+    editor_run.previous=(MissionPosition){990,10,0};
+    mission_rules_step(&editor_run,(MissionPosition){1010,10,0},0,clock_ms+1000);
+    assert(editor_run.phase==MISSION_PASSED);
+    g_mission_run.phase=MISSION_RUNNING;g_mission_run.next_gate=0;mission_publish();
+    ST8(test_car+0x4de,11);mission_checkpoint_hook(&c);
+    assert(mission_phase()==MISSION_RUNNING);
+    k_missions[0]=editor_saved;mission_begin(&c,test_car);
+    MissionDefinition before_custom_roll=k_missions[0];
+    k_missions[0].custom_start=1;k_missions[0].start_x=900;k_missions[0].start_z=0;
+    k_missions[0].start_heading=90;k_missions[0].rolling_metres=50;
+    mission_begin(&c,test_car);
+    assert(mission_phase()==MISSION_ROLLING);
+    assert(fabsf(g_mission_entry.centre.x-900)<.01f && g_mission_entry.nx>.99f);
+    assert(fabs(LDF32(test_car+0x174)-850)<.01f);
+    /* A challenge anchor remains a waypoint; the rolling handover moves
+     * upstream, leaving the whole stunt under player control. */
+    k_missions[0].lead_in_metres=80;
+    mission_begin(&c,test_car);
+    assert(mission_phase()==MISSION_ROLLING);
+    assert(fabsf(g_mission_entry.centre.x-820)<.01f);
+    MissionRoadPoint approach_spawn=mission_road_sample(g_mission_roll_distance);
+    assert(fabs(LDF32(test_car+0x174)-approach_spawn.x)<.01f);
+    assert(hypotf(g_mission_entry.centre.x-900,g_mission_entry.centre.z)>50);
+    assert(!g_mission_run.next_gate && !g_mission_landed);
+    k_missions[0]=before_custom_roll;
     /* An explicit reverse section faces and crosses against native route order.
      * Its rolling approach starts beyond CP3, rather than on the outgoing leg. */
     csv=fopen(csv_path,"w");assert(csv);
@@ -362,6 +413,45 @@ int main(int argc, char **argv) {
     assert(mission_clear_completion()); assert(!g_mission_record_count && !atomic_load(&g_mission_best));
     FILE *cleared=fopen(g_mission_save_path,"r"); assert(!cleared);
     mission_progress_init(argv[1]); assert(!g_mission_record_count);
+    /* Challenge restrictions apply after control handover; parking needs
+     * continuous stopping, alignment and the final waypoint. */
+    MissionDefinition special={.forbidden_controls=2};
+    g_mission_run.phase=MISSION_RUNNING;g_analog[1]=g_analog[2]=g_analog[3]=-200;
+    mission_special_tick(&special,test_car,1000);assert(g_mission_run.phase==MISSION_RUNNING);
+    g_analog[2]=200;mission_special_tick(&special,test_car,1100);
+    assert(g_mission_run.phase==MISSION_OBJECTIVE_FAILED);g_analog[2]=-200;
+    special=(MissionDefinition){.park_ms=2000,.park_length=6,.park_angle=15,.park_speed=2};
+    g_mission_run.phase=MISSION_PASSED;g_mission_run.gate_count=g_mission_run.next_gate=1;
+    g_mission_run.gates[0]=(MissionGate){{0,0,0},0,1,2,4,0};g_mission_park_since=0;
+    STF32(test_car+0x174,0);STF32(test_car+0x178,0);STF32(test_car+0x17c,0);
+    STF32(test_car+0xc4,0);STF32(test_car+0xac,0);
+    mission_special_tick(&special,test_car,1000);assert(g_mission_run.phase==MISSION_RUNNING);
+    mission_special_tick(&special,test_car,2999);assert(g_mission_run.phase==MISSION_RUNNING);
+    STF32(test_car+0xac,2);mission_special_tick(&special,test_car,3000);assert(!g_mission_park_since);
+    STF32(test_car+0xac,0);mission_special_tick(&special,test_car,4000);
+    mission_special_tick(&special,test_car,6000);assert(g_mission_run.phase==MISSION_PASSED);
+    special=(MissionDefinition){.collect_gap_ms=8000};g_mission_run.phase=MISSION_RUNNING;
+    g_mission_target_goal=2;atomic_store(&g_mission_broken,1);g_mission_last_collect_ms=1000;
+    mission_special_tick(&special,test_car,9001);assert(g_mission_run.phase==MISSION_OBJECTIVE_FAILED);
+    setenv("RT_MISSIONS_CSV","missions.csv",1);g_mission_count=0;mission_csv_load();
+    assert(MISSION_COUNT==71); /* Includes FASHIONABLY LATE for gate-editor tuning. */
+    assert(k_missions[55].id==56 && k_missions[MISSION_COUNT-1].id==71);
+    /* Native parked obstacle registration preserves context, replaces on retry,
+     * removes for another mission, and rejects unavailable models. */
+    PPCContext obstacle_context={0};obstacle_context.r[2]=0x154da8;obstacle_context.r[1]=0x700000;
+    ST32(0x154da8+0x380,0x650000);ST32(0x650004,0);
+    ST32(0x154da8+0x40,0x660000);ST32(0x660000,2);
+    ST32(0x660000+36+8,31);ST32(0x660000+36+16,16);ST32(0x660000+36+20,0x670000);
+    MissionDefinition obstacle={.obstacle=1,.obstacle_model=2,.obstacle_x=729,.obstacle_z=1205,.obstacle_heading=90};
+    PPCContext context_before=obstacle_context;
+    assert(mission_place_obstacle(&obstacle_context,&obstacle));
+    assert(!memcmp(&context_before,&obstacle_context,sizeof context_before));
+    assert(LD32(0x650004)==1 && LD32(0x650308)==0x670020);
+    assert(LDF32(0x65030c)==729 && LDF32(0x650310)==10 && LDF32(0x650314)==1205);
+    assert(fabs(LDF32(0x65031c)-1.5707963)<.001f);
+    assert(mission_place_obstacle(&obstacle_context,&obstacle) && LD32(0x650004)==1);
+    obstacle.obstacle=0;assert(mission_place_obstacle(&obstacle_context,&obstacle) && LD32(0x650004)==0);
+    obstacle.obstacle=1;obstacle.obstacle_model=16;assert(!mission_place_obstacle(&obstacle_context,&obstacle));
     free(g_ram);
     puts("mission adapter: native initialization, terrain gates, context/stack preservation, immediate start, completion, retry, contact failure and invalid routes passed");
     return 0;
