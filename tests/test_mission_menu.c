@@ -272,6 +272,12 @@ int main(void) {
     float rotated[]={0,0,0,0,0,1,0,1,0,-1,0,0};
     for(unsigned i=0;i<12;i++) atomic_store(&g_debug_view[i],rotated[i]);
     assert(debug_project(-10,0,0,512,384,&px,&py) && px==256 && py==192);
+    /* Translation applies after rotation, in camera space: a turned camera
+     * away from the origin still centres the point it faces. */
+    float turned[]={0,0,-10,0,0,1,0,1,0,-1,0,0};
+    for(unsigned i=0;i<12;i++) atomic_store(&g_debug_view[i],turned[i]);
+    assert(debug_project(0,0,0,512,384,&px,&py) && px==256 && py==192);
+    assert(debug_project(0,0,-1,512,384,&px,&py) && px==307 && py==192);
     atomic_store(&g_debug_view_valid,0);
     free(g_ram); g_ram=NULL;
     char reload_path[]="/tmp/mission-hot-reload-XXXXXX";

@@ -396,7 +396,6 @@ int main(int argc,char **argv) {
     f=fopen(records,"w");assert(f);
     fprintf(f,"7 0 %u 5000\n",mission_name_identity("OLD NAME"));fclose(f);
     mission_progress_init(progress);
-    fprintf(stderr,"DEBUG ids %u car %u aliases %s count %d records %u recordid %u wanted %u best %u\n",k_missions[0].id,k_missions[0].car,k_missions[0].legacy_names,MISSION_COUNT,g_mission_record_count,g_mission_records[0].mission,mission_identity(0),mission_menu_best(0));
     assert(k_missions[0].id==101 && mission_menu_best(0)==5000);
     unsigned stable=mission_identity(0);assert(stable==(0x40000000u|101));
     f=fopen(csv,"w");assert(f);

@@ -300,17 +300,22 @@ void enh_track_debug_toggle(void) {
         mission_cancel();atomic_store(&g_mission_explore_request,1);
     }
 }
-/* Native view slot zero: inverse translation followed by a column-major
- * world-to-camera rotation. Capture after the game builds it, before HUD view. */
+/* Native view slot zero: a column-major world-to-camera rotation followed by
+ * a camera-space translation. Capture after the game builds it, before HUD view. */
 static void track_debug_view_capture(PPCContext *c) {
     unsigned state=LD32(c->r[2]+0x6c);
     if(!race_valid(state+0xa4,48)) {atomic_store(&g_debug_view_valid,0);return;}
     for(unsigned i=0;i<12;i++) atomic_store(&g_debug_view[i],LDF32(state+0xa4+i*4));
+    atomic_store(&g_debug_view_valid,1);
+}
+/* The slot is rewritten each frame: perspective for the scene, then
+ * orthographic for the HUD. Keep the latest perspective terms (after mirror
+ * and widescreen adjustment) with the viewport they render through. */
+static void track_debug_projection_capture(unsigned slot) {
     for(unsigned i=0;i<4;i++) {
-        atomic_store(&g_debug_projection[i],LDF32(GAME_ENH_WIDE_PROJ_MATRIX+i*4));
+        atomic_store(&g_debug_projection[i],LDF32(GAME_ENH_WIDE_PROJ_MATRIX+24*slot+i*4));
         atomic_store(&g_debug_viewport[i],LDF32(GAME_ENH_WIDE_VIEWPORT+i*4));
     }
-    atomic_store(&g_debug_view_valid,1);
 }
 static void track_debug_camera_capture(void) {
     const unsigned camera[]={0x8c1cf8,0x8c1cfc,0x8c1d00,0x8c1d04,0x8c1d08};
@@ -558,12 +563,15 @@ void rt_hook(PPCContext *c, uint32_t pc) {
         g_slot_k[s] = 1.0;g_slot_mirror[s]=0;
         distance_capture((int)s);mirror_slot((int)s);
         if (g_wide_k != 1.0) { widen_slot((int)s, g_wide_k); g_slot_k[s] = g_wide_k; }
+        if (g_distance_slot[s].valid) track_debug_projection_capture(s);
         break;
     }
     case HOOK_VIEWPORT:
         if (!g_enhanced) break;
         g_vp_k = g_wide_k;
         if (g_wide_k != 1.0) STF32(GAME_ENH_WIDE_VIEWPORT, LDF32(GAME_ENH_WIDE_VIEWPORT) * g_wide_k);
+        if (LD8(GAME_ENH_WIDE_PROJ_SLOT) < 2 && g_distance_slot[LD8(GAME_ENH_WIDE_PROJ_SLOT)].valid)
+            track_debug_projection_capture(LD8(GAME_ENH_WIDE_PROJ_SLOT));
         break;
     default: break;
     }
