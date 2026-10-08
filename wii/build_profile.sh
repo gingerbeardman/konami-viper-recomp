@@ -665,6 +665,17 @@ case "${WII_PERF_DIRECT_NO_VRAM:-0}" in
     1) flags="$flags -DVIPER_WII_DIRECT_NO_VRAM"; output="$output-dnovram" ;;
     *) echo 'WII_PERF_DIRECT_NO_VRAM must be 0 or 1' >&2; exit 2 ;;
 esac
+case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;
+    *) echo 'WII_PERF_MEMO_REVISIT_STATS must be 0 or 1' >&2; exit 2 ;;
+esac
+# Leaf guest callees (0x211d4) inlined into localized gl callers (exact).
+case "${WII_PERF_INLINE_LEAF:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_INLINE_LEAF"; output="$output-inleaf" ;;
+    *) echo 'WII_PERF_INLINE_LEAF must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_ALLOC_LOG:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_ALLOC_LOG"; output="$output-alloclog" ;;

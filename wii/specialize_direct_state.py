@@ -17,7 +17,7 @@ def regions(source):
     for i, match in reversed(list(enumerate(stores))):
         candidate = candidate[:match.start()] + f'state_values[{i}]=c->r[3];' + candidate[match.end():]
     replacement = """    {
-#if defined(VIPER_MEMORY_AUDIT) || defined(RT_TRACE) || defined(VIPER_PAGED_MEMORY)
+#if defined(VIPER_MEMORY_AUDIT) || defined(RT_TRACE)
         int state_ok=0;
 #else
         int state_ok=rt_wii_bulk_lfb_allowed() &&

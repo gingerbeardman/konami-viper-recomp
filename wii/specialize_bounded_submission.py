@@ -19,7 +19,7 @@ def regions(source):
     if sum(candidate.count(name + '(') for name in names.values()) != 39:
         raise ValueError('Expected 39 audited RAM loads')
     replacement = '''    {
-#if defined(VIPER_WII_BOUNDED_SUBMISSION) && !defined(VIPER_PAGED_MEMORY) && !defined(VIPER_MEMORY_AUDIT) && !defined(RT_TRACE)
+#if defined(VIPER_WII_BOUNDED_SUBMISSION) && !defined(VIPER_MEMORY_AUDIT) && !defined(RT_TRACE)
     if(RAM_SIZE>=0x5400u && !((uintptr_t)g_ram&3u)){
 ''' + candidate + '''    }else
 #endif

@@ -63,7 +63,7 @@ def regions(source):
                          lambda m: ram_names[m[1]]+'(',candidate)
     if sum(ram_candidate.count(n+'(') for n in ram_names.values()) != 13:
         raise ValueError('Expected thirteen guarded bulk RAM accesses')
-    candidate='#if defined(VIPER_WII_BULK_RAM) && !defined(VIPER_PAGED_MEMORY)\n'+ram_candidate+'#else\n'+candidate+'#endif\n'
+    candidate='#if defined(VIPER_WII_BULK_RAM)\n'+ram_candidate+'#else\n'+candidate+'#endif\n'
     # Fixed staging pointers and RAM-only source prove that no intervening load
     # observes deferred graphics-aperture stores. The hashed region has no
     # guest call, checkpoint or control-flow edge. The helper's absent-header
@@ -98,8 +98,8 @@ def regions(source):
     if(bulk_ok){
         uint32_t bulk_words[10];
 #if defined(VIPER_WII_BULK_NOALIAS)
-#if !defined(VIPER_WII_BULK_RAM) || defined(VIPER_PAGED_MEMORY) || defined(VIPER_MEMORY_AUDIT) || defined(RT_TRACE)
-#error VIPER_WII_BULK_NOALIAS requires VIPER_WII_BULK_RAM without VIPER_PAGED_MEMORY, VIPER_MEMORY_AUDIT, or RT_TRACE
+#if !defined(VIPER_WII_BULK_RAM) || defined(VIPER_MEMORY_AUDIT) || defined(RT_TRACE)
+#error VIPER_WII_BULK_NOALIAS requires VIPER_WII_BULK_RAM without VIPER_MEMORY_AUDIT or RT_TRACE
 #else
         uintptr_t bulk_ctx_addr=(uintptr_t)c;
         uintptr_t bulk_ram_addr=(uintptr_t)g_ram;
@@ -125,6 +125,47 @@ def regions(source):
     }
 '''
     return begin, end, original, staging_guard(replacement,0)
+
+
+# Leaf callees inlined into localized gl callers (--inline-leaf).
+INLINE_LEAF = False
+LEAF_CALLEES = ('f_gl_000211d4',)
+
+
+def inline_leaf_calls(text, source):
+    """Each call site 'f_X(c); if (c->unwind) return;' of a leaf callee becomes
+    a copy of the callee's generated body, so the localizer keeps the guest
+    registers in locals across it instead of writing them all back to the
+    context and reloading them. Exact: the same statements run in the same
+    order; the callee's checkpoints keep their guest addresses and, as CHK
+    returns from the enclosing function on unwind, behave as the callee
+    returning followed by the caller's unwind test. A return becomes a goto
+    to the continuation; a tail call stays a call, then the unwind test and
+    the goto. Labels of copy k get top hex digit k (guest code is below
+    0x01000000), so they keep the L_xxxxxxxx form."""
+    copy = 0
+    for callee in LEAF_CALLEES:
+        m = re.search(r'\nvoid ' + callee + r'\(PPCContext \*c\) \{\n(.*?)\n\}\n', source, re.S)
+        if not m:
+            raise ValueError('Expected one ' + callee + ' definition')
+        body = m.group(1)
+        if re.search(r'\bf_\w+\(c\)', body) or 'switch' in body:
+            raise ValueError(callee + ' is not a leaf')
+        call = '    ' + callee + '(c); if (c->unwind) return;\n'
+        while call in text:
+            copy += 1
+            if copy > 15:
+                raise ValueError('too many inlined copies')
+            ret = 'L_%x0ffff00' % copy
+            b = re.sub(r'\bL_0([0-9a-f]{7})\b', lambda x: 'L_%x%s' % (copy, x.group(1)), body)
+            b = b.replace('RETURN(c);', 'goto ' + ret + ';')
+            b = re.sub(r'\{ rt_call\(c, (0x[0-9a-f]+u)\); return; \}',
+                       lambda x: '{\n    rt_call(c, %s); if (c->unwind) return;\n    goto %s; }' % (x.group(1), ret), b)
+            b = re.sub(r'(?m)^(\s*)return;$', lambda x: x.group(1) + 'goto ' + ret + ';', b)
+            if re.search(r'\breturn;', re.sub(r'if \(c->unwind\) return;', '', b)):
+                raise ValueError('unhandled return in ' + callee)
+            text = text.replace(call, '    /* inlined ' + callee + ' */\n' + b + '\n  ' + ret + ':\n    ;\n', 1)
+    return text
 
 
 def specialize(source, dead_flags=False):
@@ -186,12 +227,13 @@ void f_gl_0002adac(PPCContext *c) {
         if not m:
             raise ValueError('Expected one ' + name + ' definition')
         text = m.group(0).strip('\n')
-        local = localize(text)
+        local_input = inline_leaf_calls(text, result) if INLINE_LEAF else text
+        local = localize(local_input)
         if name in DIRECT_GL:
-            local = ('#ifdef VIPER_WII_DIRECT_GL\n' + localize(text, gather='direct') +
+            local = ('#ifdef VIPER_WII_DIRECT_GL\n' + localize(local_input, gather='direct') +
                      '#else\n' + local + '#endif\n')
         if name in GATHER_GL:
-            local = ('#ifdef VIPER_WII_GATHER_GL\n' + localize(text, gather=True) +
+            local = ('#ifdef VIPER_WII_GATHER_GL\n' + localize(local_input, gather=True) +
                      '#else\n' + local + '#endif\n')
         result = result.replace(text, '#ifdef VIPER_WII_LOCALIZE_GL\n' + local +
                                 '#else\n' + text + '\n#endif', 1)
@@ -237,7 +279,9 @@ if __name__ == '__main__':
     parser.add_argument('--budget-local', action='store_true')
     parser.add_argument('--dense-switch', action='store_true')
     parser.add_argument('--dense-lr', action='store_true')
+    parser.add_argument('--inline-leaf', action='store_true')
     args = parser.parse_args()
+    INLINE_LEAF = args.inline_leaf
     result = specialize(args.source.read_text(), args.dead_carry)
     if args.dense_lr:
         # The interpreter's shared LR dispatch (76 return points 32 bytes

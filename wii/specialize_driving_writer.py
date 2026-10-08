@@ -25,7 +25,7 @@ def regions(source):
     # helpers. RAM-only source and an absent FIFO header make deferred device
     # writes unobservable. No CPU/context alias or arithmetic assumption.
     replacement = '''    {
-#if defined(VIPER_MEMORY_AUDIT) || defined(RT_TRACE) || defined(VIPER_PAGED_MEMORY)
+#if defined(VIPER_MEMORY_AUDIT) || defined(RT_TRACE)
         int driving_ok=0;
 #else
         int driving_ok=rt_wii_bulk_lfb_allowed() &&

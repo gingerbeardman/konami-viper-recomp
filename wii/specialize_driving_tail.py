@@ -44,7 +44,7 @@ def regions(source):
     # bulk writer make the ten deferred stores unobservable. No alias or
     # arithmetic assumption beyond those proved offsets.
     replacement = '''    {
-#if defined(VIPER_MEMORY_AUDIT) || defined(RT_TRACE) || defined(VIPER_PAGED_MEMORY)
+#if defined(VIPER_MEMORY_AUDIT) || defined(RT_TRACE)
         int driving_ok=0;
 #else
         int driving_ok=rt_wii_bulk_lfb_allowed() &&

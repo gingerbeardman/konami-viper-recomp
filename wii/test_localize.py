@@ -18,7 +18,8 @@ With --ram-base the localized functions also get the generated-code RAM
 base pass (wii/specialize_gpr_multiple.py ram_base) and are compiled with
 VIPER_WII_RAM_BASE_LOCAL; random registers put many accesses at RAM ends,
 mirrors and device space.
-Run: python3 wii/test_localize.py [--gather|--direct] [--ram-base] [cases] [function ...]"""
+With --inline-leaf, leaf callees are inlined first (specialize_submission.py).
+Run: python3 wii/test_localize.py [--gather|--direct] [--ram-base] [--inline-leaf] [cases] [function ...]"""
 from pathlib import Path
 import re
 import subprocess
@@ -32,7 +33,8 @@ from localize_function import localize
 args = sys.argv[1:]
 gather = 'direct' if '--direct' in args else '--gather' in args
 ram_base_pass = '--ram-base' in args
-args = [a for a in args if a not in ('--gather', '--direct', '--ram-base')]
+inline_leaf = '--inline-leaf' in args
+args = [a for a in args if a not in ('--gather', '--direct', '--ram-base', '--inline-leaf')]
 cases = int(args.pop(0)) if args and args[0].isdigit() else 3000
 functions = args or ['f_gl_0002adac', 'f_gl_00028fc4', 'f_gl_00029d28', 'f_gl_00021ed0',
                      'f_gl_00021940', 'f_gl_000281ac', 'f_gl_000248b0', 'f_gl_000210a8']
@@ -40,7 +42,11 @@ gl = (root / 'generated/gticlub2/gl_000.c').read_text()
 localized = []
 for name in functions:
     m = re.search(r'\nvoid ' + name + r'\(PPCContext \*c\) \{.*?\n\}\n', gl, re.S)
-    text = localize(m.group(0).strip('\n'), gather=gather)
+    text = m.group(0).strip('\n')
+    if inline_leaf:
+        from specialize_submission import inline_leaf_calls
+        text = inline_leaf_calls(text, gl)
+    text = localize(text, gather=gather)
     if ram_base_pass:
         from specialize_gpr_multiple import ram_base
         text = ram_base(text)

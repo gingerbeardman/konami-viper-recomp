@@ -2209,6 +2209,25 @@ WII_HOT_triangle_full static void triangle_full(void *user,const WiiVoodooView *
 #ifdef VIPER_WII_MEMO_VERTEX_PREP
         tri_memo_gen++;
 #endif
+#ifdef VIPER_WII_MEMO_REVISIT_STATS
+        {
+            /* Diagnostic: would a content-keyed multi-entry memo help? Hash
+             * the material inputs at every refill; count refills whose hash
+             * is one of the last 4 or 8 (an LRU of states). */
+            static const unsigned fbi[]={0x104/4,0x108/4,0x10c/4,0x110/4,0x134/4,0x138/4,0x21c/4};
+            uint32_t h=2166136261u;
+            for(unsigned i=0;i<sizeof fbi/sizeof fbi[0];i++)h=(h^v->regs[fbi[i]])*16777619u;
+            for(unsigned t=0;t<2;t++)for(unsigned i=0;i<9;i++)h=(h^v->tmu[t][i])*16777619u;
+            h=(h^wii_voodoo_texture_epoch)*16777619u;h=(h^((cmd>>10)&255))*16777619u;
+            static uint32_t lru[8];static unsigned long long refills,hit4,hit8;
+            unsigned found=8;for(unsigned i=0;i<8;i++)if(lru[i]==h){found=i;break;}
+            refills++;if(found<4)hit4++;if(found<8)hit8++;
+            if(found==8)found=7;
+            for(unsigned i=found;i>0;i--)lru[i]=lru[i-1];
+            lru[0]=h;
+            if((refills&0x3ffff)==0)rt_log("VIPER WII MEMO REVISIT refills=%llu lru4=%llu lru8=%llu\n",refills,hit4,hit8);
+        }
+#endif
     }
 #endif
     geometry=1;setup_end(4,setup_clock);
