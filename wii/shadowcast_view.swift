@@ -1,6 +1,7 @@
 // Low-latency viewer for a USB capture device (Genki ShadowCast): the camera
 // feed goes straight to an AVCaptureVideoPreviewLayer (no decode/encode or
-// frame queue in between) and its audio to an AVCaptureAudioPreviewOutput.
+// frame queue in between) and its audio through a short ring buffer to
+// AVAudioEngine, trimmed so it never holds more than ~100 ms (see AudioRing).
 // Build the app: sh wii/build_shadowcast_view.sh -> build/ShadowCast Viewer.app
 // (device-name substring as the first argument, default "ShadowCast").
 // Window size and position, aspect and capture size are remembered. The
@@ -17,6 +18,43 @@
 // cannot tell them apart, so the choice is remembered (default 16:9).
 import AVFoundation
 import AppKit
+import os
+
+/* Stereo float frames from the capture callback to the audio render thread.
+ * AVCaptureAudioPreviewOutput buffers without limit, so the sound fell up to a
+ * second behind the picture; here, when more than a couple of capture chunks
+ * are waiting, the oldest are dropped (a tiny skip instead of growing delay). */
+final class AudioRing: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock()
+    private let capacity = 48000
+    private var buf: [Float]
+    private var start = 0, count = 0, chunk = 1024
+    init() { buf = [Float](repeating: 0, count: 2 * capacity) }
+    func write(_ p: UnsafePointer<Float>, frames: Int) {
+        lock.lock(); defer { lock.unlock() }
+        chunk = max(frames, 256)
+        for i in 0..<frames {
+            if count == capacity { start = (start + 1) % capacity; count -= 1 }
+            let w = (start + count) % capacity
+            buf[2 * w] = p[2 * i]; buf[2 * w + 1] = p[2 * i + 1]
+            count += 1
+        }
+    }
+    func read(_ left: UnsafeMutablePointer<Float>, _ right: UnsafeMutablePointer<Float>, frames: Int) {
+        lock.lock(); defer { lock.unlock() }
+        if count > 2 * chunk + 2048 {
+            let keep = chunk + 1024
+            start = (start + count - keep) % capacity; count = keep
+        }
+        for i in 0..<frames {
+            if count > 0 {
+                left[i] = buf[2 * start]; right[i] = buf[2 * start + 1]
+                start = (start + 1) % capacity; count -= 1
+            } else { left[i] = 0; right[i] = 0 }
+        }
+    }
+    func clear() { lock.lock(); count = 0; lock.unlock() }
+}
 
 let wanted = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "ShadowCast"
 
@@ -45,7 +83,7 @@ final class View: NSView {
     override func keyDown(with event: NSEvent) { onKey(event.charactersIgnoringModifiers?.lowercased() ?? "") }
 }
 
-final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     let session = AVCaptureSession()
     /* Audio in its own session: with an audio input in the video session,
      * the preview is timed by the capture device's audio clock, which drifts
@@ -53,7 +91,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let audioSession = AVCaptureSession()
     var video: AVCaptureDevice!
     var formatItems: [NSMenuItem] = []
-    let audioOut = AVCaptureAudioPreviewOutput()
+    let audioOut = AVCaptureAudioDataOutput()
+    let ring = AudioRing()
+    let engine = AVAudioEngine()
     /* Real-time display: keep App Nap and timer throttling away, which
      * otherwise slow a window that is not frontmost or seems idle. */
     var activity: NSObjectProtocol?
@@ -76,8 +116,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let mic = device(.audio), let input = try? AVCaptureDeviceInput(device: mic) {
             audioSession.beginConfiguration()
             if audioSession.canAddInput(input) { audioSession.addInput(input) }
+            audioOut.audioSettings = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 48000, AVNumberOfChannelsKey: 2,
+                                      AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false]
+            audioOut.setSampleBufferDelegate(self, queue: DispatchQueue(label: "audio", qos: .userInteractive))
             if audioSession.canAddOutput(audioOut) { audioSession.addOutput(audioOut) }
             audioSession.commitConfiguration()
+            let ring = self.ring
+            let source = AVAudioSourceNode(format: AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2)!) { _, _, frames, list in
+                let abl = UnsafeMutableAudioBufferListPointer(list)
+                ring.read(abl[0].mData!.assumingMemoryBound(to: Float.self), abl[1].mData!.assumingMemoryBound(to: Float.self), frames: Int(frames))
+                return noErr
+            }
+            engine.attach(source)
+            engine.connect(source, to: engine.mainMixerNode, format: nil)
+            try? engine.start()
         }
 
         let view = View(session: session)
@@ -101,6 +153,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.makeFirstResponder(view)
         NSApp.activate(ignoringOtherApps: true)
         DispatchQueue.global(qos: .userInteractive).async { self.startVideo(); self.audioSession.startRunning() }
+    }
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sample: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let block = CMSampleBufferGetDataBuffer(sample) else { return }
+        var length = 0
+        var data: UnsafeMutablePointer<CChar>?
+        guard CMBlockBufferGetDataPointer(block, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &data) == noErr,
+              let data, CMBlockBufferIsRangeContiguous(block, atOffset: 0, length: length) else { return }
+        data.withMemoryRebound(to: Float.self, capacity: length / 4) { ring.write($0, frames: length / 8) }
     }
 
     /* startRunning resets the device to the session preset's frame rate
@@ -127,8 +188,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func chooseAspect(_ sender: NSMenuItem) { setAspect(sender.title, resize: true) }
 
-    /* AVCaptureAudioPreviewOutput plays at 0...1 (no boost past the
-     * device's own level); mute keeps the volume to come back to. */
+    /* Volume 0...1 (no boost past the device's own level); mute keeps the
+     * volume to come back to. */
     var volume: Float = UserDefaults.standard.object(forKey: "volume") == nil ? 1 : UserDefaults.standard.float(forKey: "volume")
     var muted = false
     var muteItem: NSMenuItem?
@@ -140,7 +201,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         applyVolume()
     }
     func applyVolume() {
-        audioOut.volume = muted ? 0 : volume
+        engine.mainMixerNode.outputVolume = muted ? 0 : volume
         muteItem?.state = muted ? .on : .off
         volumeSlider?.floatValue = volume * 100
         updateTitle()
@@ -255,7 +316,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
      * audio pipeline without relaunching. */
     @objc func restartCapture(_ sender: Any?) {
         DispatchQueue.global(qos: .userInteractive).async {
-            self.session.stopRunning(); self.audioSession.stopRunning()
+            self.session.stopRunning(); self.audioSession.stopRunning(); self.ring.clear()
             self.startVideo(); self.audioSession.startRunning()
         }
     }
