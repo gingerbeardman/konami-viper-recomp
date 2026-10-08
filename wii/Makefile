@@ -52,7 +52,7 @@ HOST_OPT ?= -O2
 GAME_DEVICE_FLAGS := -flto $(filter-out -O2,$(HOST_OPT))
 GAME_LINK_FLAGS := -flto $(HOST_OPT)
 endif
-GAME_PLATFORM_OBJS := $(GAME_OUT)/wii/pgo_dump.o $(GAME_OUT)/wii/net_report.o $(GAME_OUT)/wii/main.o $(GAME_OUT)/wii/voodoo_headless.o $(GAME_OUT)/wii/enhanced_headless.o $(GAME_OUT)/wii/media_check.o
+GAME_PLATFORM_OBJS := $(GAME_OUT)/wii/widescreen.o $(GAME_OUT)/wii/pgo_dump.o $(GAME_OUT)/wii/net_report.o $(GAME_OUT)/wii/main.o $(GAME_OUT)/wii/voodoo_headless.o $(GAME_OUT)/wii/enhanced_headless.o $(GAME_OUT)/wii/media_check.o
 ifneq ($(findstring VIPER_WII_ALLOC_LOG,$(EXTRA_CFLAGS)),)
 GAME_PLATFORM_OBJS += $(GAME_OUT)/wii/alloc_log.o
 GAME_ALLOC_WRAP := -Wl,--wrap=malloc,--wrap=memalign,--wrap=calloc

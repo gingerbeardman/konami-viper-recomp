@@ -351,14 +351,19 @@ static unsigned height(const WiiVoodooView *v){
 static int OUT_X=0,OUT_Y=0,OUT_W=640,OUT_H=480;
 #ifdef VIPER_WII_DISPLAY_MULTI
 /* MULTI build: the display mode is chosen at run time (Minus cycles it). */
-enum { DISPLAY_1TO1, DISPLAY_1TO1_NEAREST, DISPLAY_SCALED, DISPLAY_SCALED_SS, DISPLAY_MODES };
-static const char *const display_names[DISPLAY_MODES]={"1:1","1:1 NEAREST","SCALED","SCALED SUPERSAMPLED"};
-static volatile int display_mode=DISPLAY_SCALED;
+enum { DISPLAY_1TO1, DISPLAY_1TO1_NEAREST, DISPLAY_SCALED, DISPLAY_SCALED_SS, DISPLAY_WIDE, DISPLAY_WIDE_SS, DISPLAY_MODES };
+static const char *const display_names[DISPLAY_MODES]={"1:1","1:1 NEAREST","SCALED","SCALED SUPERSAMPLED",
+    "WIDESCREEN","WIDESCREEN SUPERSAMPLED"};
+#ifndef VIPER_WII_DISPLAY_START
+#define VIPER_WII_DISPLAY_START DISPLAY_SCALED
+#endif
+static volatile int display_mode=VIPER_WII_DISPLAY_START;
 static int display_applied=-1;
 void wii_gx_display_cycle(void){display_mode=(display_mode+1)%DISPLAY_MODES;}
 #define DISPLAY_LETTERBOX (display_mode==DISPLAY_1TO1||display_mode==DISPLAY_1TO1_NEAREST)
 #define DISPLAY_NEAREST (display_mode==DISPLAY_1TO1_NEAREST)
-#define DISPLAY_SUPERSAMPLE (display_mode==DISPLAY_SCALED_SS)
+#define DISPLAY_SUPERSAMPLE (display_mode==DISPLAY_SCALED_SS||display_mode==DISPLAY_WIDE_SS)
+#define DISPLAY_WIDE (display_mode==DISPLAY_WIDE||display_mode==DISPLAY_WIDE_SS)
 #else
 void wii_gx_display_cycle(void){}
 #ifdef VIPER_WII_LETTERBOX
@@ -372,7 +377,11 @@ void wii_gx_display_cycle(void){}
 #define DISPLAY_NEAREST 0
 #endif
 #define DISPLAY_SUPERSAMPLE 1
+#define DISPLAY_WIDE 0
 #endif
+#include "widescreen.h"
+/* Widescreen: the game draws x from -M to w + M (wii/widescreen.c). */
+#define WIDE_M (wii_wide_margin)
 static void output_box_init(void){
     int w=DISPLAY_LETTERBOX?512:640,h=DISPLAY_LETTERBOX?384:480;
 #if defined(VIPER_WII_FORCE_ASPECT) && VIPER_WII_FORCE_ASPECT==169
@@ -382,7 +391,7 @@ static void output_box_init(void){
 #else
     int wide=CONF_GetAspectRatio()==CONF_ASPECT_16_9;
 #endif
-    if(wide)w=w*3/4;
+    if(wide&&!DISPLAY_WIDE)w=w*3/4;
     OUT_W=w;OUT_H=h;OUT_X=(640-w)/2;OUT_Y=(480-h)/2;
 }
 void wii_gx_output_box(int *x,int *y,int *w,int *h){*x=OUT_X;*y=OUT_Y;*w=OUT_W;*h=OUT_H;}
@@ -414,7 +423,7 @@ static void projection(const WiiVoodooView *v) {
 #ifdef VIPER_WII_SUPERSAMPLE
     if(ss_capture_projection(w,h)){gx_shadow.proj_w=w;gx_shadow.proj_h=h;return;}
 #endif
-    Mtx44 p;guOrtho(p,0,h,0,w,0,1);GX_LoadProjectionMtx(p,GX_ORTHOGRAPHIC);
+    Mtx44 p;guOrtho(p,0,h,-(f32)WIDE_M,w+WIDE_M,0,1);GX_LoadProjectionMtx(p,GX_ORTHOGRAPHIC);
     gx_shadow.proj_w=w;gx_shadow.proj_h=h;
 #else
     Mtx44 p;guOrtho(p,0,h,0,w,0,1);GX_LoadProjectionMtx(p,GX_ORTHOGRAPHIC);
@@ -447,7 +456,11 @@ static void clip(const WiiVoodooView *v,int enabled) {
     if(r<l)r=l;
     if(b<t)b=t;
     if(v->regs[0x110/4]&(1u<<17)){unsigned old=t;t=h-b;b=h-old;}
-    unsigned x0=OUT_X+l*OUT_W/w,x1=OUT_X+r*OUT_W/w,y0=OUT_Y+t*OUT_H/h,y1=OUT_Y+b*OUT_H/h;
+    unsigned x0,x1,y0=OUT_Y+t*OUT_H/h,y1=OUT_Y+b*OUT_H/h;
+    if(WIDE_M){   /* a rectangle reaching an edge reaches the margin's edge */
+        unsigned ww=w+2*WIDE_M,lw=l?l+WIDE_M:0,rw=r>=w?ww:r+WIDE_M;
+        x0=OUT_X+lw*OUT_W/ww;x1=OUT_X+rw*OUT_W/ww;
+    }else{x0=OUT_X+l*OUT_W/w;x1=OUT_X+r*OUT_W/w;}
     cx0=x0;cy0=y0;cw=x1-x0;ch=y1-y0;
 #ifdef VIPER_WII_SUPERSAMPLE
     /* Tiles do not rescale a clip rectangle smaller than the box (car select
@@ -2335,6 +2348,7 @@ static void clear(void *user,const WiiVoodooView *v) {
          (unsigned long)k[0],(unsigned long)k[1],(unsigned long)rgb,(unsigned long)fbz,width(v),height(v));}}
 #endif
     if(rgt<=l||bot<=t)return;
+    if(WIDE_M){if(l<=0)l=-(float)WIDE_M;if(rgt>=width(v))rgt=width(v)+(float)WIDE_M;}
     t=screen_y(v,t);bot=screen_y(v,bot);
 #ifdef VIPER_WII_WDEPTH_LINEAR
     float d=linear_depth_from_wdepth(v->regs[0x130/4]&65535);
@@ -2467,7 +2481,7 @@ static u8 *ss_dl,*ss_tile[4];
 /* tile < 0: the plain projection; else quarter tile (x = tile&1, y = tile>>1). */
 static void ss_load_projection(int tile){
     if(!ss_proj_set)return;
-    Mtx44 p;guOrtho(p,0,ss_proj_h,0,ss_proj_w,0,1);
+    Mtx44 p;guOrtho(p,0,ss_proj_h,-(f32)WIDE_M,ss_proj_w+WIDE_M,0,1);
     if(tile>=0){
         float ox=1.f-2.f*(tile&1),oy=2.f*(tile>>1)-1.f;
         for(unsigned c=0;c<4;c++){p[0][c]*=2;p[1][c]*=2;}
@@ -2647,6 +2661,7 @@ static void present(void *user,const WiiVoodooView *v,unsigned base) {
         /* A frame boundary: nothing of the old box is recorded or queued. */
         int first=display_applied<0;
         display_applied=display_mode;
+        wii_wide_set(DISPLAY_WIDE?85:0);   /* 16:9 at 384 lines (runtime/enhanced.c) */
         output_box_init();clip_key_stale=1;gx_shadow.proj_w=gx_shadow.proj_h=0;
         GX_SetViewport(OUT_X,OUT_Y,OUT_W,OUT_H,0,1);
         TEXLOAD_FORGET();

@@ -101,7 +101,9 @@ int wii_race_restart_pending(void){return race_restart_pending();}
 void wii_request_race_restart(void){}
 int wii_race_restart_pending(void){return 0;}
 #endif
+#include "widescreen.h"
 void rt_hook(PPCContext *c,uint32_t pc){
+    if(wii_wide_hook(pc))return;
 #if !defined(VIPER_WII_SCRIPTED_RACE) && defined(GAME_ENH_HOOK_RACE_DISPATCH)
     if(g_enhanced&&pc==GAME_ENH_HOOK_RACE_DISPATCH)race_dispatch_hook(c);
 #endif

@@ -801,6 +801,11 @@ case "${WII_PERF_DISPLAY_MULTI:-0}" in
     2) flags="$flags -DVIPER_WII_DISPLAY_MULTI -DVIPER_WII_SUPERSAMPLE -DVIPER_WII_DISPLAY_CYCLE"; output="$output-multicycle" ;;
     *) echo 'WII_PERF_DISPLAY_MULTI must be 0, 1 or 2' >&2; exit 2 ;;
 esac
+case "${WII_PERF_DISPLAY_START:-}" in
+    '') ;;
+    0|1|2|3|4|5) flags="$flags -DVIPER_WII_DISPLAY_START=$WII_PERF_DISPLAY_START"; output="$output-dstart$WII_PERF_DISPLAY_START" ;;
+    *) echo 'WII_PERF_DISPLAY_START must be 0-5' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;
