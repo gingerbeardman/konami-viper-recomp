@@ -765,6 +765,26 @@ case "${WII_PERF_AUDIO:-0}" in
     1) flags="$flags -DVIPER_WII_AUDIO"; output="$output-audio" ;;
     *) echo 'WII_PERF_AUDIO must be 0 or 1' >&2; exit 2 ;;
 esac
+case "${WII_PERF_SUPERSAMPLE:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_SUPERSAMPLE"; output="$output-ss" ;;
+    *) echo 'WII_PERF_SUPERSAMPLE must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_SUPERSAMPLE_TRACE:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_SUPERSAMPLE_TRACE"; output="$output-sstrace" ;;
+    *) echo 'WII_PERF_SUPERSAMPLE_TRACE must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_SS_PLAIN_RESOLVE:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_SS_PLAIN_RESOLVE"; output="$output-ssplain" ;;
+    *) echo 'WII_PERF_SS_PLAIN_RESOLVE must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_DIRECT_VERSION:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRECT_VERSION"; output="$output-dver" ;;
+    *) echo 'WII_PERF_DIRECT_VERSION must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;

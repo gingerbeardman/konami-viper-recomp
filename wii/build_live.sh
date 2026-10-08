@@ -420,6 +420,19 @@ case "${WII_LIVE_PACKET_CARRY:-1}" in
     1) flags="$flags -DVIPER_WII_PACKET_CARRY"; output="$output-pcarry" ;;
     *) echo 'WII_LIVE_PACKET_CARRY must be 0 or 1' >&2; exit 2 ;;
 esac
+# 2x2 supersampling (changes the picture: a playable option, off by default).
+case "${WII_LIVE_SUPERSAMPLE:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_SUPERSAMPLE"; output="$output-ss" ;;
+    *) echo 'WII_LIVE_SUPERSAMPLE must be 0 or 1' >&2; exit 2 ;;
+esac
+# 0x28fc4 blocks with many RAM accesses versioned on one in-RAM check
+# (2.374 -> 2.355 s on hardware, exact).
+case "${WII_LIVE_DIRECT_VERSION:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DIRECT_VERSION"; output="$output-dver" ;;
+    *) echo 'WII_LIVE_DIRECT_VERSION must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_LIVE_DENSE_LR:-1}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_DENSE_LR"; output="$output-denselr" ;;

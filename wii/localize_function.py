@@ -399,6 +399,51 @@ static int direct_triangles_preserved(uint32_t header_ea, uint32_t cmd) {
 #else
 #define DIRECT_IN_RAM(fn, a) ((a) <= RAM_SIZE - 8u)
 #endif
+/* VIPER_WII_DIRECT_VERSION: the accessors' in-RAM paths, for blocks whose
+ * addresses were all checked once at the top (_direct_version). */
+#if defined(VIPER_WII_DIRECT_VERSION) && defined(VIPER_WII_RAM_BASE_LOCAL)
+#define DIRECT_VERSION_OK(c_) (c_)
+typedef float __attribute__((may_alias)) direct_raw_f32;
+typedef double __attribute__((may_alias)) direct_raw_f64;
+typedef uint32_t __attribute__((may_alias)) direct_raw_u32;
+typedef uint16_t __attribute__((may_alias)) direct_raw_u16;
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define DIRECT_RAW_RLD8(a) ((uint32_t)native_ram_base[a])
+#define DIRECT_RAW_RLD16(a) ((uint32_t)*(const direct_raw_u16 *)(const void *)(native_ram_base + (a)))
+#define DIRECT_RAW_RLD32(a) (*(const direct_raw_u32 *)(const void *)(native_ram_base + (a)))
+#define DIRECT_RAW_RLD32LE(a) bswap32(*(const direct_raw_u32 *)(const void *)(native_ram_base + (a)))
+#define DIRECT_RAW_RLDF32(a) ((double)*(const direct_raw_f32 *)(const void *)(native_ram_base + (a)))
+#define DIRECT_RAW_RLDF64(a) (*(const direct_raw_f64 *)(const void *)(native_ram_base + (a)))
+#define DIRECT_RAW_RST8(a, v) ((void)(native_ram_base[a] = (uint8_t)(v)))
+#define DIRECT_RAW_RST16(a, v) ((void)(*(direct_raw_u16 *)(void *)(native_ram_base + (a)) = (uint16_t)(v)))
+#define DIRECT_RAW_RSTF32(a, d) ((void)(*(direct_raw_f32 *)(void *)(native_ram_base + (a)) = (float)(d)))
+#define DIRECT_RAW_RSTF64(a, d) ((void)(*(direct_raw_f64 *)(void *)(native_ram_base + (a)) = (d)))
+#else
+/* Little-endian hosts (the localize test): guest RAM is big-endian. */
+static inline uint32_t direct_raw_ld32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return guest_be32(v); }
+static inline double direct_raw_ldf32(const uint8_t *p) { uint32_t v = direct_raw_ld32(p); float f; memcpy(&f, &v, 4); return f; }
+static inline double direct_raw_ldf64(const uint8_t *p) { uint64_t v = ((uint64_t)direct_raw_ld32(p) << 32) | direct_raw_ld32(p + 4); double d; memcpy(&d, &v, 8); return d; }
+static inline void direct_raw_st32(uint8_t *p, uint32_t v) { v = guest_be32(v); memcpy(p, &v, 4); }
+static inline void direct_raw_stf32(uint8_t *p, double d) { float f = (float)d; uint32_t v; memcpy(&v, &f, 4); direct_raw_st32(p, v); }
+static inline void direct_raw_stf64(uint8_t *p, double d) { uint64_t v; memcpy(&v, &d, 8); direct_raw_st32(p, (uint32_t)(v >> 32)); direct_raw_st32(p + 4, (uint32_t)v); }
+#define DIRECT_RAW_RLD8(a) ((uint32_t)native_ram_base[a])
+#define DIRECT_RAW_RLD16(a) ((uint32_t)((native_ram_base[a] << 8) | native_ram_base[(a) + 1]))
+#define DIRECT_RAW_RLD32(a) direct_raw_ld32(native_ram_base + (a))
+#define DIRECT_RAW_RLD32LE(a) bswap32(direct_raw_ld32(native_ram_base + (a)))
+#define DIRECT_RAW_RLDF32(a) direct_raw_ldf32(native_ram_base + (a))
+#define DIRECT_RAW_RLDF64(a) direct_raw_ldf64(native_ram_base + (a))
+#define DIRECT_RAW_RST8(a, v) ((void)(native_ram_base[a] = (uint8_t)(v)))
+#define DIRECT_RAW_RST16(a, v) ((void)(native_ram_base[a] = (uint8_t)((v) >> 8), native_ram_base[(a) + 1] = (uint8_t)(v)))
+#define DIRECT_RAW_RSTF32(a, d) direct_raw_stf32(native_ram_base + (a), (d))
+#define DIRECT_RAW_RSTF64(a, d) direct_raw_stf64(native_ram_base + (a), (d))
+#endif
+#define DIRECT_RAW_LOAD(fn, ea_) DIRECT_RAW_##fn(ea_)
+#define DIRECT_RAW_STORE(fn, ea_, v_) DIRECT_RAW_##fn(ea_, v_)
+#else
+#define DIRECT_VERSION_OK(c_) 0
+#define DIRECT_RAW_LOAD DIRECT_LOAD
+#define DIRECT_RAW_STORE DIRECT_STORE
+#endif
 #define DIRECT_LOAD(fn, ea_) ({ uint32_t _gla = (ea_); __typeof__(fn(0)) _glv; \
     if (LIKELY(DIRECT_IN_RAM(fn, _gla))) _glv = fn(_gla); \
     else { DBUD_OUT(); if (_gla >= RAM_LIMIT) direct_flush(); _glv = DIRECT_SLOW_LOAD(fn, _gla); DBUD_IN(); } _glv; })
@@ -468,6 +513,62 @@ def _direct_groups(body):
     return '\n'.join(lines)
 
 
+ACCESS_SIZE = {'LD8': 1, 'LD16': 2, 'LD32': 4, 'LD32LE': 4, 'LDF32': 4, 'LDF64': 8,
+               'ST8': 1, 'ST16': 2, 'ST16LE': 2, 'STF32': 4, 'STF64': 8}
+VERSION_ACCESS = re.compile(r'DIRECT_(LOAD|STORE)\((\w+), (?:\((?:0 \+ )?(c->r\[\d+\])(?: \+ 0x([0-9a-f]+)u)?\)|(c->r\[\d+\]))')
+
+
+DIRECT_VERSION_MIN = int(__import__('os').environ.get('VIPER_DIRECT_VERSION_MIN', '8'))
+
+
+def _direct_version(body, min_accesses=None):
+    """VIPER_WII_DIRECT_VERSION: a guest block (label to label) with many
+    register-based RAM accesses gets an unchecked copy, taken when one test
+    at its top shows every base's whole offset range in RAM and aligned; the
+    original block runs otherwise. Accesses after their base is reassigned
+    in the block keep their checks. Exact: the unchecked accessors are the
+    checked ones' in-RAM paths."""
+    lines = body.split('\n')
+    starts = [i for i, l in enumerate(lines) if re.match(r'\s*L_\w+:\s*$', l)] + [len(lines)]
+    out, prev = [], 0
+    versions = 0
+    for a, b in zip(starts, starts[1:]):
+        out.extend(lines[prev:a + 1])
+        prev = a + 1
+        block = lines[a + 1:b]
+        if any(re.match(r'\s*#', l) for l in block):
+            continue
+        ranges, assigned, fast, count = {}, set(), [], 0
+        for l in block:
+            def repl(m):
+                nonlocal count
+                kind, fn, base = m.group(1), m.group(2), m.group(3) or m.group(5)
+                off = int(m.group(4), 16) if m.group(4) else 0
+                size = ACCESS_SIZE.get(fn)
+                if base in assigned or size is None or off % size:
+                    return m.group(0)
+                lo, hi, al = ranges.get(base, (off, off + size, size))
+                ranges[base] = (min(lo, off), max(hi, off + size), max(al, size))
+                count += 1
+                return 'DIRECT_RAW_' + kind + '(' + fn + ', ' + m.group(0)[len('DIRECT_' + kind + '(' + fn + ', '):]
+            fast.append(VERSION_ACCESS.sub(repl, l))
+            for r in re.findall(r'(c->r\[\d+\])\s*(?:[-+|&^*/]|<<|>>)?=(?!=)', l):
+                assigned.add(r)
+        if count < (min_accesses or DIRECT_VERSION_MIN):
+            continue
+        cond = ' && '.join(f'!(({base}) & {al - 1}u) && ({base}) <= {0x01000000 - hi}u'
+                           for base, (lo, hi, al) in ranges.items())
+        out.append(f'    if (LIKELY(DIRECT_VERSION_OK({cond}))) {{')
+        out.extend(fast)
+        out.append('    } else {')
+        out.extend(block)
+        out.append('    }')
+        prev = b
+        versions += 1
+    out.extend(lines[prev:])
+    return '\n'.join(out)
+
+
 def _direct(body):
     body = _resolve_undefined(body, SCALAR_FALLBACK)
     if re.search(r'\bwii_voodoo_bulk', body):
@@ -481,7 +582,7 @@ def _direct(body):
             continue
         kind = 'DIRECT_LOAD' if name.startswith('LD') else 'DIRECT_STORE'
         body = re.sub(r'\b' + name + r'\(', kind + '(' + name + ', ', body)
-    return _direct_groups(body)
+    return _direct_version(_direct_groups(body))
 
 
 def _gather(body):
