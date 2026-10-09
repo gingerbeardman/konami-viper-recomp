@@ -534,6 +534,10 @@ static void progress(void *arg){
 #ifdef VIPER_FIBER_COUNT
         {extern uint64_t rt_fiber_switches;rt_log("VIPER WII FIBER SWITCHES %llu\n",(unsigned long long)rt_fiber_switches);}
 #endif
+#ifdef VIPER_WII_SUPERSAMPLE
+        {void wii_gx_ss_stats(unsigned long long *,unsigned long long *,unsigned long long *);unsigned long long t,p,b;
+         wii_gx_ss_stats(&t,&p,&b);rt_log("VIPER WII SS frames tiled=%llu plain=%llu backoffs=%llu\n",t,p,b);}
+#endif
         rt_log("VIPER WII SCRIPTED END result=%s phase=%u step=%u substate=%u ram_fnv32=%08lx\n",
                ok?"PASS":"FAIL",boot_phase,boot_step,driving_substate,(unsigned long)hash);
         /* Publish the result before touching the console. Keep a fresh log

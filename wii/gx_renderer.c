@@ -460,6 +460,13 @@ static void output_box_init(void){
      if(rw==OUT_W&&OUT_H==384){RB_X=OUT_X;RB_Y=OUT_Y;}   /* SHARP on 4:3: already 1:1, no scaling pass */
      else{RB_X=(640-rw)/2;RB_Y=(480-384)/2;}
      RB_W=rw;RB_H=384;}
+#ifdef VIPER_WII_SS_BOX_W
+    /* SUPER at another scale: each of the four tiles is SS_BOX_W x SS_BOX_H,
+     * the whole picture twice that, filtered into the output box (480x360:
+     * 960x720, 1.5x of 640x480 instead of 1024x768's 1.6x). Plain frames
+     * (supersampling backed off) draw at the same box. */
+    if(DISPLAY_SUPERSAMPLE){RB_W=VIPER_WII_SS_BOX_W;RB_H=VIPER_WII_SS_BOX_H;RB_X=(640-RB_W)/2;RB_Y=(480-RB_H)/2;}
+#endif
 #else
     RB_X=OUT_X;RB_Y=OUT_Y;RB_W=OUT_W;RB_H=OUT_H;
 #endif
@@ -3005,7 +3012,9 @@ static void *hang_watch(void *arg){
     return NULL;
 }
 #endif
-static unsigned long long ss_frames,ss_plain;
+static unsigned long long ss_frames,ss_plain,ss_backoffs;
+/* frames drawn supersampled, plain, and times supersampling backed off */
+void wii_gx_ss_stats(unsigned long long *tiled,unsigned long long *plain,unsigned long long *backoffs){*tiled=ss_frames;*plain=ss_plain;*backoffs=ss_backoffs;}
 unsigned ss_dl_peak,ss_dl_overflows;   /* largest recorded list and overflows (diagnostics read them) */
 static void ss_begin(void){
     if(!ss_dl){
@@ -3209,7 +3218,7 @@ static void ss_resolve(void){
     {uint64_t t=gettime();
      gx_wait(4);ss_waited=1;   /* frame N - 1 done: its list is free for frame N + 1 */
      if(ticks_to_microsecs(gettime()-t)>SS_BEHIND_US){
-        ss_backoff=ss_backoff_len;
+        ss_backoff=ss_backoff_len;ss_backoffs++;
         if(ss_backoff_len<SS_BACKOFF_MAX)ss_backoff_len*=2;
      }else if(ss_prev_tiled)ss_backoff_len=SS_BACKOFF_MIN;   /* only a supersampled frame proves it keeps up */
      ss_prev_tiled=1;}

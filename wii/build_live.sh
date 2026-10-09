@@ -464,6 +464,13 @@ case "${WII_LIVE_SNAP_VERTICES:-1}" in
     1) flags="$flags -DVIPER_WII_SNAP_VERTICES"; output="$output-snap" ;;
     *) echo 'WII_LIVE_SNAP_VERTICES must be 0 or 1' >&2; exit 2 ;;
 esac
+# SUPER tile size (WxH, e.g. 480x360: 960x720 supersampled, 1.5x of 640x480);
+# default the native box (1024x768, 1.6x). Needs NATIVE_RES.
+case "${WII_LIVE_SS_BOX:-}" in
+    '') ;;
+    [0-9]*x[0-9]*) flags="$flags -DVIPER_WII_SS_BOX_W=${WII_LIVE_SS_BOX%x*} -DVIPER_WII_SS_BOX_H=${WII_LIVE_SS_BOX#*x}"; output="$output/ssb${WII_LIVE_SS_BOX%x*}" ;;
+    *) echo 'WII_LIVE_SS_BOX must be WxH' >&2; exit 2 ;;
+esac
 case "${WII_LIVE_NATIVE_RES:-1}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_NATIVE_RES"; output="$output-native" ;;
