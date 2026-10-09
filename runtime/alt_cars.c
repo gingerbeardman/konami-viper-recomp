@@ -58,10 +58,10 @@ extern int g_enhanced;
  * alternate, a traffic car (TCAR_carNNa; the log name), and its R<car> section: name, id, model
  * count, the indices of the R1 main body, the first R2 and R3 bodies and the R1 floor pan */
 static const struct { int tcar; const char *name, *rsec; int sec, count, body, mid, far, pan; } k_cars[] = {
-    { 1, "FIAT PANDA", "Rmini", 25, 27, 5, 24, 26, 3 },     { 2, "LANCIA", "Rfiat", 22, 27, 5, 24, 26, 3 },
-    { 3, "VAN", "Rsuper7", 26, 36, 6, 28, 34, 5 },          { 5, "VOLVO ESTATE", "Rcobra", 20, 27, 4, 24, 26, 3 },
-    { 7, "TAXI", "Rjuguar", 24, 43, 4, 40, 42, 3 },         { 8, "RED CAR", "Rwagen", 27, 27, 5, 24, 26, 3 },
-    { 11, "BEETLE", "Rgtv", 23, 27, 5, 24, 26, 3 },         { 15, "CITROEN 2CV", "Rferr", 21, 29, 7, 27, 28, 5 },
+    { 1, "FIAT PANDA", "Rmini", 25, 27, 5, 24, 26, 3 },     { 15, "CITROEN 2CV", "Rfiat", 22, 27, 5, 24, 26, 3 },
+    { 11, "BEETLE", "Rsuper7", 26, 36, 6, 28, 34, 5 },      { 2, "LANCIA", "Rcobra", 20, 27, 4, 24, 26, 3 },
+    { 7, "TAXI", "Rjuguar", 24, 43, 4, 40, 42, 3 },         { 3, "VAN", "Rwagen", 27, 27, 5, 24, 26, 3 },
+    { 5, "VOLVO ESTATE", "Rgtv", 23, 27, 5, 24, 26, 3 },    { 8, "RED CAR", "Rferr", 21, 29, 7, 27, 28, 5 },
 };
 #define N_CARS ((int)(sizeof k_cars / sizeof k_cars[0]))
 #define SEC_TCAR 31
