@@ -1711,6 +1711,9 @@ WII_HOT_triangle RENDER_O3 static void triangle(void *user,const WiiVoodooView *
 #endif
 #ifdef VIPER_WII_SPRITE_INSET
     WiiVoodooVertex inset[3];
+    /* Only a flat triangle (one W per unit) can be a sprite: test that first,
+     * on the vertices as given, before any copy or division. */
+    if((p[0].w0==p[1].w0&&p[0].w0==p[2].w0&&p[0].w0>0)||(p[0].w1==p[1].w1&&p[0].w1==p[2].w1&&p[0].w1>0))
     {float fx=(float)RB_W/(float)(width(v)+2*WIDE_M),fy=(float)RB_H/(float)height(v);
 #ifdef VIPER_WII_SUPERSAMPLE
      if(ss_recording){fx*=2;fy*=2;}
