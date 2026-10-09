@@ -58,6 +58,8 @@
     ],
     "hooks": {
       "game": {
+        "0x44628": null,
+        "0x4464c": "glyph",
         "0x61b4c": null,
         "0x61b70": "attract",
         "0x839b4": null,

@@ -145,6 +145,7 @@
     ],
     "hooks": {
       "game": {
+        "0x44628": "glyph",
         "0x61b4c": "attract",
         "0x839b4": "name_index",
         "0x839f8": "name_confirm",
