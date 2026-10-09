@@ -31,7 +31,8 @@
  * graphics handle, data). Each car's R<car> section gets the traffic car's models for its bodies
  * (R1 main body, R2 and R3 lower details), the rectangle shadow of the alternate (an extra model
  * appended to the section when it loads at boot, which the game itself never draws), and a
- * negative radius, culled, for every other part.
+ * negative radius, culled, for every other part; the cars' shadows in EFFECTS (see k_cars) are
+ * swapped for the alternates' too.
  * They stay so from the car select through the race and come back when the lever leaves DOWN at
  * a car select or the game leaves play.
  *
@@ -57,12 +58,17 @@ extern int g_enhanced;
 /* per player car (settings word order: mini, fiat, super7, cobra, juguar, wagen, gtv, ferr): its
  * alternate, a traffic car (TCAR_carNNa; the log name), and its R<car> section: name, id, model
  * count, the indices of the R1 main body, the first R2 and R3 bodies and the R1 floor pan */
-static const struct { int tcar; const char *name, *rsec; int sec, count, body, mid, far, pan; } k_cars[] = {
-    { 1, "FIAT PANDA", "Rmini", 25, 27, 5, 24, 26, 3 },     { 15, "CITROEN 2CV", "Rfiat", 22, 27, 5, 24, 26, 3 },
-    { 11, "BEETLE", "Rsuper7", 26, 36, 6, 28, 34, 5 },      { 2, "LANCIA", "Rcobra", 20, 27, 4, 24, 26, 3 },
-    { 7, "TAXI", "Rjuguar", 24, 43, 4, 40, 42, 3 },         { 3, "VAN", "Rwagen", 27, 27, 5, 24, 26, 3 },
-    { 8, "RED CAR", "Rgtv", 23, 27, 5, 24, 26, 3 },         { 5, "VOLVO ESTATE", "Rferr", 21, 29, 7, 27, 28, 5 },
+static const struct { int tcar; const char *name, *rsec; int sec, count, body, mid, far, pan, shadow, rshadow; } k_cars[] = {
+    { 1, "FIAT PANDA", "Rmini", 25, 27, 5, 24, 26, 3, 108, 13 },     { 15, "CITROEN 2CV", "Rfiat", 22, 27, 5, 24, 26, 3, 75, 10 },
+    { 11, "BEETLE", "Rsuper7", 26, 36, 6, 28, 34, 5, 165, 14 },      { 2, "LANCIA", "Rcobra", 20, 27, 4, 24, 26, 3, 16, 8 },
+    { 7, "TAXI", "Rjuguar", 24, 43, 4, 40, 42, 3, 107, 12 },         { 3, "VAN", "Rwagen", 27, 27, 5, 24, 26, 3, 170, 15 },
+    { 8, "RED CAR", "Rgtv", 23, 27, 5, 24, 26, 3, 76, 11 },          { 5, "VOLVO ESTATE", "Rferr", 21, 29, 7, 27, 28, 5, 74, 9 },
 };
+/* The cars' shadows are flat quads in the EFFECTS section (id 7, 199 models): <car>_shadow under
+ * the player's car and R<car>_shadow under the rivals (the indices above). At boot the section gets
+ * a copy of both for each alternate, resized to its footprint: models 199 + 2 * car (+1 rival). */
+#define SEC_EFFECTS 7
+#define EFFECTS_COUNT 199
 #define N_CARS ((int)(sizeof k_cars / sizeof k_cars[0]))
 #define SEC_TCAR 31
 
@@ -74,6 +80,7 @@ static int g_pick = -1;              /* index in k_cars, -1: the original car */
 static uint64_t g_frame, g_select_frame;
 static int g_shown;                  /* the R sections show the alternates */
 static uint8_t g_saved[N_CARS][64][16];   /* their original model entries */
+static uint8_t g_saved_shadow[N_CARS][2][16];
 
 static int alt_tcar(void) { return g_forced >= 0 ? g_forced : g_pick >= 0 ? k_cars[g_pick].tcar : -1; }
 
@@ -244,9 +251,9 @@ static void rect_pan(uint8_t *pan, const uint8_t *body) {
 }
 
 /* a loaded container copied out of the guest: its header, bytes and each model's offset and size */
-typedef struct { Container k; uint8_t *bytes; uint32_t len, at[64], size[64]; } Loaded;
+typedef struct { Container k; uint8_t *bytes; uint32_t len, at[256], size[256]; } Loaded;
 static int load_container(Loaded *l, uint32_t ea) {
-    if (!parse_header(&l->k, read_guest, (const void *)(uintptr_t)ea, 0x10000) || l->k.nmodels > 64) return 0;
+    if (!parse_header(&l->k, read_guest, (const void *)(uintptr_t)ea, 0x10000) || l->k.nmodels > 256) return 0;
     l->len = l->k.sizes_at + 4 * l->k.nmodels;
     for (uint32_t m = 0; m < l->k.nmodels; m++) {
         l->size[m] = LD32(ea + l->k.sizes_at + 4 * m);
@@ -363,6 +370,41 @@ static void swap_player(int sec, int tcar, uint32_t dest, const char *name) {
     free(l.bytes);
 }
 
+/* EFFECTS, at boot: the alternates' shadows (see k_cars), copies of the base car's quads stretched
+ * to the alternate's footprint, the way the game sizes each car's own */
+static void add_alt_shadows(uint32_t dest) {
+    Loaded l;
+    if (!load_container(&l, dest)) return;
+    if (l.k.nmodels != EFFECTS_COUNT) { free(l.bytes); return; }
+    uint8_t *models[EFFECTS_COUNT + 2 * N_CARS], *quads = malloc(2 * N_CARS * 256);
+    uint32_t sizes[EFFECTS_COUNT + 2 * N_CARS];
+    if (!quads) { free(l.bytes); return; }
+    for (uint32_t m = 0; m < EFFECTS_COUNT; m++) { models[m] = l.bytes + l.at[m]; sizes[m] = l.size[m]; }
+    for (int car = 0; car < N_CARS; car++) {
+        uint32_t car_off, car_size;
+        tcar_model(k_cars[car].tcar, &car_off, &car_size);
+        Extent nb = model_extent(g_tcar + car_off);
+        for (int r = 0; r < 2; r++) {
+            int src = r ? k_cars[car].rshadow : k_cars[car].shadow, i = EFFECTS_COUNT + 2 * car + r;
+            uint8_t *q = quads + 256 * (2 * car + r);
+            if (l.size[src] > 256) { free(quads); free(l.bytes); return; }
+            memcpy(q, l.bytes + l.at[src], l.size[src]);
+            Extent e = model_extent(q);
+            for (int v = 0; v < (q[8] << 8 | q[9]); v++)
+                for (int k = 0; k < 3; k += 2) {
+                    uint8_t *p = q + 0x1c + 6 * v + 2 * k;
+                    int n = (int16_t)(p[0] << 8 | p[1]) <= (e.lo[k] + e.hi[k]) / 2 ? nb.lo[k] : nb.hi[k];
+                    p[0] = (uint8_t)(n >> 8); p[1] = (uint8_t)n;
+                }
+            models[i] = q;
+            sizes[i] = l.size[src];
+        }
+    }
+    emit_container(dest, 0x40000, l.bytes + 8, l.k.names_len, l.k.ntex, EFFECTS_COUNT + 2 * N_CARS, models, sizes);
+    free(quads);
+    free(l.bytes);
+}
+
 void alt_cars_file_loaded(PPCContext *c) {
     if (!g_enhanced || !g_tcar || c->r[3] != 0) return;
     uint32_t name_ea = LD32(c->r[26] + 4), dest = LD32(c->r[26] + 0x10);
@@ -373,6 +415,7 @@ void alt_cars_file_loaded(PPCContext *c) {
     if (getenv("RT_ALT_CAR_LOG")) rt_log("alt cars: loaded %s at %#x\n", name, dest);  /* every queued read */
     for (int car = 0; car < N_CARS; car++)
         if (is_section_file(name, k_cars[car].rsec)) { add_rival_pan(car, dest); return; }
+    if (!strcmp(name, "game/mdldata/EFFECTS_mdl.zin")) { add_alt_shadows(dest); return; }
     int tcar = alt_tcar();
     for (int sec = 0; tcar >= 0 && sec < (int)(sizeof k_parts / sizeof k_parts[0]); sec++)
         if (is_section_file(name, k_parts[sec].sec)) { swap_player(sec, tcar, dest, name); return; }
@@ -397,7 +440,7 @@ static uint32_t section_models(int sec, uint32_t *count) {
         if (LD32(e) == (uint32_t)sec) {
             *count = LD32(e + 8);
             uint32_t models = LD32(e + 0xc);
-            return *count <= 64 && models >= 0x100000 && models < RAM_SIZE - 64 * 16 ? models : 0;
+            return *count <= 256 && models >= 0x100000 && models < RAM_SIZE - 256 * 16 ? models : 0;
         }
     }
     return 0;
@@ -410,6 +453,12 @@ static void show_original(void) {
         for (uint32_t m = 0; models && m < n; m++)
             for (int b = 0; b < 16; b++) ST8(models + 16 * m + (uint32_t)b, g_saved[car][m][b]);
     }
+    uint32_t en, effects = section_models(SEC_EFFECTS, &en);
+    for (int car = 0; effects && en == EFFECTS_COUNT + 2 * N_CARS && car < N_CARS; car++)
+        for (int r = 0; r < 2; r++) {
+            uint32_t e = effects + 16 * (uint32_t)(r ? k_cars[car].rshadow : k_cars[car].shadow);
+            for (int b = 0; b < 16; b++) ST8(e + (uint32_t)b, g_saved_shadow[car][r][b]);
+        }
     g_shown = 0;
 }
 
@@ -430,6 +479,16 @@ static void show_alternates(void) {
                 STF32(models + 16 * m + 4, -1e30f);           /* culled */
         }
     }
+    uint32_t en, effects = section_models(SEC_EFFECTS, &en);
+    for (int car = 0; effects && en == EFFECTS_COUNT + 2 * N_CARS && car < N_CARS; car++)
+        for (int r = 0; r < 2; r++) {
+            uint32_t e = effects + 16 * (uint32_t)(r ? k_cars[car].rshadow : k_cars[car].shadow);
+            uint32_t q = effects + 16 * (uint32_t)(EFFECTS_COUNT + 2 * car + r);
+            for (int b = 0; b < 16; b++) {
+                g_saved_shadow[car][r][b] = (uint8_t)LD8(e + (uint32_t)b);
+                ST8(e + (uint32_t)b, LD8(q + (uint32_t)b));
+            }
+        }
     g_shown = 1;
 }
 
