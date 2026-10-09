@@ -13,23 +13,24 @@
  * the part names in alphabetical order (blight, bodyA..C, dview, sujiA..D, tire, wind, ref_...).
  *
  * The loaded container is replaced by one of the same model count that uses the traffic cars'
- * texture list (TCAR_mdl.zin, whose textures stay in VRAM for the traffic): the largest part, the
- * main body, becomes traffic car N; the floor pan (bodyA), the dark underside that reads as the
- * car's shadow, keeps its own texture (appended to the list) and is fitted under the new body;
- * every other part becomes a small traffic model with all its vertices at the origin, so it draws
- * nothing. The new container must fit in the original's size, the buffer the game allocated.
+ * texture list (TCAR_mdl.zin, whose textures stay in VRAM for the traffic) after its own: the main
+ * body becomes traffic car N (its texture index shifted past the original list); the floor pan
+ * (bodyA), the dark underside that reads as the car's shadow, is kept and fitted under the new
+ * body; every other part becomes a small traffic model with all its vertices at the origin, so it
+ * draws nothing. The new container must fit in the original's size, the buffer the game allocated.
  *
  * Car select: like the shift lever's UP position picks the tuned-up car, holding it DOWN picks the
  * highlighted car's alternate, k_cars[car], which the game ignores there. The game's handler
  * 0x8b528 runs every frame of the car select; the "car_select" hook (0x8b5c4, after it has set the
  * tuned-up bit) reads the lever (IN3 bit 6, active low). What it holds when the car select ends is
  * raced; it is dropped when the game leaves play (the settings word's phase falls below 0xa3).
- * While the lever is down, the car select's 3D scene shows the alternate too: the game keeps each
- * loaded section in a table at *(toc + 0x40) (entries of 0x24 bytes from +8: section id, flags,
- * model count, model array), and a model is 16 bytes (header word, bounding radius, graphics
- * handle, data). The highlighted car's R<car> section gets the traffic car's models for its
- * bodies (R1 main body, R2 and R3 lower details) and a negative radius, culled, for every other
- * part; the original entries come back when the lever leaves DOWN or the car select ends.
+ * As UP makes every car tuned-up, the rivals too, DOWN makes every car its alternate: the game
+ * keeps each loaded section in a table at *(toc + 0x40) (entries of 0x24 bytes from +8: section
+ * id, flags, model count, model array), and a model is 16 bytes (header word, bounding radius,
+ * graphics handle, data). Each car's R<car> section gets the traffic car's models for its bodies
+ * (R1 main body, R2 and R3 lower details) and a negative radius, culled, for every other part.
+ * They stay so from the car select through the race and come back when the lever leaves DOWN at
+ * a car select or the game leaves play.
  *
  * RT_ALT_CAR=N (0..15) forces traffic car N; RT_ALT_CAR_LOG=1 logs every queued file read and
  * each change of the settings word.
@@ -64,8 +65,8 @@ static size_t g_tcar_len;
 static int g_forced = -1;            /* RT_ALT_CAR */
 static int g_pick = -1;              /* index in k_cars, -1: the original car */
 static uint64_t g_frame, g_select_frame;
-static int g_shown = -1;             /* car whose R section shows its alternate, -1: none */
-static uint8_t g_saved[64][16];      /* that section's original model entries */
+static int g_shown;                  /* the R sections show the alternates */
+static uint8_t g_saved[N_CARS][64][16];   /* their original model entries */
 
 static int alt_tcar(void) { return g_forced >= 0 ? g_forced : g_pick >= 0 ? k_cars[g_pick].tcar : -1; }
 
@@ -138,45 +139,53 @@ static void tcar_model(int i, uint32_t *off, uint32_t *size) {
     *size = be32(g_tcar + k.sizes_at + 4 * i);
 }
 
-/* front-to-back extent (z) of the guest model at ea */
-static int model_length(uint32_t ea) {
-    int n = (int)LD16(ea + 8), lo = 0x7fff, hi = -0x8000;
-    for (int i = 0; i < n && i < 4096; i++) {
-        int z = (int16_t)LD16(ea + 0x1c + 6 * (uint32_t)i + 4);
-        if (z < lo) lo = z;
-        if (z > hi) hi = z;
-    }
-    return n ? hi - lo : 0;
-}
+/* The player car sections' parts (indices = part names in alphabetical order): the main body,
+ * the floor pan (bodyA: the dark underside that reads as the car's shadow), the driver's-view
+ * dashboard parts and the tyre parts (drawn at each wheel, the front ones steered) */
+static const struct { const char *sec; int body, pan; uint32_t dview, tires; } k_parts[] = {
+    { "Pmini", 3, 1, 1u << 4, 1u << 9 },     { "TPmini", 3, 1, 1u << 4, 1u << 9 },
+    { "Pfiat", 3, 1, 1u << 4, 1u << 9 },     { "TPfiat", 3, 1, 1u << 4, 1u << 9 },
+    { "Psuper7", 6, 5, 7u << 8, 7u << 16 },  { "TPsuper7", 6, 5, 7u << 8, 7u << 15 },
+    { "Pcobra", 2, 1, 1u << 4, 1u << 9 },    { "TPcobra", 2, 1, 1u << 4, 1u << 9 },
+    { "Pjuguar", 2, 1, 1u << 4, 1u << 13 },  { "TPjuguar", 2, 1, 1u << 4, 1u << 13 },
+    { "Pwagen", 5, 3, 1u << 6, 1u << 11 },   { "TPwagen", 3, 1, 1u << 4, 1u << 9 },
+    { "Pgtv", 3, 1, 1u << 4, 1u << 9 },      { "TPgtv", 3, 1, 1u << 4, 1u << 9 },
+    { "Pferr", 5, 3, 1u << 6, 3u },          { "TPferr", 5, 3, 1u << 6, 3u },
+};
 
-static int is_player_models(const char *name) {
+/* the k_parts entry of game/mdldata/<sec>_mdl.zin, or -1 */
+static int player_section(const char *name) {
     const char *p = "game/mdldata/", *s = "_mdl.zin";
     size_t n = strlen(name), lp = strlen(p), ls = strlen(s);
-    if (n <= lp + ls || strncmp(name, p, lp) || strcmp(name + n - ls, s)) return 0;
-    return name[lp] == 'P' || (name[lp] == 'T' && name[lp + 1] == 'P');
+    if (n <= lp + ls || strncmp(name, p, lp) || strcmp(name + n - ls, s)) return -1;
+    for (int k = 0; k < (int)(sizeof k_parts / sizeof k_parts[0]); k++)
+        if (strlen(k_parts[k].sec) == n - lp - ls && !strncmp(name + lp, k_parts[k].sec, n - lp - ls)) return k;
+    return -1;
 }
 
 /* extents of a model's vertices (int16 triples at +0x1c): min and max per axis */
 typedef struct { int lo[3], hi[3]; } Extent;
-static Extent model_extent(uint32_t (*read16)(const void *, uint32_t), const void *src) {
+static Extent model_extent(const uint8_t *m) {
     Extent e = { { 0x7fff, 0x7fff, 0x7fff }, { -0x8000, -0x8000, -0x8000 } };
-    int n = (int)read16(src, 8);
+    int n = m[8] << 8 | m[9];
     for (int i = 0; i < n && i < 4096; i++)
         for (int k = 0; k < 3; k++) {
-            int v = (int16_t)read16(src, 0x1c + 6 * (uint32_t)i + 2 * (uint32_t)k);
+            int v = (int16_t)(m[0x1c + 6 * i + 2 * k] << 8 | m[0x1c + 6 * i + 2 * k + 1]);
             if (v < e.lo[k]) e.lo[k] = v;
             if (v > e.hi[k]) e.hi[k] = v;
         }
     return e;
 }
-static uint32_t read16_host(const void *src, uint32_t off) { const uint8_t *p = (const uint8_t *)src + off; return (uint32_t)p[0] << 8 | p[1]; }
-static uint32_t read16_guest(const void *src, uint32_t off) { return LD16((uint32_t)(uintptr_t)src + off); }
 
-/* offset of a single-material model's texture index: after the vertices, normals (6 bytes each),
- * texture coordinates (4) and the 24-byte material record; 0 if the model has other materials */
-static uint32_t texture_index_at(uint32_t ea) {
-    if (LD16(ea + 14) != 1) return 0;                          /* +8 vertices, +10 normals, +12 uvs, +14 materials */
-    return 0x1c + 6 * LD16(ea + 8) + 6 * LD16(ea + 10) + 4 * LD16(ea + 12) + 24;
+/* A traffic model moved behind the original texture list: its texture index (it has one material:
+ * after the vertices, normals and texture coordinates, 6, 6 and 4 bytes each, and the 24-byte
+ * material record; header +8 vertices, +10 normals, +12 coordinates, +14 materials) grows by
+ * the original's texture count. */
+static void shift_texture(uint8_t *m, uint32_t size, uint32_t by) {
+    uint32_t at = 0x1c + 6u * (m[8] << 8 | m[9]) + 6u * (m[10] << 8 | m[11]) + 4u * (m[12] << 8 | m[13]) + 24;
+    if ((m[14] << 8 | m[15]) != 1 || at + 2 > size) return;
+    uint32_t t = (uint32_t)(m[at] << 8 | m[at + 1]) + by;
+    m[at] = (uint8_t)(t >> 8); m[at + 1] = (uint8_t)t;
 }
 
 void alt_cars_file_loaded(PPCContext *c) {
@@ -189,95 +198,87 @@ void alt_cars_file_loaded(PPCContext *c) {
     for (; i < sizeof name - 1 && (name[i] = (char)LD8(name_ea + (uint32_t)i)); i++) {}
     name[i] = 0;
     if (getenv("RT_ALT_CAR_LOG")) rt_log("alt cars: loaded %s at %#x\n", name, dest);  /* every queued read */
-    if (!is_player_models(name)) return;
+    int sec = player_section(name);
+    if (sec < 0) return;
 
-    /* the loaded original: its models, the largest (the body) and the body's floor pan (bodyA:
-     * the plain single-material part spanning the body's length with the fewest vertices), the
-     * dark underside that reads as the car's shadow */
+    /* the loaded original, copied out */
     Container orig;
-    if (!parse_header(&orig, read_guest, (const void *)(uintptr_t)dest, 0x10000) || orig.nmodels > 512) return;
-    uint32_t at[512], orig_len = orig.sizes_at + 4 * orig.nmodels, body = 0, body_size = 0;
+    if (!parse_header(&orig, read_guest, (const void *)(uintptr_t)dest, 0x10000) || orig.nmodels > 32) return;
+    uint32_t at[32], size[32], orig_len = orig.sizes_at + 4 * orig.nmodels;
     for (uint32_t m = 0; m < orig.nmodels; m++) {
-        uint32_t size = LD32(dest + orig.sizes_at + 4 * m);
+        size[m] = LD32(dest + orig.sizes_at + 4 * m);
         at[m] = orig_len;
-        if (size > body_size) { body = m; body_size = size; }
-        orig_len += size;
+        orig_len += size[m];
     }
-    int body_len = model_length(dest + at[body]);
-    uint32_t pan = body, pan_verts = 0xffffffffu;
-    for (uint32_t m = 0; m < orig.nmodels; m++) {
-        uint32_t ea = dest + at[m], nverts = LD16(ea + 8);
-        if (m != body && LD16(ea + 2) == 0x154a && texture_index_at(ea) &&
-            model_length(ea) * 10 >= body_len * 9 && nverts < pan_verts) { pan = m; pan_verts = nverts; }
-    }
-    /* the pan's texture name in the original list; it joins the traffic cars' list */
-    char pan_tex[64] = "";
-    if (pan != body) {
-        uint32_t t = LD16(dest + at[pan] + texture_index_at(dest + at[pan])), p = dest + 8, k = 0;
-        for (uint32_t n = 0; n < t && n < orig.ntex; n++) while (LD8(p++)) {}
-        while (k < sizeof pan_tex - 1 && (pan_tex[k] = (char)LD8(p + k))) k++;
-        pan_tex[k] = 0;
-        if (t >= orig.ntex || !k) pan = body;
-    }
+    if (orig_len > 0x10000) return;
+    uint8_t *src = malloc(orig_len);
+    if (!src) return;
+    for (uint32_t b = 0; b < orig_len; b++) src[b] = (uint8_t)LD8(dest + b);
 
+    /* kept: the floor pan, fitted under the new body (and, to try them, the original dashboard
+     * with RT_ALT_DVIEW=1, the original car's bonnet in the driver's view, and the steered tyres
+     * with RT_ALT_TIRES=1, at the original car's wheel positions); the rest is the traffic car's
+     * body or an empty model, so the driver's view shows the road alone */
+    uint32_t keep = 1u << k_parts[sec].pan | (getenv("RT_ALT_DVIEW") ? k_parts[sec].dview : 0) |
+                    (getenv("RT_ALT_TIRES") ? k_parts[sec].tires : 0);
+    uint32_t body = (uint32_t)k_parts[sec].body;
     Container tc;
     parse_header(&tc, read_host, g_tcar, (uint32_t)g_tcar_len);
-    uint32_t car_off, car_size, empty_off, empty_size, pan_size = pan != body ? LD32(dest + orig.sizes_at + 4 * pan) : 0;
+    uint32_t car_off, car_size, empty_off, empty_size;
     tcar_model(tcar, &car_off, &car_size);
     tcar_model(TCAR_EMPTY_SRC, &empty_off, &empty_size);
-    uint32_t names_len = tc.names_len + (pan != body ? (uint32_t)strlen(pan_tex) + 1 : 0);
-    uint32_t sizes_at = (8 + names_len + 3) & ~3u, models_at = sizes_at + 4 * orig.nmodels;
-    uint32_t len = models_at + car_size + pan_size + (orig.nmodels - 1 - (pan != body)) * empty_size;
+    uint32_t names_len = orig.names_len + tc.names_len;
+    uint32_t sizes_at = (8 + names_len + 3) & ~3u, len = sizes_at + 4 * orig.nmodels;
+    for (uint32_t m = 0; m < orig.nmodels; m++)
+        len += m == body ? car_size : keep >> m & 1 ? size[m] : empty_size;
     if (len > orig_len) {
         rt_log("alt cars: %s: replacement needs %#x bytes, the buffer has %#x\n", name, len, orig_len);
+        free(src);
         return;
     }
 
     uint8_t *out = calloc(1, len);
-    if (!out) return;
+    if (!out) { free(src); return; }
     put32(out, orig.nmodels);
-    put32(out + 4, tc.ntex + (pan != body));
-    memcpy(out + 8, g_tcar + 8, tc.names_len);
-    if (pan != body) memcpy(out + 8 + tc.names_len, pan_tex, strlen(pan_tex) + 1);
-    Extent car = model_extent(read16_host, g_tcar + car_off);
-    uint32_t o = models_at;
+    put32(out + 4, orig.ntex + tc.ntex);
+    memcpy(out + 8, src + 8, orig.names_len);
+    memcpy(out + 8 + orig.names_len, g_tcar + 8, tc.names_len);
+    Extent car = model_extent(g_tcar + car_off);
+    uint32_t o = sizes_at + 4 * orig.nmodels;
     for (uint32_t m = 0; m < orig.nmodels; m++) {
         uint8_t *dst = out + o;
+        uint32_t n;
         if (m == body) {
-            put32(out + sizes_at + 4 * m, car_size);
-            memcpy(dst, g_tcar + car_off, car_size);
-            o += car_size;
-        } else if (m == pan) {
-            /* the original pan, fitted inside the traffic car's footprint, on the new texture slot */
-            uint32_t ea = dest + at[m];
-            Extent e = model_extent(read16_guest, (const void *)(uintptr_t)ea);
-            for (uint32_t b = 0; b < pan_size; b++) dst[b] = (uint8_t)LD8(ea + b);
-            float sx = 0.95f * (float)(car.hi[0] - car.lo[0]) / (float)(e.hi[0] - e.lo[0] ? e.hi[0] - e.lo[0] : 1);
-            float sz = 0.95f * (float)(car.hi[2] - car.lo[2]) / (float)(e.hi[2] - e.lo[2] ? e.hi[2] - e.lo[2] : 1);
-            float cx = 0.5f * (car.hi[0] + car.lo[0]), cz = 0.5f * (car.hi[2] + car.lo[2]);
-            float ex = 0.5f * (e.hi[0] + e.lo[0]), ez = 0.5f * (e.hi[2] + e.lo[2]);
-            for (uint32_t v = 0; v < LD16(ea + 8); v++) {
-                uint8_t *p = dst + 0x1c + 6 * v;
-                int x = (int16_t)(p[0] << 8 | p[1]), z = (int16_t)(p[4] << 8 | p[5]);
-                int nx = (int)lroundf(cx + (x - ex) * sx), nz = (int)lroundf(cz + (z - ez) * sz);
-                p[0] = (uint8_t)(nx >> 8); p[1] = (uint8_t)nx; p[4] = (uint8_t)(nz >> 8); p[5] = (uint8_t)nz;
+            memcpy(dst, g_tcar + car_off, n = car_size);
+            shift_texture(dst, n, orig.ntex);
+        } else if (keep >> m & 1) {
+            memcpy(dst, src + at[m], n = size[m]);
+            if ((int)m == k_parts[sec].pan) {                   /* inside the new footprint */
+                Extent e = model_extent(dst);
+                float sx = 0.95f * (float)(car.hi[0] - car.lo[0]) / (float)(e.hi[0] - e.lo[0] ? e.hi[0] - e.lo[0] : 1);
+                float sz = 0.95f * (float)(car.hi[2] - car.lo[2]) / (float)(e.hi[2] - e.lo[2] ? e.hi[2] - e.lo[2] : 1);
+                float cx = 0.5f * (car.hi[0] + car.lo[0]), cz = 0.5f * (car.hi[2] + car.lo[2]);
+                float ex = 0.5f * (e.hi[0] + e.lo[0]), ez = 0.5f * (e.hi[2] + e.lo[2]);
+                for (int v = 0; v < (dst[8] << 8 | dst[9]); v++) {
+                    uint8_t *p = dst + 0x1c + 6 * v;
+                    int x = (int16_t)(p[0] << 8 | p[1]), z = (int16_t)(p[4] << 8 | p[5]);
+                    int nx = (int)lroundf(cx + (x - ex) * sx), nz = (int)lroundf(cz + (z - ez) * sz);
+                    p[0] = (uint8_t)(nx >> 8); p[1] = (uint8_t)nx; p[4] = (uint8_t)(nz >> 8); p[5] = (uint8_t)nz;
+                }
             }
-            uint32_t t = texture_index_at(ea);
-            dst[t] = (uint8_t)(tc.ntex >> 8); dst[t + 1] = (uint8_t)tc.ntex;
-            put32(out + sizes_at + 4 * m, pan_size);
-            o += pan_size;
         } else {
-            put32(out + sizes_at + 4 * m, empty_size);
-            memcpy(dst, g_tcar + empty_off, empty_size);
+            memcpy(dst, g_tcar + empty_off, n = empty_size);
+            shift_texture(dst, n, orig.ntex);
             uint32_t nverts = (uint32_t)dst[8] << 8 | dst[9];
-            if (0x1c + 6 * nverts <= empty_size) memset(dst + 0x1c, 0, 6 * nverts);
-            o += empty_size;
+            if (0x1c + 6 * nverts <= n) memset(dst + 0x1c, 0, 6 * nverts);
         }
+        put32(out + sizes_at + 4 * m, n);
+        o += n;
     }
     for (uint32_t b = 0; b < len; b++) ST8(dest + b, out[b]);
     free(out);
-    rt_log("alt cars: %s -> traffic car %d (body %u, pan %u %s, of %u; %#x of %#x bytes)\n",
-           name, tcar, body, pan, pan_tex, orig.nmodels, len, orig_len);
+    free(src);
+    rt_log("alt cars: %s -> traffic car %d (%#x of %#x bytes)\n", name, tcar, len, orig_len);
 }
 
 /* the race settings word: car in bits 9-11, tuned-up in bit 8 (read at race setup, 0x8e378) */
@@ -306,28 +307,35 @@ static uint32_t section_models(int sec, uint32_t *count) {
 }
 
 static void show_original(void) {
-    if (g_shown < 0) return;
-    uint32_t n, models = section_models(k_cars[g_shown].sec, &n);
-    for (uint32_t m = 0; models && m < n; m++)
-        for (int b = 0; b < 16; b++) ST8(models + 16 * m + (uint32_t)b, g_saved[m][b]);
-    g_shown = -1;
-}
-
-static void show_alternate(int car) {
-    uint32_t n, tn, models = section_models(k_cars[car].sec, &n), tcar = section_models(SEC_TCAR, &tn);
-    int t = k_cars[car].tcar;
-    if (!models || !tcar || tn < 64) return;
-    for (uint32_t m = 0; m < n; m++) {
-        for (int b = 0; b < 16; b++) g_saved[m][b] = (uint8_t)LD8(models + 16 * m + (uint32_t)b);
-        int src = (int)m == k_cars[car].body ? t : (int)m == k_cars[car].mid ? 48 + t : (int)m == k_cars[car].far ? 16 + t : -1;
-        if (src >= 0)
-            for (int b = 0; b < 16; b++) ST8(models + 16 * m + (uint32_t)b, LD8(tcar + 16 * (uint32_t)src + (uint32_t)b));
-        else
-            STF32(models + 16 * m + 4, -1e30f);               /* culled */
+    if (!g_shown) return;
+    for (int car = 0; car < N_CARS; car++) {
+        uint32_t n, models = section_models(k_cars[car].sec, &n);
+        for (uint32_t m = 0; models && m < n; m++)
+            for (int b = 0; b < 16; b++) ST8(models + 16 * m + (uint32_t)b, g_saved[car][m][b]);
     }
-    g_shown = car;
+    g_shown = 0;
 }
 
+static void show_alternates(void) {
+    uint32_t tn, tcar = section_models(SEC_TCAR, &tn);
+    if (g_shown || !tcar || tn < 64) return;
+    for (int car = 0; car < N_CARS; car++) {
+        uint32_t n, models = section_models(k_cars[car].sec, &n);
+        int t = k_cars[car].tcar;
+        for (uint32_t m = 0; models && m < n; m++) {
+            for (int b = 0; b < 16; b++) g_saved[car][m][b] = (uint8_t)LD8(models + 16 * m + (uint32_t)b);
+            int from = (int)m == k_cars[car].body ? t : (int)m == k_cars[car].mid ? 48 + t : (int)m == k_cars[car].far ? 16 + t : -1;
+            if (from >= 0)
+                for (int b = 0; b < 16; b++) ST8(models + 16 * m + (uint32_t)b, LD8(tcar + 16 * (uint32_t)from + (uint32_t)b));
+            else
+                STF32(models + 16 * m + 4, -1e30f);           /* culled */
+        }
+    }
+    g_shown = 1;
+}
+
+/* Like UP turns every car tuned-up, DOWN turns every car into its alternate: the rivals too,
+ * from the car select through the race, until the game leaves play. */
 void alt_cars_car_select(PPCContext *c) {
     (void)c;
     if (!g_enhanced || !g_tcar) return;
@@ -338,10 +346,8 @@ void alt_cars_car_select(PPCContext *c) {
     if (pick != g_pick && getenv("RT_ALT_CAR_LOG"))
         rt_log("alt cars: car select pick %s\n", pick >= 0 ? k_cars[pick].name : "original");
     g_pick = pick;
-    if (g_shown != pick) {
-        show_original();
-        if (pick >= 0) show_alternate(pick);
-    }
+    if (down) show_alternates();
+    else show_original();
 }
 
 void alt_cars_on_frame(uint64_t frame) {
@@ -351,6 +357,5 @@ void alt_cars_on_frame(uint64_t frame) {
     uint32_t w = ea ? LD32(ea) : 0;
     if (w != last && getenv("RT_ALT_CAR_LOG")) rt_log("alt cars: frame %llu settings %08x\n", (unsigned long long)frame, w);
     last = w;
-    if (!in_car_select()) show_original();
-    if ((w >> 24) < 0xa3) g_pick = -1;                         /* out of play: attract, coin-up */
+    if ((w >> 24) < 0xa3) { g_pick = -1; show_original(); }   /* out of play: attract, coin-up */
 }
