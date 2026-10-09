@@ -27,6 +27,11 @@ void rt_sched_run(uint64_t now);
 /* dispatch / fibers */
 void rt_register_module(const RtModuleInfo *m);
 RtFn rt_lookup(uint32_t addr);
+#if defined(VIPER_WII) && defined(VIPER_WII_GX_PLANE_PROFILE)
+void rt_wii_lookup_profile(uint64_t *us,uint64_t *calls);
+uint64_t rt_wii_profile_ticks(void);
+uint64_t rt_wii_profile_microseconds(uint64_t ticks);
+#endif
 void rt_start(uint32_t pc);
 
 /* interrupt controller */
@@ -69,6 +74,7 @@ int enh_turbo(void);                                   /* boot/apply: run unpace
 int enh_restart_requested(void);                       /* new settings written: restart */
 void enh_set_headless(int on);
 int enh_escape(void);                                  /* Esc: pause / back; 0 = not handled */
+void enh_focus_lost(void);                             /* pause an active race, never toggle */
 int enh_paused(void);
 int enh_inputs_owned(void);                            /* the enhanced layer drives IN3/IN4 */
 int enh_name_entry_active(void);                       /* rankings name entry: letters from the keyboard */
@@ -113,6 +119,7 @@ static inline uint32_t le_bus_write(uint32_t old, int k, int size, uint32_t v) {
 
 /* Controller settings and sensor access stay on the frontend thread. */
 int frontend_gyro_enabled(void);
+int frontend_shift_up_held(void); /* physical held state when opening pause */
 int frontend_gyro_available(void);
 int frontend_gyro_sensitivity(void);
 void frontend_gyro_set_enabled(int on);
@@ -132,3 +139,5 @@ double frontend_steering_position(void); /* actual steering sent to guest */
 
 int frontend_stick_response(void); /* 0 linear, 1 soft, 2 extra soft */
 void frontend_set_stick_response(int response);
+int frontend_switch_trigger_layout(void); /* 0: ZL brake, 1: ZL handbrake; ZR always gas */
+void frontend_set_switch_trigger_layout(int layout);

@@ -59,7 +59,7 @@ menus.
 | **Starting a game** | Insert coins, press START | START GAME from the menu                                                                                 |
 | **Main screen**     | Attract mode              | Menu: START GAME, OPTIONS, CREDITS, QUIT over the attract mode                                           |
 | **Options**         | None                      | OPTIONS: course difficulty, language, sound, window or fullscreen, resolution, aspect ratio, fps counter |
-| **Pause**           | None                      | Esc: RESUME or MAIN MENU                                                                                 |
+| **Pause**           | None                      | Esc: RESUME, CONTROLS, RESTART RACE or MAIN MENU                                                           |
 | **Ranking name**    | Chosen with the wheel     | Typed on the keyboard                                                                                    |
 | **Resolution**      | 512×384, as the original  | 512×384 or 1024×768 (1X or 2X)                                                                           |
 | **Aspect ratio**    | 4:3, as the original      | 4:3, 16:10, 16:9 or 21:9 (the 3D scene widens; the HUD stays in the centre)                              |
@@ -155,6 +155,16 @@ takes a little longer, because of the force-feedback wheel test.
 | Ranking name (enhanced)                                | Type it; Backspace, Enter ends; ← / → browse  | D-pad ← / →, then R2 |
 | Fullscreen                                             | F11                                           | —                    |
 | Quit                                                   | Esc (enhanced: Esc in the main menu, or QUIT) | —                    |
+
+In games with a handbrake (GTI Club 2 and Thrill Drive 2 JAA / AAA), Nintendo Switch controllers
+use **ZL (left trigger) as handbrake** by default, while **ZR
+(right trigger) remains accelerator** and **L / R remain shift down / up**. The face-button
+brake input and right stick down still brake.
+In enhanced mode, **Controls → Switch ZL** chooses **Handbrake** or **Brake** for ZL.
+The choice is saved between launches and is also available under Pause → Controls.
+Thrill Drive 2 EBB has no handbrake and keeps ZL as brake.
+In enhanced mode, **+ (Start)** opens or closes pause during play, and **− (Select)** changes
+the camera view. In the main menu, + confirms the selected item, including START GAME.
 
 ---
 
@@ -293,6 +303,10 @@ The environment variables for debugging are described in
   - **Display:** window or fullscreen (F11 also switches it), the rendering resolution, and an
     fps counter. 2X renders the 3D scenes and the HUD at 1024×768. It needs about twice the CPU
     time, so be sure to check the fps counter on slower machines.
+  - **Draw distance (GTI Club):** ORIGINAL, 2X or 4X extends scenery cell/object visibility
+    ranges and keeps detailed scenery farther away. Increased settings also use distance-based
+    detail during the opening camera sweep. More scenery can increase CPU cost.
+    Drone and free-camera modes temporarily use 4X; returning to driving restores your selection.
   - **Aspect ratio:** 4:3 (the original), 16:10, 16:9 or 21:9. A wider format shows more of the
     3D scene on the left and right, with the same vertical field of view; the window widens to
     match. The HUD and the 2D screens keep their 4:3 layout in the centre, and a few 2D effects
@@ -301,9 +315,23 @@ The environment variables for debugging are described in
   in its NVRAM. The game reads them only at boot, so on leaving OPTIONS it restarts, which takes
   a few seconds. Display options are saved in `<executable>_settings.ini` (`--settings FILE` to
   use another file).
-- **Pause:** Esc, or the gamepad's Guide button, pauses a game, with RESUME and MAIN MENU. MAIN
+- **Pause:** Esc, or the gamepad's Guide button, pauses a game. **RESTART RACE** reloads the current
+  race with the same course, car, transmission and settings, resetting the race from the starting
+  grid. It is available once the race has loaded, in every supported game. MAIN
   MENU brings the game back to the attract mode in a few seconds, behind a loading screen. In the
   attract menu, Esc goes back from a submenu, and quits from the main menu.
+- **Time Trial practice (GTI Club 2):** enter the game's TIME ATTACK by holding Shift Up
+  during car selection. During that race, hold Shift Up (Switch R, or keyboard E) while
+  opening pause to reveal **UNLIMITED LAPS: OFF / ON**. Turn it on and resume to practice without a
+  time limit or a finish after the configured laps. The course clock shows the current lap
+  time, with LAP and BEST above the course name in the native HUD style. Green labels sit above
+  inset white values; each checkpoint split shows elapsed time since the lap started for five
+  seconds, then disappears. Pausing also pauses that display period. Timed laps
+  complete at the native checkpoint-1 gate, rather than at the earlier route wrap. Restart Race clears
+  practice times. The toggle stays on when restarting the race and resets on leaving it.
+  It appears only if Shift Up was held when that pause menu opened; the button can then be released.
+  The practice text uses the game's antialiased small font. Losing window focus automatically
+  pauses an active race; resume manually after returning to the window.
 - **Ranking name:** when a result enters the rankings, type the initials on the keyboard
   instead of turning the wheel. Backspace deletes, Enter ends the name early. Left and right
   still browse the letters, and the accelerator (or START) takes the one shown, so a gamepad

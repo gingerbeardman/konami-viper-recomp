@@ -69,6 +69,9 @@ static const char *g_dump_ram;
 void rt_fatal(const char *why) {
     if (!strcmp(why, "window closed")) { hw_shutdown(); wav_close(); fflush(stderr); _exit(0); }
     rt_log("STOP: %s\n", why);
+#ifdef VIPER_MEMORY_AUDIT
+    rt_memory_report();
+#endif
     if (g_dump_ram) { FILE *f = fopen(g_dump_ram, "wb"); if (f) { fwrite(g_ram, 1, RAM_SIZE, f); fclose(f); } }
     diff_kernel_text();
     rt_dump_state();
@@ -106,6 +109,9 @@ static const char *g_frames_dir;
 static int g_frame_every = 30;
 
 void rt_frame_published(uint64_t cnt, const uint32_t *buf, int w, int h) {
+#ifdef VIPER_MEMORY_AUDIT
+    rt_memory_sample();
+#endif
     enh_on_frame(buf, w, h);
     static int fps_stats = -1;
     static uint64_t last_hash, uniq, last_sec;
@@ -329,6 +335,7 @@ int main(int argc, char **argv) {
     FILE *f = fopen(kbuf, "rb");
     if (!f) { fprintf(stderr, "cannot open %s (run 'make extract GAME=" GAME_ID "' first)\n", kbuf); return 1; }
     size_t n = fread(g_ram, 1, RAM_SIZE, f);
+    MEMORY_ACCESS(0, (unsigned)n, 1);
     fclose(f);
     g_kernel_img = (uint8_t *)malloc(n);
     memcpy(g_kernel_img, g_ram, n);

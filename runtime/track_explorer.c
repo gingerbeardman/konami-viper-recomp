@@ -16,8 +16,17 @@ static uint32_t root, last_tick;
 static uint64_t last_frame, last_cycles;
 static atomic_int requested, active;
 static _Atomic float speed = 40, height = 12, look, pitch;
+static _Atomic float forward, vertical, free_height;
+static float free_x, free_y, free_z, free_yaw, free_pitch;
+static int camera_mode;
 
-void explorer_toggle(void) { atomic_fetch_xor(&requested, 1); }
+void explorer_toggle(void) { atomic_store(&requested, atomic_load(&requested) == 1 ? 0 : 1); }
+void explorer_free_toggle(void) { atomic_store(&requested, atomic_load(&requested) == 2 ? 0 : 2); }
+int explorer_free(void) { return atomic_load(&requested) == 2; }
+static float control(float v) { return isfinite(v) ? fmaxf(-1, fminf(1, v)) : 0; }
+void explorer_drive(float f, float v) {
+    atomic_store(&forward, control(f)); atomic_store(&vertical, control(v));
+}
 void explorer_on_frame(uint64_t frame) {
     if (atomic_load(&active) && frame > last_frame + 4) {
         atomic_store(&active, 0); atomic_store(&requested, 0); last_frame = 0;
@@ -25,7 +34,7 @@ void explorer_on_frame(uint64_t frame) {
 }
 int explorer_active(void) { return atomic_load(&active); }
 float explorer_speed(void) { return atomic_load(&speed); }
-float explorer_height(void) { return atomic_load(&height); }
+float explorer_height(void) { return explorer_free() ? atomic_load(&free_height) : atomic_load(&height); }
 void explorer_look(float steering) {
     atomic_store(&look, isfinite(steering) ? fmaxf(-1, fminf(1, steering)) : 0);
 }
@@ -107,18 +116,39 @@ void explorer_camera(PPCContext *c, uint64_t frame) {
         ST32(timer, LD32(timer) + tick - last_tick);
     }
     last_tick = tick;
-    if (!atomic_load(&requested)) { atomic_store(&active, 0); last_frame = 0; return; }
+    int mode = atomic_load(&requested);
+    if (!mode) { atomic_store(&active, 0); last_frame = 0; camera_mode = 0; return; }
     uint32_t start = LD32(0x8c0188);
-    if (!last_frame || frame > last_frame + 2 || start != root) {
-        if (!route(start)) { atomic_store(&active, 0); return; }
-        root = start; distance = 0; altitude = ground(c, points[0], 15) + atomic_load(&height);
-        rt_log("track explorer: %d points, %.1f metres; F6 exits\n", count, length);
+    int entering = !last_frame || frame > last_frame + 2 || start != root || mode != camera_mode;
+    if (entering) {
+        if (mode == 2) {
+            free_x = LDF32(0x8c1cf8); free_y = LDF32(0x8c1cfc); free_z = LDF32(0x8c1d00);
+            free_pitch = LDF32(0x8c1d04); free_yaw = LDF32(0x8c1d08);
+            rt_log("track explorer: free roam; F7 exits, F6 switches to drone tour\n");
+        } else {
+            if (!route(start)) { atomic_store(&active, 0); return; }
+            distance = 0; altitude = ground(c, points[0], 15) + atomic_load(&height);
+            rt_log("track explorer: %d points, %.1f metres; F6 exits\n", count, length);
+        }
+        root = start; camera_mode = mode;
     }
     atomic_store(&active, 1);
     uint64_t now = rt_now();
-    float dt = last_frame && frame - last_frame <= 2 ? fminf(.1f, (float)(now - last_cycles) / CPU_HZ) : 0;
+    float dt = !entering ? fminf(.1f, (float)(now - last_cycles) / CPU_HZ) : 0;
     last_cycles = now;
     last_frame = frame;
+    if (mode == 2) {
+        free_yaw = remainderf(free_yaw - atomic_load(&look) * 1.57079632679f * dt, 6.28318530718f);
+        free_pitch = fmaxf(-1.48f, fminf(1.48f, free_pitch + atomic_load(&pitch) * 1.0471975512f * dt));
+        float step = atomic_load(&forward) * atomic_load(&speed) * dt;
+        free_x -= sinf(free_yaw) * cosf(free_pitch) * step;
+        free_z -= cosf(free_yaw) * cosf(free_pitch) * step;
+        free_y += sinf(free_pitch) * step + atomic_load(&vertical) * 12 * dt;
+        atomic_store(&free_height, free_y);
+        STF32(0x8c1cf8, free_x); STF32(0x8c1cfc, free_y); STF32(0x8c1d00, free_z);
+        STF32(0x8c1d04, free_pitch); STF32(0x8c1d08, free_yaw); STF32(0x8c1d0c, 0);
+        return;
+    }
     float next = distance + atomic_load(&speed) * dt;
     if (next >= length) rt_log("track explorer: completed full course loop (%.1f metres)\n", length);
     distance = fmodf(next, length);

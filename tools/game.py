@@ -211,6 +211,8 @@ def write_config_header(g, out):
         f"#define GAME_ENH_SETTINGS {c_str(g['binary'] + '_settings.ini')}",
         f"#define GAME_ENH_SETUP_SCRIPT {c_str(setup['script']) if setup.get('script') else 'NULL'}",
         f"#define GAME_ENH_SETUP_SECONDS {setup.get('seconds', 0)}",
+        f"#define GAME_ENH_RACE_RESTART_STYLE {enh.get('race_restart_style', 0)}",
+        f"#define GAME_ENH_PRACTICE_TEXT_RENDER {int(enh.get('practice_text_render', '0'), 16)}u",
         # named hooks (the recompiler inserts rt_hook() there): GAME_ENH_HOOK_<NAME> = address for
         # a name used once, and GAME_ENH_HOOKS lists them all (a name may mark several addresses)
         *[f"#define GAME_ENH_HOOK_{name.upper()} 0x{int(a, 16):08x}u"

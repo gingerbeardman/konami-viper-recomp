@@ -26,6 +26,7 @@ extern "C" void rt_log(const char *fmt, ...);
 #include <array>
 #include <cstdlib>
 #include <cstdio>
+#include <mutex>
 
 
 namespace voodoo {
@@ -287,6 +288,36 @@ void rasterizer_params::compute(voodoo_regs &regs, voodoo_regs *tmu0regs, voodoo
 		}
 	}
 	compute_equations();
+	// Opt-in desktop catalogue: record normalized operations rather than every
+	// per-draw colour/alpha-reference value. The full reference keeps rendering
+	// states that the Wii backend would stop on, enabling proactive coverage.
+	static const bool state_trace = getenv("RT_VOODOO_STATELOG") != nullptr;
+	if (state_trace)
+	{
+		static std::mutex trace_mutex;
+		static std::set<std::array<u32, 10>> seen;
+		static bool overflow_reported = false;
+		std::array<u32, 10> key = {m_fbzcp, m_fbzmode, m_alphamode, m_fogmode,
+			m_texmode0, m_texmode1,
+			tmu0regs ? tmu0regs->read(voodoo_regs::reg_tLOD) : 0,
+			tmu1regs ? tmu1regs->read(voodoo_regs::reg_tLOD) : 0,
+			regs.read(voodoo_regs::reg_chromaKey), regs.read(voodoo_regs::reg_chromaRange)};
+		std::lock_guard<std::mutex> lock(trace_mutex);
+		if (seen.find(key) == seen.end())
+		{
+			if (seen.size() < 8192)
+			{
+				seen.insert(key);
+				rt_log("VOODOO_STATE cp=%08x fbz=%08x alpha=%08x fog=%08x t0=%08x t1=%08x lod0=%08x lod1=%08x key=%08x range=%08x\n",
+					key[0],key[1],key[2],key[3],key[4],key[5],key[6],key[7],key[8],key[9]);
+			}
+			else if (!overflow_reported)
+			{
+				overflow_reported=true;
+				rt_log("VOODOO_STATE OVERFLOW limit=8192; catalogue incomplete\n");
+			}
+		}
+	}
 }
 
 

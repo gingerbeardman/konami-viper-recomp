@@ -339,6 +339,10 @@ The modules use the PowerOpen/AIX ABI: function pointers are descriptors `{code,
 | Fullscreen / Quit | F11 / Esc | — |
 
 In the enhanced mode the rankings name is typed on the keyboard (section 5a).
+In games with a handbrake, Nintendo Switch controllers default to ZL handbrake, ZR accelerator,
+and L / R shift down / up. Controls → Switch ZL can restore ZL brake.
+Thrill Drive 2 EBB has no handbrake and keeps ZL brake. Switch + opens or closes the enhanced
+pause menu in play; Switch − sends the cabinet START / VIEW input.
 
 ### Memory map (from MAME)
 
@@ -447,6 +451,56 @@ An optional layer on top of the faithful port, in development. Everything is gat
   timers and the RTC stop with it. The audio callback outputs silence. The frontend redraws the
   overlay every loop over the last game frame, so the pause menu responds while the game is
   frozen.
+  Losing window focus pauses play before clearing held input, independently of race restart
+  availability. The frontend also polls SDL window flags each frame, retrying while unfocused
+  or minimized so a missed event or focus loss during loading cannot leave play running.
+  Repeated focus-loss events leave an existing pause menu intact; focus gain does not resume.
+  - RESTART RACE restores the game's control records captured immediately before its
+    course loader (GTI Club mode 9; TD2 main state 21), then runs that loader again. The
+    selected course, car, transmission and cabinet settings are retained; the game initializes
+    cars, countdown, timing and race statistics normally. CPU stacks, kernel and device state
+    are not restored. The option appears only while that race is loaded. All regional profiles
+    install a `race_dispatch` hook; JAA and AAA inherit the TD2 restart path.
+  - GTI Club Time Attack is identified by control record `TOC+0x54`, `+0x10` bit `0x400000`.
+    Holding Shift Up while opening pause reveals UNLIMITED LAPS. Its `race_laps` hook at JAB
+    `0xa9c30` / EAA `0xa9c54` runs after local route tracking and before lap timing/checkpoints.
+    A route wrap alone does not complete a timed lap: the hook also waits for checkpoint 1,
+    matching the native lap-clock gate at JAB `0xa9ff8..0xaa014`. At that forward crossing
+    it reuses native lap 1, rebases cumulative route distances and resets
+    split indices before the native finish checks or bounded history writes. Geometry and car
+    position stay intact; the ten native clock slots are consolidated into a running elapsed
+    clock. Host counters track the practice lap number and lap durations. LAP, BEST and the
+    course clock use the native Time Attack text formatter and queue (JAB `0x46bc0`,
+    EAA `0x46be4`). The game draws its own `game/vram/include/f08x16-font.zin` texture,
+    with the same glyph spacing, filtering and render scaling as the original course/time.
+    A copied CPU context and saved temporary guest stack preserve the interrupted call.
+    Text stays within the centred 4:3 HUD area, with no drop shadow.
+    Each green label sits above a white value inset by 16 logical pixels.
+    `practice_text` suppresses just
+    the native Time Attack course-name/time calls (JAB `0xa9ed0`, `0xa9ee4`; EAA +`0x24`),
+    retaining the native course name for the overlay. `practice_checkpoint` at JAB `0xaa71c`
+    / EAA `0xaa740` captures accepted forward checkpoints as elapsed time since the lap start.
+    The latest checkpoint appears below the course clock for five emulated seconds, then
+    disappears; pause freezes the expiry. Forward route distance rejects duplicate/reverse
+    crossings, rather than requiring checkpoint IDs to increase. A later accepted crossing
+    can therefore replace the split even with a lower ID. This distance resets at a new lap.
+    Returning to Main Menu or reaching the native attract hook clears the practice state
+    immediately. Text is queued only from the native in-race course-label call, so stale
+    race data cannot appear on the warning/title screen.
+    `race_lap_clock` at JAB `0xa9cc8` / EAA `0xa9cec` subtracts the last crossing time only
+    from f1 at the HUD formatter, publishing the current lap time for the overlay while
+    native elapsed clocks and split history stay cumulative.
+    The `race_countdown` hook at JAB `0xb45b4` / EAA `0xb45d8` keeps the remaining-vblank
+    counter in r5 before its masked store (control `+0xc`, bits 6..19), preventing timeout.
+    `race_time_bonus` at JAB `0xaa6f0` / EAA `0xaa714` zeroes checkpoint extensions so the
+    fourteen-bit counter cannot wrap during long practice sessions.
+    `practice_hud` at JAB `0xb46fc` / EAA `0xb4720` suppresses countdown glyphs with a zero
+    sprite colour, restored by `practice_hud_end` at JAB `0xb4700` / EAA `0xb4724`.
+    The setting is per race, retained on Restart Race and cleared on exit; restarting clears
+    practice statistics. The practice HUD stays hidden until the restarted race initializes its
+    new lap data, preventing old labels/times from appearing during the transition. Main Menu
+    and the native attract hook clear practice state immediately; menu/return frames cannot draw it. Turning it off resumes the native countdown and configured lap limit
+    from the reused native lap slot.
   - RESUME continues. MAIN MENU returns to the attract mode the way a cabinet does. TEST opens
     TEST MODE; after 12 s the script moves to GAME MODE (profile `test_menu_game_mode`: TD2 EBB
     and GTI Club 2 EAA 13; GTI Club 2 JAB and TD2 JAA and AAA 12) and presses START; it ends when the attract hook runs again.
@@ -582,6 +636,28 @@ a RAM dump for 256.0/192.0 and following the code that reads them:
 - the screen size as integers at `0x274C` (512, 384), which the library writes to the Voodoo's
   `clipLeftRight`/`clipLowYHighY`;
 - the bounding-sphere culling (GTI Club 2 `0x281AC`) builds its six planes from the frustum.
+
+**Draw distance.** GTI Display offers ORIGINAL, 2X and 4X (`draw_distance` 0–2 in the settings
+file). Drone/free-camera use an effective setting of 4X while
+`explorer_active()` is true, restoring the saved Display value after exploration exits. The
+override is shared by projection, cell/object visibility and LOD hooks and is never persisted.
+The scenery traversal at JAB `0x7deac` / EAA `0x7ded0` applies separate cell visibility
+and object ranges before GL clipping. Hooks at JAB `0x7df48` and `0x7e06c` multiply the
+resolved cell/object range. `0x7df24` allows cells omitted by the original visibility row to
+reach the extended range and native cone tests. `0x7e134` uses normal distance-based LOD in
+small cinematic viewports, which otherwise force the final LOD; `0x7e14c` divides the LOD
+distance by the multiplier so detailed models persist farther away. EAA sites are +`0x24`.
+ORIGINAL leaves those registers and branches unchanged; collision and route logic are untouched.
+The native scenery traversal submitted 190/259/268 models at one sampled Town camera position
+with ORIGINAL/2X/4X. That count demonstrates additional scenery/detail submission, not a
+promise that every track's pop-in is eliminated. TD2's equivalent scenery path has not been
+verified, so its Display page does not expose this option.
+The projection hook also captures each freshly written perspective near/far pair and its
+depth terms. It multiplies the far plane and recomputes the matching depth terms, so clipping
+and frustum culling agree. Orthographic HUD/menu projections are excluded. Restoring ORIGINAL
+restores the exact saved depth terms; fresh writes never compound a previous multiplier.
+GTI's sampled race projection already has a far plane of 65,536 world units; extending that
+alone did not address scenery pop-in and is supplemented by the scenery hooks above.
 
 **Widening (Hor+).** For a factor k = (512 + 2M) / 512, row 0 of each projection is divided by
 k and the viewport x scale multiplied by k. The two cancel on screen, so every pixel stays where

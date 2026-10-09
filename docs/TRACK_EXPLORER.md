@@ -16,9 +16,35 @@ Start a game and choose a course, then press **F6** to toggle the drone tour. Yo
 
 The overlay displays live cruise speed in km/h and selected height above the road in metres.
 
+## Free roam
+
+Press **F7** to enter free roam from the normal camera or the F6 tour. It starts
+at the current camera position and orientation, with no route or terrain following.
+Press **F7** again to return to the normal camera, or **F6** to switch to the drone
+tour. Either mode key switches directly to that mode; pressing its own key again exits.
+
+- **Accelerator / brake**: move forward/backward along the viewing direction;
+  release to stop. Triggers retain proportional speed control.
+- **Steering stick / gyro / Left / Right**: turn left/right. Releasing holds
+  the new heading instead of returning to the track heading.
+- **Gyro tilt up / down**: pitch the camera up/down; centre to hold the angle.
+- **Shift up / down shoulders (E / Q)**: move vertically up/down, independent
+  of viewing direction; release to hold altitude.
+- **[ / ]**: adjust maximum movement speed. The overlay shows this speed and
+  world altitude, rather than clearance above the road.
+
+The existing gyro enable/recentre controls and pause menu still apply. Free roam
+shares the tour's race-clock suspension and cancellation on returning to the menu.
+It has no collision or automatic height adjustment, so it can pass through scenery
+or below the ground. Like the tour, this is available only in enhanced GTI Club 2 JAB.
+For scripted checks, `RT_ENH_MENU` accepts `seconds:free` to toggle free roam.
+
 The drone follows the selected course's linked road centreline, looks ahead through turns, follows terrain elevation, and loops continuously. Race-state transitions are held during exploration; the race clock's origin advances to exclude time spent exploring. Returning to the main menu cancels an active tour. Settings are not persisted.
 
 This is a camera experiment, not an editor: the game continues simulating traffic and cars, its normal HUD remains visible, and the drone does not collide with buildings, bridges or tunnels. Routes with overhead scenery can clip at high altitudes. Only the JAB Town route has been visually checked; the other selected-course routes use the same path reader but need playtesting.
+
+Both exploration modes temporarily use 4X draw distance for scenery and detail. Returning to
+the driving camera restores the Display setting; the temporary boost is never saved.
 
 ## Implementation notes
 

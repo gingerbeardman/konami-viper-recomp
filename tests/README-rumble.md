@@ -1,5 +1,16 @@
 # Rumble tests
 
+For the standalone macOS package intended for controller-vendor investigation,
+see [manual/rumble-repro/README.md](manual/rumble-repro/README.md). It compares
+equal pulses, one sustained effect, and the game's constant-strength refresh
+cadence, with bundled SDL libraries and no game dependency.
+The smaller [Apple-only vendor package](manual/rumble-repro/VENDOR-README.md)
+defaults to simultaneous three-pulse 50% and 100% comparisons on all controllers,
+followed by three pairs of short 100% pulses. It also supports adjustable
+intensity and explicit controller selection.
+Its [findings](manual/rumble-repro/FINDINGS.md) record the IINE's weak/fading
+50% output, weak 100% output and the official controller's strong 50% output.
+
 Run `tests/run-rumble-tests.sh`. No game data is needed.
 Uses an SDL virtual device and a recording rumble transport to test torque, stop, expiry duration, throttling, transient failures and retry throttling and tick wrap. SDL 2.24+ is needed for the virtual-device test.
 

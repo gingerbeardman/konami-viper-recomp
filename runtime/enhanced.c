@@ -25,6 +25,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "race_restart.h"
+static int g_practice_text_ready;
 
 int g_enhanced;
 
@@ -36,7 +38,7 @@ static int g_attract, g_enh_log = -1;
 int enh_in_attract(void) { return g_attract; }
 
 /* port settings (<binary>_settings.ini, see below) */
-static struct { int fullscreen, show_fps, scale, aspect, show_gyro, texture_filter; } g_set = { 0, 0, 1, 0, 0, 0 };
+static struct { int fullscreen, show_fps, scale, aspect, show_gyro, texture_filter, draw_distance; } g_set = { 0, 0, 1, 0, 0, 0, 0 };
 
 /* ================================================================== widescreen */
 /* The games draw a 512x384 picture through Konami's gl library, which keeps its state at fixed
@@ -57,6 +59,40 @@ static const int k_wide_margin[] = { 0, 51, 85, 199 };      /* 4:3, 16:10, 16:9,
 void voodoo_set_wide(int margin);
 static double g_wide_k = 1.0;                /* wanted: picture width / 512 */
 static double g_slot_k[2], g_vp_k;           /* applied to each projection slot / the viewport (0: unseen) */
+static struct { double near, far; float depth[2]; int valid, applied; } g_distance_slot[2];
+static const double k_draw_distance[] = { 1, 2, 4 };
+
+/* Exploration boosts rendering without changing the saved driving preference.
+ * Both drone and free camera publish the same active state. */
+static int effective_draw_distance(void) {
+    return explorer_active() ? 2 : g_set.draw_distance;
+}
+
+static void distance_apply(int s) {
+    int draw_distance = effective_draw_distance();
+    if (!g_distance_slot[s].valid || g_distance_slot[s].applied == draw_distance) return;
+    uint32_t m = GAME_ENH_WIDE_PROJ_MATRIX + 24 * s, fr = GAME_ENH_WIDE_PROJ_FRUSTUM + 24 * s;
+    double n = g_distance_slot[s].near, f = g_distance_slot[s].far * k_draw_distance[draw_distance];
+    STF32(fr + 20, f);
+    /* Keep the original depth terms exactly when restoring the default. */
+    STF32(m + 16, draw_distance ? -(f + n) / (f - n) : g_distance_slot[s].depth[0]);
+    STF32(m + 20, draw_distance ? -2 * f * n / (f - n) : g_distance_slot[s].depth[1]);
+    g_distance_slot[s].applied = draw_distance;
+}
+
+static void distance_capture(int s) {
+    uint32_t m = GAME_ENH_WIDE_PROJ_MATRIX + 24 * s, fr = GAME_ENH_WIDE_PROJ_FRUSTUM + 24 * s;
+    double n = LDF32(fr + 16), f = LDF32(fr + 20);
+    double a = LDF32(m + 16), b = LDF32(m + 20);
+    /* Recognize the perspective depth pair, excluding orthographic/menu slots. */
+    g_distance_slot[s].valid = isfinite(n) && isfinite(f) && n > 0 && f > n &&
+        fabs(a + (f + n) / (f - n)) < 1e-5 &&
+        fabs(b + 2 * f * n / (f - n)) < 1e-5 * fmax(1, fabs(b));
+    g_distance_slot[s].near = n; g_distance_slot[s].far = f;
+    g_distance_slot[s].depth[0] = a; g_distance_slot[s].depth[1] = b;
+    g_distance_slot[s].applied = 0;
+    distance_apply(s);
+}
 
 static void widen_slot(int s, double f) {    /* f: new factor / applied factor */
     uint32_t m = GAME_ENH_WIDE_PROJ_MATRIX + 24 * s, fr = GAME_ENH_WIDE_PROJ_FRUSTUM + 24 * s;
@@ -161,10 +197,10 @@ static void name_confirm_hook(PPCContext *c) {
 
 typedef struct { uint32_t addr; const char *name; } Hook;
 static const Hook k_hooks[] = GAME_ENH_HOOKS;
-enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_EXPLORER_CAMERA, HOOK_EXPLORER_RACE, HOOK_FILE_LOADED, HOOK_CAR_SELECT, HOOK_VIEW_CONE };
+enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_EXPLORER_CAMERA, HOOK_EXPLORER_RACE, HOOK_RACE_DISPATCH, HOOK_RACE_COUNTDOWN, HOOK_RACE_LAPS, HOOK_PRACTICE_HUD, HOOK_PRACTICE_HUD_END, HOOK_RACE_TIME_BONUS, HOOK_RACE_LAP_CLOCK, HOOK_PRACTICE_TEXT, HOOK_PRACTICE_CHECKPOINT, HOOK_SCENERY_VISIBILITY, HOOK_SCENERY_CELL_DISTANCE, HOOK_SCENERY_OBJECT_DISTANCE, HOOK_SCENERY_DETAIL, HOOK_SCENERY_LOD, HOOK_FILE_LOADED, HOOK_CAR_SELECT, HOOK_VIEW_CONE };
 
 static int hook_kind(uint32_t pc) {
-    static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm", "explorer_camera", "explorer_race", "file_loaded", "car_select", "view_cone" };
+    static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm", "explorer_camera", "explorer_race", "race_dispatch", "race_countdown", "race_laps", "practice_hud", "practice_hud_end", "race_time_bonus", "race_lap_clock", "practice_text", "practice_checkpoint", "scenery_visibility", "scenery_cell_distance", "scenery_object_distance", "scenery_detail", "scenery_lod", "file_loaded", "car_select", "view_cone" };
     for (const Hook *h = k_hooks; h->name; h++)
         if (h->addr == pc)
             for (int k = 1; k < (int)(sizeof names / sizeof names[0]); k++)
@@ -172,23 +208,62 @@ static int hook_kind(uint32_t pc) {
     return HOOK_NONE;
 }
 
+static void attract_hook(void) {
+    if (g_enhanced) race_restart_cancel();
+    g_attract_frame = g_frame ? g_frame : 1;
+}
+
+static void practice_text_hook(PPCContext *c);
+
 void rt_hook(PPCContext *c, uint32_t pc) {
+    int draw_distance = effective_draw_distance();
     switch (hook_kind(pc)) {
+    /* GTI scenery has its own cell visibility table and per-cell/object ranges,
+     * independent of the GL far plane. Expanded ranges must reach cells omitted
+     * by the original table; the native range, cone and depth tests still apply. */
+    case HOOK_SCENERY_VISIBILITY:
+        if (g_enhanced && draw_distance) c->cr[0] &= ~2;
+        break;
+    case HOOK_SCENERY_CELL_DISTANCE:
+        if (g_enhanced && draw_distance && isfinite(c->f[4]) && c->f[4] > 0)
+            c->f[4] *= k_draw_distance[draw_distance];
+        break;
+    case HOOK_SCENERY_OBJECT_DISTANCE:
+        if (g_enhanced && draw_distance && isfinite(c->f[6]) && c->f[6] > 0)
+            c->f[6] *= k_draw_distance[draw_distance];
+        break;
+    case HOOK_SCENERY_DETAIL:
+        /* Small cinematic viewports otherwise force the last scenery LOD. */
+        if (g_enhanced && draw_distance) c->cr[0] &= ~8;
+        break;
+    case HOOK_SCENERY_LOD:
+        if (g_enhanced && draw_distance) c->f[1] /= k_draw_distance[draw_distance];
+        break;
     /* GTI Club 2's draw-node culling (0x4b930) tests each part's bounding sphere against a
      * top-down view cone whose half-angle tangent (view +0x38) is the 4:3 one: widened like the
      * frustum, parts past the 4:3 edges (car wheels and glass) are no longer dropped */
     case HOOK_VIEW_CONE: if (g_enhanced && g_wide_k != 1.0) c->f[5] *= g_wide_k; break;
     case HOOK_FILE_LOADED: alt_cars_file_loaded(c); break;
     case HOOK_CAR_SELECT: alt_cars_car_select(c); break;
+    case HOOK_RACE_DISPATCH: if (g_enhanced) race_dispatch_hook(c); break;
+    case HOOK_RACE_COUNTDOWN: if (g_enhanced) race_countdown_hook(c); break;
+    case HOOK_RACE_TIME_BONUS: if (g_enhanced) race_time_bonus_hook(c); break;
+    case HOOK_RACE_LAP_CLOCK: if (g_enhanced) race_lap_clock_hook(c); break;
+    case HOOK_PRACTICE_TEXT: if (g_enhanced && g_practice_text_ready) practice_text_hook(c); break;
+    case HOOK_PRACTICE_CHECKPOINT: if (g_enhanced) race_practice_checkpoint_hook(c); break;
+    case HOOK_RACE_LAPS: if (g_enhanced) race_laps_hook(c); break;
+    case HOOK_PRACTICE_HUD: if (g_enhanced) race_practice_hud_hook(c); break;
+    case HOOK_PRACTICE_HUD_END: if (g_enhanced) race_practice_hud_end_hook(c); break;
     case HOOK_EXPLORER_CAMERA: if (g_enhanced) explorer_camera(c, g_frame); break;
     case HOOK_EXPLORER_RACE: if (g_enhanced) explorer_race(c); break;
     case HOOK_NAME_INDEX: if (g_enhanced) name_index_hook(c); break;
     case HOOK_NAME_CONFIRM: if (g_enhanced) name_confirm_hook(c); break;
-    case HOOK_ATTRACT: g_attract_frame = g_frame ? g_frame : 1; break;
+    case HOOK_ATTRACT: attract_hook(); break;
     case HOOK_PROJECTION: {                  /* the current slot has just been written */
         uint32_t s = LD8(GAME_ENH_WIDE_PROJ_SLOT);
         if (!g_enhanced || s > 1) break;
         g_slot_k[s] = 1.0;
+        distance_capture((int)s);
         if (g_wide_k != 1.0) { widen_slot((int)s, g_wide_k); g_slot_k[s] = g_wide_k; }
         break;
     }
@@ -263,6 +338,8 @@ void enh_on_frame(const uint32_t *buf, int w, int h) {
     if (attract != g_attract && g_enh_log) rt_log("enhanced: %s\n", attract ? "attract mode" : "game in progress");
     g_attract = attract;
     wide_tick(g_set.aspect);
+    if (GAME_ENH_WIDE_PROJ_MATRIX)
+        for (int s = 0; s < 2; s++) distance_apply(s);
     menu_tick();
     scripted_menu();
     nvram_poke_tick();
@@ -305,9 +382,11 @@ static void settings_load(void) {
         if (sscanf(line, " %63[a-z_] = %d", key, &v) == 2) {
             if (!strcmp(key, "fullscreen")) g_set.fullscreen = v != 0;
             else if (!strcmp(key, "stick_response")) frontend_set_stick_response(v);
+            else if (!strcmp(key, "switch_trigger_layout")) frontend_set_switch_trigger_layout(v);
             else if (!strcmp(key, "show_fps")) g_set.show_fps = v != 0;
             else if (!strcmp(key, "render_scale")) g_set.scale = v < 1 ? 1 : v > 2 ? 2 : v;
             else if (!strcmp(key, "texture_filter")) g_set.texture_filter = v >= 0 && v <= 2 ? v : 0;
+            else if (!strcmp(key, "draw_distance")) g_set.draw_distance = v >= 0 && v <= 2 ? v : 0;
             else if (!strcmp(key, "show_gyro")) g_set.show_gyro = v != 0;
             else if (!strcmp(key, "gyro")) frontend_gyro_set_enabled(v != 0);
             else if (!strcmp(key, "gyro_sensitivity")) frontend_gyro_set_sensitivity(v);
@@ -322,11 +401,13 @@ static void settings_save(void) {
     if (!f) { rt_log("enhanced: cannot write %s\n", g_settings_path); return; }
     fprintf(f, "# " GAME_TITLE ", enhanced mode: port settings\n");
     fprintf(f, "stick_response = %d\n", frontend_stick_response());
+    fprintf(f, "switch_trigger_layout = %d\n", frontend_switch_trigger_layout());
     fprintf(f, "fullscreen = %d\nshow_fps = %d\nrender_scale = %d\n", g_set.fullscreen, g_set.show_fps, g_set.scale);
     fprintf(f, "# 0 = 4:3, 1 = 16:10, 2 = 16:9, 3 = 21:9\naspect = %d\n", g_set.aspect);
     fprintf(f, "gyro = %d\ngyro_sensitivity = %d\n", frontend_gyro_enabled(), frontend_gyro_sensitivity());
     fprintf(f, "show_gyro = %d\n", g_set.show_gyro);
     fprintf(f, "texture_filter = %d\n", g_set.texture_filter);
+    fprintf(f, "# 0 = original, 1 = 2x, 2 = 4x draw distance\ndraw_distance = %d\n", g_set.draw_distance);
     fprintf(f, "rumble_multiplier = %d\n", frontend_rumble_multiplier());
     fclose(f);
 }
@@ -349,6 +430,7 @@ void enh_init(const char *work, const char *settings) {
     const char *file = GAME_ENH_FONT_FILE;
     if (!file) return;
     char path[1024];
+    g_practice_text_ready = 0;
     snprintf(path, sizeof path, "%s/fs/%s", work, file);
     int npages = (int)(sizeof k_font_pages / sizeof k_font_pages[0]);
     size_t page = (size_t)GAME_ENH_FONT_W * GAME_ENH_FONT_PAGE_H;
@@ -378,6 +460,7 @@ void enh_init(const char *work, const char *settings) {
             g_glyph[z][':'].twin = (int16_t)(k_font_sizes[z].ch * 3 / 8);
         }
     g_font = atlas;
+    g_practice_text_ready = GAME_ENH_PRACTICE_TEXT_RENDER != 0;
 }
 
 static int font_px(int z, int v) { return (int)(v * k_font_sizes[z].scale + 0.5f); }
@@ -542,7 +625,7 @@ static void options_read(void) {
  * letters, so the Italian texts avoid them. */
 enum { T_START, T_OPTIONS, T_CREDITS, T_QUIT, T_GAME, T_SOUND, T_DISPLAY, T_BACK, T_WINDOW, T_FULLSCREEN,
        T_SHOW_FPS, T_OFF, T_ON, T_LOADING, T_APPLYING, T_ORIGINAL_GAME, T_RECOMPILATION, T_VOODOO,
-       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_RESOLUTION, T_ASPECT, T_STICK_RESPONSE, T_CONTROLS, T_GYRO, T_RECENTER, T_SHOW_GYRO, T_RUMBLE, T_TEXTURE_FILTER, T_COUNT };
+       T_PRESS_START_BACK, T_PAUSE, T_RESUME, T_MAIN_MENU, T_RESOLUTION, T_ASPECT, T_STICK_RESPONSE, T_CONTROLS, T_GYRO, T_RECENTER, T_SHOW_GYRO, T_RUMBLE, T_TEXTURE_FILTER, T_SWITCH_TRIGGERS, T_RESTART_RACE, T_UNLIMITED_LAPS, T_DRAW_DISTANCE, T_COUNT };
 static const char *const k_text[T_COUNT][2] = {
     { "START GAME", "INIZIA PARTITA" }, { "OPTIONS", "OPZIONI" }, { "CREDITS", "RICONOSCIMENTI" },
     { "QUIT", "ESCI" }, { "GAME", "GIOCO" }, { "SOUND", "AUDIO" }, { "DISPLAY", "SCHERMO" },
@@ -559,8 +642,13 @@ static const char *const k_text[T_COUNT][2] = {
     { "SHOW STEERING METER", "MOSTRA IN GIOCO" },
     { "RUMBLE STRENGTH", "VIBRAZIONE" },
     { "TEXTURE FILTER", "FILTRO TEXTURE" },
+    { "SWITCH ZL", "GRILLETTO ZL" },
+    { "RESTART RACE", "RICOMINCIA GARA" },
+    { "UNLIMITED LAPS", "GIRI ILLIMITATI" },
+    { "DRAW DISTANCE", "DISTANZA VISUALE" },
 };
 static const char *const k_texture_filter_name[] = { "ORIGINAL", "NEAREST", "BILINEAR" };
+static const char *const k_draw_distance_name[] = { "ORIGINAL", "2X", "4X" };
 static const char *const k_stick_response_name[] = { "LINEAR", "SOFT", "EXTRA SOFT" };
 static const char *const k_aspect_name[N_ASPECTS] = { "4:3", "16:10", "16:9", "21:9" };
 
@@ -589,7 +677,7 @@ static volatile int g_starting;            /* START GAME chosen, waiting for the
 static volatile uint64_t g_starting_frame;
 static volatile int g_apply;               /* 1: write the staged options, 2: written, restart */
 static volatile int g_paused, g_pause_cursor;
-static int g_pause_controls, g_controls_cursor;
+static int g_pause_controls, g_controls_cursor, g_pause_practice;
 static volatile int g_returning;           /* MAIN MENU from the pause: back to the attract */
 static uint64_t g_return_t0;
 static volatile int g_booted;              /* the attract hook has run once since the start */
@@ -603,7 +691,7 @@ void enh_set_headless(int on) { g_headless = on; }
 int enh_turbo(void) {
 #ifdef GAME_ENH_HOOK_ATTRACT
     if (!g_enhanced || !g_font) return 0;
-    if (g_apply || g_returning) return 1;
+    if (g_apply || g_returning || race_restart_pending()) return 1;
     return !g_booted && rt_now() < (uint64_t)BOOT_TURBO_LIMIT * CPU_HZ;
 #else
     return 0;
@@ -613,11 +701,11 @@ int enh_restart_requested(void) { return g_apply == 2; }
 
 /* ------------------------------------------------------------------ pause (Esc in play) */
 int enh_paused(void) { return g_paused; }
-int enh_inputs_owned(void) { return g_returning; }   /* the return script drives IN3/IN4 */
+int enh_inputs_owned(void) { return g_returning || race_restart_pending(); }
 
 /* Esc from the frontend: 1 if the enhanced mode handled it (pause, or back in a submenu) */
 int enh_escape(void) {
-    if (!g_enhanced || !g_font || g_apply || g_returning || !g_booted) return 0;
+    if (!g_enhanced || !g_font || g_apply || g_returning || race_restart_pending() || !g_booted) return 0;
     if (g_paused) { if (g_pause_controls) g_pause_controls = 0; else g_paused = 0; return 1; }
     if (enh_menu_active()) {
         if (g_screen == SCREEN_MAIN) return 0;      /* the main menu: Esc quits, as before */
@@ -628,7 +716,14 @@ int enh_escape(void) {
     g_paused = 1;
     g_pause_cursor = 0;
     g_pause_controls = 0;
+    extern uint8_t g_in[8];
+    g_pause_practice = race_time_trial() &&
+        (g_headless ? !(g_in[4] & 1) : frontend_shift_up_held());
     return 1;
+}
+
+void enh_focus_lost(void) {
+    if (!g_paused && !enh_menu_active() && !enh_in_attract()) enh_escape();
 }
 
 static void controls_change(int row, int dir) {
@@ -644,16 +739,28 @@ static void controls_change(int row, int dir) {
     else if (row == 2) frontend_gyro_recenter();
     else if (row == 3) frontend_set_rumble_multiplier(frontend_rumble_multiplier() + dir * 50);
     else if (row == 4) frontend_set_stick_response((frontend_stick_response() + dir + 3) % 3);
+    else if (row == 5) frontend_set_switch_trigger_layout(!frontend_switch_trigger_layout());
     if (row != 2) settings_save();
 }
 
-static const int k_controls_order[] = { -1, 3, 0, 1, 2, 4 }; /* Back, rumble, gyro, overlay, recenter, stick response */
+static const int k_controls_order[] = { -1, 3, 0, 1, 2, 4, 5 }; /* Back, rumble, gyro, overlay, recenter, stick, triggers */
+enum { N_CONTROLS = GAME_HAS_HANDBRAKE ? 7 : 6 };
+
+static int pause_items(int *items) {
+    int n = 0;
+    items[n++] = T_RESUME;
+    items[n++] = T_CONTROLS;
+    if (race_restart_available()) items[n++] = T_RESTART_RACE;
+    if (g_pause_practice && race_time_trial()) items[n++] = T_UNLIMITED_LAPS;
+    items[n++] = T_MAIN_MENU;
+    return n;
+}
 
 static void pause_action(int action) {
     if (g_pause_controls) {
         switch (action) {
-        case ENH_UP: g_controls_cursor = (g_controls_cursor + 5) % 6; break;
-        case ENH_DOWN: g_controls_cursor = (g_controls_cursor + 1) % 6; break;
+        case ENH_UP: g_controls_cursor = (g_controls_cursor + N_CONTROLS - 1) % N_CONTROLS; break;
+        case ENH_DOWN: g_controls_cursor = (g_controls_cursor + 1) % N_CONTROLS; break;
         case ENH_BACK: g_pause_controls = 0; break;
         case ENH_OK:
             if (g_controls_cursor == 0) { g_pause_controls = 0; break; }
@@ -666,22 +773,35 @@ static void pause_action(int action) {
         }
         return;
     }
+    int items[5], count = pause_items(items);
     switch (action) {
-    case ENH_UP: g_pause_cursor = (g_pause_cursor + 2) % 3; break;
-    case ENH_DOWN: g_pause_cursor = (g_pause_cursor + 1) % 3; break;
+    case ENH_UP: g_pause_cursor = (g_pause_cursor + count - 1) % count; break;
+    case ENH_DOWN: g_pause_cursor = (g_pause_cursor + 1) % count; break;
     case ENH_BACK: g_paused = 0; break;
+    case ENH_LEFT: case ENH_RIGHT:
+        if (items[g_pause_cursor] == T_UNLIMITED_LAPS) race_unlimited_toggle();
+        break;
     case ENH_OK:
         if (g_pause_cursor == 0) g_paused = 0;
         else if (g_pause_cursor == 1) { g_pause_controls = 1; g_controls_cursor = 0; }
-        else if (GAME_ENH_TEST_GAME_MODE >= 0) { g_returning = 1; g_return_t0 = 0; g_paused = 0; }
-        else { g_apply = 2; g_paused = 0; }            /* no known route: reboot the game */
+        else if (items[g_pause_cursor] == T_RESTART_RACE) {
+            if (explorer_active()) { if (explorer_free()) explorer_free_toggle(); else explorer_toggle(); }
+            race_restart_request(); g_paused = 0;
+        }
+        else if (items[g_pause_cursor] == T_UNLIMITED_LAPS) race_unlimited_toggle();
+        else {
+            race_restart_cancel();
+            if (GAME_ENH_TEST_GAME_MODE >= 0) { g_returning = 1; g_return_t0 = 0; }
+            else g_apply = 2;                         /* no known route: reboot the game */
+            g_paused = 0;
+        }
         break;
     default: break;
     }
 }
 
 int enh_menu_active(void) {
-    if (!g_enhanced || !g_font || g_starting || g_apply || g_returning || g_paused) return 0;
+    if (!g_enhanced || !g_font || g_starting || g_apply || g_returning || race_restart_pending() || g_paused) return 0;
     return g_attract_frame && g_frame - g_attract_frame <= MENU_GRACE_FRAMES;
 }
 
@@ -693,6 +813,7 @@ static int page_rows(int page, int *rows) {
     int n = 0;
     if (page == PAGE_CONTROLS) {
         rows[n++] = -5; rows[n++] = -6; rows[n++] = -7; rows[n++] = -8; rows[n++] = -9;
+        if (GAME_HAS_HANDBRAKE) rows[n++] = -11;
         return n;
     }
     if (page == PAGE_DISPLAY) {
@@ -700,6 +821,9 @@ static int page_rows(int page, int *rows) {
         rows[n++] = -3;
         if (GAME_ENH_WIDE_VIEWPORT) rows[n++] = -4;
         rows[n++] = -10;
+#ifdef GAME_ENH_HOOK_SCENERY_CELL_DISTANCE
+        rows[n++] = -12;
+#endif
         rows[n++] = -2;
         return n;
     }
@@ -709,6 +833,11 @@ static int page_rows(int page, int *rows) {
 }
 
 static void page_change(int row, int dir) {
+    if (row == -12) {
+        g_set.draw_distance = (g_set.draw_distance + dir + 3) % 3;
+        settings_save();
+        return;
+    }
     if (row == -10) {
         g_set.texture_filter = (g_set.texture_filter + dir + 3) % 3;
         voodoo_set_texture_filter(g_set.texture_filter);
@@ -788,9 +917,15 @@ void enh_menu_action(int action) {
 
 /* per-frame menu bookkeeping, on the guest thread (called from enh_on_frame) */
 extern uint8_t g_in[8];
+extern int16_t g_analog[4];
 void nvram_save(void);
 
 static void menu_tick(void) {
+    if (race_restart_pending()) {
+        g_in[3] = g_in[4] = 0xff;
+        g_analog[0] = 0;
+        g_analog[1] = g_analog[2] = g_analog[3] = -200;
+    }
     if (g_attract_frame && !g_booted) { g_booted = 1; options_read(); }
     /* START GAME presses START for a few frames (IN3 bit 4, active low); the SDL frontend
      * rewrites IN3 every loop and also honours enh_start_held(), headless runs rely on this */
@@ -852,18 +987,19 @@ static void meter_rect(uint32_t *fb, int x0, int y0, int x1, int y1, uint32_t co
 }
 
 static void draw_controls(uint32_t *fb, int w, int h, int cursor) {
-    const int labels[] = { T_BACK, T_RUMBLE, T_GYRO, T_SHOW_GYRO, T_RECENTER, T_STICK_RESPONSE };
-    const int positions[] = { 68, 112, 156, 188, 220, 252 };
+    const int labels[] = { T_BACK, T_RUMBLE, T_GYRO, T_SHOW_GYRO, T_RECENTER, T_STICK_RESPONSE, T_SWITCH_TRIGGERS };
+    const int positions[] = { 60, 96, 132, 164, 196, 228, 260 };
     const int z = FONT_MEDIUM;
     dim_rect(fb, w, h, 0, 0, w, h, 190);
     draw_centered(fb, w, h, FONT_LARGE, 24, T(T_CONTROLS), 0xffd800);
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < N_CONTROLS; i++) {
         char value[32] = "";
         if (i == 2) {
             if (frontend_gyro_enabled()) snprintf(value, sizeof value, "%.1fX", frontend_gyro_sensitivity() / 100.0);
             else snprintf(value, sizeof value, "%s", T(T_OFF));
         }
         if (i == 5) snprintf(value, sizeof value, "%s", k_stick_response_name[frontend_stick_response()]);
+        if (i == 6) snprintf(value, sizeof value, "%s", frontend_switch_trigger_layout() ? "HANDBRAKE" : "BRAKE");
         if (i == 3) snprintf(value, sizeof value, "%s", T(g_set.show_gyro ? T_ON : T_OFF));
         if (i == 1) {
             if (frontend_rumble_multiplier()) snprintf(value, sizeof value, "%.1fX", frontend_rumble_multiplier() / 100.0);
@@ -887,10 +1023,64 @@ static void draw_controls(uint32_t *fb, int w, int h, int cursor) {
     draw_text(fb, w, h, FONT_SMALL, w - 40 - text_width(FONT_SMALL, "R"), y - 11, "R", 0xc0c0c0);
     const char *status = !frontend_gyro_available() ? "NO GYRO CONTROLLER CONNECTED" :
         !frontend_gyro_enabled() ? "GYRO OFF" : !ready ? "HOLD CONTROLLER UPRIGHT" : "HIGHER SENSITIVITY NEEDS LESS TILT";
-    draw_centered(fb, w, h, FONT_SMALL, 282, status, 0xc0c0c0);
-    draw_centered(fb, w, h, FONT_SMALL, 310, "L3: RECENTER   R3: TOGGLE", 0xc0c0c0);
+    if (cursor == 6) status = frontend_switch_trigger_layout() ? "ZL: HANDBRAKE   ZR: GAS" : "ZL: BRAKE   ZR: GAS";
+    draw_centered(fb, w, h, FONT_SMALL, 290, status, 0xc0c0c0);
+    draw_centered(fb, w, h, FONT_SMALL, 310, cursor == 6 ? "L / R: SHIFT DOWN / UP" : "L3: RECENTER   R3: TOGGLE", 0xc0c0c0);
 }
 
+
+static void practice_time_text(char *text, size_t size, unsigned ms) {
+    snprintf(text, size, "%u'%02u\"%03u", ms / 60000, ms / 1000 % 60, ms % 1000);
+}
+
+/* Add practice text through the native formatter/queue; its renderer owns filtering.
+ * The copied context and temporary stack leave the interrupted game call intact. */
+static void practice_native_entry(PPCContext *c, RtFn draw, uint32_t text, int row,
+                                  const char *label, const char *value) {
+    memcpy(g_ram + text, label, strlen(label) + 1);
+    c->r[3] = 2; c->r[4] = row; c->r[5] = 0x00ff00; c->r[6] = text;
+    draw(c);
+    if (c->unwind) return;
+    memcpy(g_ram + text, value, strlen(value) + 1);
+    c->r[3] = 4; c->r[4] = row + 2; c->r[5] = 0xffffff; c->r[6] = text;
+    draw(c);
+}
+
+static void practice_text_hook(PPCContext *live) {
+    if (!race_practice_active(live)) return;
+    uint32_t format = live->r[6];
+    int course_label = 0;
+    for (unsigned i = 0; i < sizeof g_practice_courses / sizeof *g_practice_courses; i++) {
+        size_t size = strlen(g_practice_courses[i]) + 1;
+        if (race_valid(format, size) && !memcmp(g_ram + format, g_practice_courses[i], size)) course_label = 1;
+    }
+    RtFn draw = rt_lookup(GAME_ENH_PRACTICE_TEXT_RENDER);
+    unsigned sp = live->r[1];
+    if (!draw || sp < 8192 || sp >= RAM_SIZE) return;
+    race_practice_text_hook(live);
+    if (!course_label || !race_practice_hud_visible()) return;
+    uint8_t saved[8192]; memcpy(saved, g_ram + sp - sizeof saved, sizeof saved);
+    PPCContext c = *live;
+    c.r[1] = sp - 256; c.budget = 10000000; c.unwind = 0;
+    uint32_t text = sp - 128;
+    char lap[16], best[24] = "NONE", current[24];
+    snprintf(lap, sizeof lap, "%u", atomic_load(&g_practice_lap));
+    unsigned ms = atomic_load(&g_practice_best_ms);
+    if (ms) practice_time_text(best, sizeof best, ms);
+    practice_time_text(current, sizeof current, atomic_load(&g_practice_current_ms));
+    practice_native_entry(&c, draw, text, 2, "LAP", lap);
+    if (!c.unwind) practice_native_entry(&c, draw, text, 8, "BEST", best);
+    if (!c.unwind) practice_native_entry(&c, draw, text, 14,
+        g_practice_courses[atomic_load(&g_practice_course)], current);
+    unsigned checkpoint = atomic_load(&g_practice_checkpoint);
+    if (!c.unwind && race_practice_checkpoint_visible()) {
+        char label[24], split[24];
+        snprintf(label, sizeof label, "CHECKPOINT %u", checkpoint);
+        practice_time_text(split, sizeof split, atomic_load(&g_practice_checkpoint_ms));
+        practice_native_entry(&c, draw, text, 20, label, split);
+    }
+    memcpy(g_ram + sp - sizeof saved, saved, sizeof saved);
+}
 
 void enh_draw_overlay(uint32_t *fb, int w, int h) {
     if (!g_enhanced) return;
@@ -906,17 +1096,24 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
     }
     if (explorer_active()) {
         char status[80];
-        snprintf(status, sizeof status, "F6 EXIT  SPEED %.0f KM/H  HEIGHT %.0f M",
+        snprintf(status, sizeof status, explorer_free() ?
+                 "F7 EXIT  F6 DRONE  %.0f KM/H  %.0f M" :
+                 "F6 EXIT  F7 FREE ROAM  %.0f KM/H  %.0f M",
                  explorer_speed() * 3.6f, explorer_height());
         draw_centered(fb, w, h, FONT_SMALL, h - font_height(FONT_SMALL) - 20, status, 0xffd800);
     }
     if (g_paused && !g_pause_controls) {
         const int z = FONT_MEDIUM, step = font_height(z) + 8;
-        static const int items[3] = { T_RESUME, T_CONTROLS, T_MAIN_MENU };
+        int items[5], count = pause_items(items);
         dim_rect(fb, w, h, 0, 0, w, h, 160);
         draw_centered(fb, w, h, FONT_LARGE, h / 2 - 90, T(T_PAUSE), 0xffd800);
-        for (int i = 0; i < 3; i++)
-            draw_centered(fb, w, h, z, h / 2 - 10 + i * step, T(items[i]), i == g_pause_cursor ? 0xffd800 : 0xffffff);
+        for (int i = 0; i < count; i++) {
+            char label[80];
+            if (items[i] == T_UNLIMITED_LAPS)
+                snprintf(label, sizeof label, "%s: %s", T(items[i]), T(race_unlimited_laps() ? T_ON : T_OFF));
+            else snprintf(label, sizeof label, "%s", T(items[i]));
+            draw_centered(fb, w, h, z, h / 2 - 26 + i * step, label, i == g_pause_cursor ? 0xffd800 : 0xffffff);
+        }
     }
     if (g_paused && g_pause_controls) draw_controls(fb, w, h, g_controls_cursor);
     if (enh_menu_active()) draw_menu(fb, w, h);
@@ -981,6 +1178,7 @@ static void draw_menu(uint32_t *fb, int w, int h) {
             else if (rows[i] == -3) { label = T(T_RESOLUTION); value = g_set.scale == 2 ? "2X" : "1X"; }
             else if (rows[i] == -4) { label = T(T_ASPECT); value = k_aspect_name[g_set.aspect]; }
             else if (rows[i] == -10) { label = T(T_TEXTURE_FILTER); value = k_texture_filter_name[g_set.texture_filter]; }
+            else if (rows[i] == -12) { label = T(T_DRAW_DISTANCE); value = k_draw_distance_name[g_set.draw_distance]; }
             else {
                 const GameOption *o = &k_game_options[rows[i]];
                 label = lang ? o->label_it : o->label_en;
@@ -1015,6 +1213,7 @@ static void scripted_menu(void) {
         double t = strtod(next, &colon);
         if (*colon != ':' || (double)rt_now() / CPU_HZ < t) return;
         const char *a = colon + 1;
+        if (!strncmp(a, "free", 4)) { explorer_free_toggle(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
         if (!strncmp(a, "drone", 5)) { explorer_toggle(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
         if (!strncmp(a, "esc", 3)) { enh_escape(); const char *c = strchr(a, ','); next = c ? c + 1 : NULL; continue; }
         if (!strncmp(a, "name=", 5)) {

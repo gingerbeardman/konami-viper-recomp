@@ -1,5 +1,17 @@
 #include "../runtime/enhanced.c"
 #include <assert.h>
+uint8_t g_in[8];
+int frontend_shift_up_held(void) { return 0; }
+static int explorer_mode;
+int explorer_active(void) { return explorer_mode != 0; }
+int explorer_free(void) { return explorer_mode == 2; }
+float explorer_speed(void) { return 0; }
+float explorer_height(void) { return 0; }
+void explorer_toggle(void) {}
+void explorer_free_toggle(void) {}
+static int switch_layout=1;
+int frontend_switch_trigger_layout(void) { return switch_layout; }
+void frontend_set_switch_trigger_layout(int v) { switch_layout = v == 0 ? 0 : 1; }
 static int stick_response=2;
 int frontend_stick_response(void) { return stick_response; }
 void frontend_set_stick_response(int v) { stick_response = v>=0 && v<=2 ? v : 2; }
@@ -7,6 +19,8 @@ double frontend_stick_position(void) { return .5; }
 double frontend_steering_position(void) { return .25; }
 static int enabled, sensitivity=100, recentered;
 uint8_t *g_ram;
+uint32_t rt_mmio_r32(uint32_t address) { (void)address; assert(0); return 0; }
+void rt_mmio_w32(uint32_t address, uint32_t value) { (void)address; (void)value; assert(0); }
 static int rumble=100;
 int frontend_rumble_multiplier(void) { return rumble; }
 void frontend_set_rumble_multiplier(int v) { rumble=v<0?0:v>400?400:v; }
@@ -41,7 +55,53 @@ int main(int argc, char **argv) {
  g_set.texture_filter=0;settings_load();assert(g_set.texture_filter==2);
  FILE *f=fopen(g_settings_path,"w");assert(f);fputs("texture_filter = 99\n",f);fclose(f);
  settings_load();assert(g_set.texture_filter==0);
+ int distance_row=-1;for(int i=0;i<count;i++) if(rows[i]==-12) distance_row=i;
+ assert(distance_row>=0 && g_set.draw_distance==0);
+ g_page_cursor=distance_row;
+ enh_menu_action(ENH_RIGHT);assert(g_set.draw_distance==1);
+ enh_menu_action(ENH_RIGHT);assert(g_set.draw_distance==2);
+ enh_menu_action(ENH_RIGHT);assert(g_set.draw_distance==0);
+ enh_menu_action(ENH_LEFT);assert(g_set.draw_distance==2);
+ g_set.draw_distance=0;settings_load();assert(g_set.draw_distance==2);
+ f=fopen(g_settings_path,"w");assert(f);fputs("draw_distance = 99\n",f);fclose(f);
+ settings_load();assert(g_set.draw_distance==0);
+ g_ram=calloc(1,RAM_SIZE);assert(g_ram);
+ uint32_t m=GAME_ENH_WIDE_PROJ_MATRIX,fr=GAME_ENH_WIDE_PROJ_FRUSTUM;
+ STF32(fr+16,1);STF32(fr+20,100);STF32(m,2);STF32(m+8,3);
+ STF32(m+16,-101.0/99);STF32(m+20,-200.0/99);
+ uint32_t original_a=LD32(m+16),original_b=LD32(m+20);
+ g_set.draw_distance=1;distance_capture(0);
+ assert(g_distance_slot[0].valid && LDF32(fr+20)==200);
+ /* A point beyond the original far plane is now inside clip space. */
+ double z=-150,clip=(LDF32(m+16)*z+LDF32(m+20))/-z;
+ assert(clip<1 && clip>-1 && LDF32(m)==2 && LDF32(m+8)==3);
+ for(int i=0;i<10;i++) {
+  g_set.draw_distance=2;distance_apply(0);assert(LDF32(fr+20)==400);
+  g_set.draw_distance=0;distance_apply(0);
+  assert(LDF32(fr+20)==100 && LD32(m+16)==original_a && LD32(m+20)==original_b);
+ }
+ /* A freshly written projection does not compound the previous multiplier. */
+ g_set.draw_distance=1;distance_capture(0);assert(LDF32(fr+20)==200);
+ /* Both exploration modes temporarily use 4x and preserve the saved 2x setting. */
+ for(int mode=1;mode<=2;mode++) {
+  explorer_mode=mode;distance_apply(0);
+  assert(LDF32(fr+20)==400 && g_set.draw_distance==1);
+  settings_save();g_set.draw_distance=0;settings_load();
+  assert(g_set.draw_distance==1 && effective_draw_distance()==2);
+  explorer_mode=0;distance_apply(0);
+  assert(LDF32(fr+20)==200 && effective_draw_distance()==1);
+ }
+ /* Selecting Original during exploration must be restored when exploration exits. */
+ explorer_mode=2;g_set.draw_distance=0;distance_apply(0);
+ assert(LDF32(fr+20)==400);
+ explorer_mode=0;distance_apply(0);
+ assert(LDF32(fr+20)==100 && LD32(m+16)==original_a && LD32(m+20)==original_b);
+ STF32(fr+16,1);STF32(fr+20,100);STF32(m+16,-2.0/99);STF32(m+20,-101.0/99);
+ uint32_t ortho[2]={LD32(m+16),LD32(m+20)};
+ distance_capture(0);assert(!g_distance_slot[0].valid && LDF32(fr+20)==100);
+ assert(LD32(m+16)==ortho[0] && LD32(m+20)==ortho[1]);
+ free(g_ram);g_ram=NULL;
  g_enhanced=0;g_set.texture_filter=1;assert(enh_texture_filter()==0);
  remove(g_settings_path);
- puts("texture filter menu cycling, live application and persistence: passed");
+ puts("display settings, draw distance clipping, restore and HUD exclusion: passed");
 }

@@ -1,5 +1,16 @@
 #include "../runtime/enhanced.c"
 #include <assert.h>
+uint8_t g_in[8];
+int frontend_shift_up_held(void) { return 0; }
+int explorer_active(void) { return 0; }
+int explorer_free(void) { return 0; }
+float explorer_speed(void) { return 0; }
+float explorer_height(void) { return 0; }
+void explorer_toggle(void) {}
+void explorer_free_toggle(void) {}
+static int switch_layout=1;
+int frontend_switch_trigger_layout(void) { return switch_layout; }
+void frontend_set_switch_trigger_layout(int v) { switch_layout = v == 0 ? 0 : 1; }
 static int stick_response=2;
 int frontend_stick_response(void) { return stick_response; }
 void frontend_set_stick_response(int v) { stick_response = v>=0 && v<=2 ? v : 2; }
@@ -39,7 +50,7 @@ int main(int argc, char **argv) {
  enh_menu_action(ENH_LEFT); assert(sensitivity==100);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_RIGHT); assert(g_set.show_gyro);
  enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(recentered==1);
- enh_menu_action(ENH_DOWN); enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(!g_pause_controls&&g_paused);
+ enh_menu_action(ENH_DOWN); enh_menu_action(ENH_DOWN); enh_menu_action(ENH_DOWN); enh_menu_action(ENH_OK); assert(!g_pause_controls&&g_paused);
  enh_menu_action(ENH_BACK); assert(!g_paused);
  enabled=0;sensitivity=50;g_set.show_gyro=0;rumble=100;settings_load();assert(enabled&&sensitivity==100&&g_set.show_gyro&&rumble==150);
  remove(g_settings_path);
@@ -55,7 +66,7 @@ int main(int argc, char **argv) {
  enh_menu_action(ENH_DOWN);enh_menu_action(ENH_DOWN);
  enh_menu_action(ENH_LEFT);assert(recentered==1);
  enh_menu_action(ENH_OK);assert(recentered==2);
- enh_menu_action(ENH_DOWN);enh_menu_action(ENH_DOWN);enh_menu_action(ENH_OK);assert(g_screen==SCREEN_OPTIONS);
+ enh_menu_action(ENH_DOWN);enh_menu_action(ENH_DOWN);enh_menu_action(ENH_DOWN);enh_menu_action(ENH_OK);assert(g_screen==SCREEN_OPTIONS);
  remove(g_settings_path);
  /* The shared gameplay meter shows raw stick and output even with gyro off. */
  g_attract_frame=0; g_frame=500; enabled=1;
