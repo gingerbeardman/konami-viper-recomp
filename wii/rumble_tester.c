@@ -11,7 +11,9 @@
  *   STEER PULL   the wheel's steady pull through corners: continuous
  *   FULL ON      the motor on, for reference
  * Hold the remote upright. UP/DOWN pick a row, LEFT/RIGHT change it, A plays
- * or stops the selected kind, B plays all kinds in turn (2 s each), HOME
+ * or stops the selected kind, B plays all kinds in turn (2 s each), 1 resets
+ * every kind to what the game build uses (light shakes 1 of 8, heavy shakes
+ * 2 of 6, steering pull fully on above its torque threshold), HOME
  * saves the settings to sd:/viper/rumble_settings.txt and returns to the
  * Homebrew Channel. The screen counts rumble commands per second (each is a
  * Bluetooth packet). */
@@ -25,9 +27,11 @@ static const char *const k_kinds[N_KINDS] = { "COBBLES", "CAR RUB", "WALL SCRAPE
 /* the game's rhythm: active for ACTIVE frames out of every CYCLE (0 = continuous) */
 static const unsigned k_active[N_KINDS] = { 0, 60, 18, 15, 0, 0 };
 static const unsigned k_cycle[N_KINDS] = { 0, 120, 90, 120, 0, 0 };
-/* starting points: 1 of 8 for cobbles and 2 of 6 for bumps felt right on hardware */
-static int period[N_KINDS] = { 8, 6, 6, 6, 8, 1 };
-static int on[N_KINDS] = { 1, 2, 1, 2, 1, 1 };
+/* what the game build uses (wii/input_platform.c): light shakes (cobbles, wall scrapes) 1 of 8,
+ * heavy shakes (car rubs, big bumps) 2 of 6, steering pull fully on; tuned on hardware */
+static const int k_game_period[N_KINDS] = { 8, 6, 8, 6, 1, 1 };
+static const int k_game_on[N_KINDS] = { 1, 2, 1, 2, 1, 1 };
+static int period[N_KINDS], on[N_KINDS];
 enum { ROW_KIND, ROW_PERIOD, ROW_ON, N_ROWS };
 
 static int motor;
@@ -63,6 +67,7 @@ int main(void) {
     VIDEO_Flush();
     VIDEO_WaitVSync();
 
+    for (int k = 0; k < N_KINDS; k++) { period[k] = k_game_period[k]; on[k] = k_game_on[k]; }
     int row = 0, kind = COBBLES, playing = 0, tour = 0;
     unsigned frame = 0, started = 0;
     for (;; frame++) {
@@ -83,6 +88,8 @@ int main(void) {
         if (on[kind] > period[kind]) on[kind] = period[kind];
         if (down & WPAD_BUTTON_A) { playing = !playing; tour = 0; started = frame; }
         if (down & WPAD_BUTTON_B) { playing = tour = 1; kind = 0; started = frame; }
+        if (down & WPAD_BUTTON_1)
+            for (int k = 0; k < N_KINDS; k++) { period[k] = k_game_period[k]; on[k] = k_game_on[k]; }
         if (tour && frame - started >= 120) {
             kind++;
             started = frame;
@@ -97,7 +104,8 @@ int main(void) {
 
         printf("\x1b[2;0H");
         printf("  WII REMOTE RUMBLE POWER                HOME: save and quit\n\n");
-        printf("  UP/DOWN row  LEFT/RIGHT change  A play/stop  B play all\n\n");
+        printf("  UP/DOWN row  LEFT/RIGHT change  A play/stop  B play all\n");
+        printf("  1 game defaults\n\n");
         printf("  %c KIND    %-12s\n", row == ROW_KIND ? '>' : ' ', k_kinds[kind]);
         printf("  %c PERIOD  %2d frames (%5.1f Hz)   \n", row == ROW_PERIOD ? '>' : ' ', period[kind], 60.0 / period[kind]);
         printf("  %c ON      %2d frames (%3d%% power)   \n\n", row == ROW_ON ? '>' : ' ', on[kind], on[kind] * 100 / period[kind]);
