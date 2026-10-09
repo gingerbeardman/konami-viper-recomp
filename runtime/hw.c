@@ -418,6 +418,11 @@ static void cf_command(uint8_t cmd) {
         cf.lba = cf_cur_lba();
         cf.remaining = cf.count ? cf.count : 256;
         cf.writing = 0;
+        {   /* RT_CF_LOG=1: one line per read command, to map loads to the CF directory's files */
+            static int cflog = -1;
+            if (cflog < 0) cflog = getenv("RT_CF_LOG") != NULL;
+            if (cflog) rt_log("CF: read lba=%#x count=%d t=%.3f\n", cf.lba, cf.remaining, rt_now() / CPU_HZ);
+        }
         cf_load_sector();
         cf.status |= ST_DRQ;
         break;
