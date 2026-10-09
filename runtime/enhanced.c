@@ -16,6 +16,8 @@
  *     viewport, for the widescreen option; "name_index" and "name_confirm" sit in the rankings'
  *     name entry, typed on the keyboard (see name_entry); the wheel selects' hooks (named in
  *     the profile, e.g. "course_select") run every frame of their screen (see wheel selects);
+ *     "glyph" sits in the caption text renderer, where each letter's quad is sent (see glyph
+ *     baselines);
  *   - widescreen: where the gl library keeps that state.
  */
 #include "runtime.h"
@@ -196,8 +198,41 @@ static void wheel_select_hook(int w) {
 
 typedef struct { uint32_t addr; const char *name; } Hook;
 static const Hook k_hooks[] = GAME_ENH_HOOKS;
-enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_WHEEL_SELECT };
+enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_GLYPH, HOOK_WHEEL_SELECT };
 #define NHOOKS (sizeof k_hooks / sizeof k_hooks[0])
+
+/* ================================================================== glyph baselines */
+/* The game's caption fonts (SELECT A CAR, SELECT TRANSMISSION TYPE...) are cut on a fixed grid
+ * from one atlas, and some letters sit lower in their cells than the rest: the large T and J
+ * draw a pixel below the line, and the large S reads low (its top stops short of the round
+ * letters'). The "glyph" hook runs as the text renderer (0x43fa0) sends a letter's quad (call
+ * to 0x43e30): character in r30, text object in r20 (its cell width +8
+ * tells the size), the letter range record in r14 (object +0x18; digits and punctuation use
+ * others), four vertices {x, y, z, u, v} on the stack at r1 + 0x44. Moving them by whole
+ * pixels puts each letter on the line: flat tops and bottoms on the cap height and baseline,
+ * round ones (C G O Q S, J U at the bottom) a little past them, as drawn. Measured from the
+ * atlas edges; negative is up. */
+static const signed char k_glyph_dy[3][26] = {
+    /*       A  B  C  D  E  F  G  H  I  J  K  L  M  N  O  P  Q  R  S  T  U  V  W  X  Y  Z */
+    /* 24 */ { 0, 0, 0, 0, 0, 0, 0, 0, 0,-1, 0, 0, 0, 0, 0, 0, 0, 0,-1,-1, 0, 0, 0, 0, 0, 0 },
+    /* 16 */ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    /* 12 */ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+};
+
+static void glyph_hook(PPCContext *c) {
+    uint32_t obj = c->r[20], ch = c->r[30] & 0xff;
+    if (c->r[14] != obj + 0x18 || ch < 'A' || ch > 'Z') return;   /* letters only */
+    float cw = LDF32(obj + 8);
+    int size = cw == 24.0f ? 0 : cw == 16.0f ? 1 : cw == 12.0f ? 2 : -1;
+    if (size < 0) return;
+    int dy = k_glyph_dy[size][ch - 'A'];
+    if (!dy) return;
+    float scale = LDF32(obj + 4);
+    for (int k = 0; k < 4; k++) {
+        uint32_t a = c->r[1] + 0x48 + 0x14 * k;
+        STF32(a, LDF32(a) - (float)dy * scale);   /* vertex y runs up the screen */
+    }
+}
 
 /* the kind of the hook at pc, and for a wheel select its entry in k_wsel (*arg); the names are
  * resolved once, so a call only compares addresses */
@@ -205,7 +240,7 @@ static int hook_kind(uint32_t pc, int *arg) {
     static signed char kind[NHOOKS], karg[NHOOKS];
     static int resolved;
     if (!resolved) {
-        static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm" };
+        static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm", "glyph" };
         for (size_t i = 0; k_hooks[i].name; i++) {
             for (int k = 1; k < (int)(sizeof names / sizeof names[0]); k++)
                 if (!strcmp(k_hooks[i].name, names[k])) kind[i] = (signed char)k;
@@ -226,6 +261,7 @@ void rt_hook(PPCContext *c, uint32_t pc) {
     case HOOK_NAME_CONFIRM: if (g_enhanced) name_confirm_hook(c); break;
     case HOOK_WHEEL_SELECT: if (g_enhanced) wheel_select_hook(arg); break;
     case HOOK_ATTRACT: g_attract_frame = g_frame ? g_frame : 1; break;
+    case HOOK_GLYPH: if (g_enhanced) glyph_hook(c); break;
     case HOOK_PROJECTION: {                  /* the current slot has just been written */
         uint32_t s = LD8(GAME_ENH_WIDE_PROJ_SLOT);
         if (!g_enhanced || s > 1) break;
