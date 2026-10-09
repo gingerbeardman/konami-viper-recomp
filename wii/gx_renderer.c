@@ -1594,6 +1594,59 @@ static void sprite_near_update(const WiiVoodooVertex p[3]){
 }
 #endif
 
+#ifdef VIPER_WII_SPRITE_INSET
+/* Per glyph clamp: a flat, axis-aligned textured triangle (2D sprite: font
+ * glyph, HUD piece) drawn magnified samples bilinearly up to half a texel
+ * past its cut-out, into the neighbouring atlas glyph (a seam left of the
+ * boot screen's copyright sign at 1280x960). Its texture coordinates are
+ * pulled in so the edge pixels sample no further out than the edge texel's
+ * centre, as a clamp to the cut-out would: 0.5 - 0.5/m texels per side at
+ * m pixels per texel, nothing at 1:1. Point-sampled sprites (SUPER) only
+ * need the edge pixel inside the cut-out: 0.25/m.
+ * The sprite's edges are also put on whole raster pixels: in WIDE the game's
+ * x=0 is at 79.77, and the hardware (not Dolphin) rasterises that part-
+ * covered column, sampling just outside the cut-out (a line left of the boot
+ * screen's copyright sign in WIDE SUPER). Moves a sprite at most half a pixel. */
+static unsigned long long sprite_insets;
+static void sprite_snap_edges(const WiiVoodooView *v,WiiVoodooVertex q[3],float fx,float fy){
+    int flip=!!(v->regs[0x110/4]&(1u<<17));float top=((v->io[0x10/4]>>18)&4095)+1.0f;
+    for(unsigned i=0;i<3;i++){
+        q[i].x=roundf((q[i].x+(float)WIDE_M)*fx)/fx-(float)WIDE_M;
+        float y=roundf(screen_y(v,q[i].y)*fy)/fy;
+        q[i].y=flip?top-y:y;
+    }
+}
+static int sprite_inset_unit(const WiiVoodooView *v,WiiVoodooVertex q[3],unsigned unit,float fx,float fy,int point,int *sprite){
+    float q0=unit?q[0].w1:q[0].w0;
+    if(q0!=(unit?q[1].w1:q[1].w0)||q0!=(unit?q[2].w1:q[2].w0)||!(q0>0))return 0;   /* perspective: 3D */
+    float dx1=q[1].x-q[0].x,dy1=q[1].y-q[0].y,dx2=q[2].x-q[0].x,dy2=q[2].y-q[0].y;
+    float det=dx1*dy2-dx2*dy1;
+    if(!(fabsf(det)>=1.f))return 0;
+    float s[3],t[3];
+    for(unsigned i=0;i<3;i++){s[i]=(unit?q[i].s1:q[i].s)/q0;t[i]=(unit?q[i].t1:q[i].t)/q0;}
+    float r=1.f/det;
+    float sx=((s[1]-s[0])*dy2-(s[2]-s[0])*dy1)*r,sy=((s[2]-s[0])*dx1-(s[1]-s[0])*dx2)*r;
+    float tx=((t[1]-t[0])*dy2-(t[2]-t[0])*dy1)*r,ty=((t[2]-t[0])*dx1-(t[1]-t[0])*dx2)*r;
+    if(!(fabsf(sy)<0.02f*fabsf(sx)&&fabsf(tx)<0.02f*fabsf(ty)))return 0;   /* rotated */
+    if(q0==1.f)*sprite=1;   /* 2D (W = 1), not a moving 3D billboard: its edges snap */
+    float smin=fminf(s[0],fminf(s[1],s[2])),smax=fmaxf(s[0],fmaxf(s[1],s[2]));
+    float tmin=fminf(t[0],fminf(t[1],t[2])),tmax=fmaxf(t[0],fmaxf(t[1],t[2]));
+    float ms=fx/fabsf(sx),mt=fy/fabsf(ty);   /* raster pixels per texel */
+    float is=point?0.25f/ms:0.5f-0.5f/ms,it=point?0.25f/mt:0.5f-0.5f/mt;
+    int changed=0;
+    if(is>0&&smax-smin>2*is+0.5f){
+        float k=(smax-smin-2*is)/(smax-smin);
+        for(unsigned i=0;i<3;i++){float n=(smin+is+(s[i]-smin)*k)*q0;if(unit)q[i].s1=n;else q[i].s=n;}
+        changed=1;
+    }
+    if(it>0&&tmax-tmin>2*it+0.5f){
+        float k=(tmax-tmin-2*it)/(tmax-tmin);
+        for(unsigned i=0;i<3;i++){float n=(tmin+it+(t[i]-tmin)*k)*q0;if(unit)q[i].t1=n;else q[i].t=n;}
+        changed=1;
+    }
+    (void)v;return changed;
+}
+#endif
 #ifndef RENDER_O3
 #define RENDER_O3   /* defined with the triangle memo; plain otherwise */
 #endif
@@ -1655,6 +1708,22 @@ WII_HOT_triangle RENDER_O3 static void triangle(void *user,const WiiVoodooView *
     }
 #ifdef VIPER_WII_SUPERSAMPLE
     sprite_near_update(p);
+#endif
+#ifdef VIPER_WII_SPRITE_INSET
+    WiiVoodooVertex inset[3];
+    {float fx=(float)RB_W/(float)(width(v)+2*WIDE_M),fy=(float)RB_H/(float)height(v);
+#ifdef VIPER_WII_SUPERSAMPLE
+     if(ss_recording){fx*=2;fy*=2;}
+     unsigned point=sprite_near;
+#else
+     unsigned point=0;
+#endif
+     if(fx>0&&fy>0){
+        memcpy(inset,p,sizeof inset);
+        int sprite=0,a=sprite_inset_unit(v,inset,0,fx,fy,point&1,&sprite),b=sprite_inset_unit(v,inset,1,fx,fy,point>>1&1,&sprite);
+        if(sprite)sprite_snap_edges(v,inset,fx,fy);
+        if(a|b|sprite){p=inset;sprite_insets++;}
+     }}
 #endif
 #ifdef VIPER_WII_TRIANGLE_MEMO
     if(tri_memo.valid&&active_depth_band<0&&triangle_memo(v,p,cmd,area))return;

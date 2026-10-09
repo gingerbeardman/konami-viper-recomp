@@ -464,6 +464,13 @@ case "${WII_LIVE_SNAP_VERTICES:-1}" in
     1) flags="$flags -DVIPER_WII_SNAP_VERTICES"; output="$output-snap" ;;
     *) echo 'WII_LIVE_SNAP_VERTICES must be 0 or 1' >&2; exit 2 ;;
 esac
+# 2D sprites (font glyphs, HUD) drawn magnified keep bilinear sampling inside
+# their own cut-out: no seams from the neighbouring atlas glyph.
+case "${WII_LIVE_SPRITE_INSET:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_SPRITE_INSET"; output="$output/si" ;;
+    *) echo 'WII_LIVE_SPRITE_INSET must be 0 or 1' >&2; exit 2 ;;
+esac
 # SUPER tile size (WxH, e.g. 480x360: 960x720 supersampled, 1.5x of 640x480);
 # default the native box (1024x768, 1.6x). Needs NATIVE_RES.
 case "${WII_LIVE_SS_BOX:-}" in
