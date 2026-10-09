@@ -19,6 +19,7 @@
  */
 #include "runtime.h"
 #include "track_explorer.h"
+#include "alt_cars.h"
 #include "game_config.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -160,10 +161,10 @@ static void name_confirm_hook(PPCContext *c) {
 
 typedef struct { uint32_t addr; const char *name; } Hook;
 static const Hook k_hooks[] = GAME_ENH_HOOKS;
-enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_EXPLORER_CAMERA, HOOK_EXPLORER_RACE };
+enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_EXPLORER_CAMERA, HOOK_EXPLORER_RACE, HOOK_FILE_LOADED };
 
 static int hook_kind(uint32_t pc) {
-    static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm", "explorer_camera", "explorer_race" };
+    static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm", "explorer_camera", "explorer_race", "file_loaded" };
     for (const Hook *h = k_hooks; h->name; h++)
         if (h->addr == pc)
             for (int k = 1; k < (int)(sizeof names / sizeof names[0]); k++)
@@ -173,6 +174,7 @@ static int hook_kind(uint32_t pc) {
 
 void rt_hook(PPCContext *c, uint32_t pc) {
     switch (hook_kind(pc)) {
+    case HOOK_FILE_LOADED: alt_cars_file_loaded(c); break;
     case HOOK_EXPLORER_CAMERA: if (g_enhanced) explorer_camera(c, g_frame); break;
     case HOOK_EXPLORER_RACE: if (g_enhanced) explorer_race(c); break;
     case HOOK_NAME_INDEX: if (g_enhanced) name_index_hook(c); break;
@@ -337,6 +339,7 @@ void enh_init(const char *work, const char *settings) {
     voodoo_set_scale(g_set.scale);       /* the only place the render scale is set */
     set_aspect(g_set.aspect);
     voodoo_set_texture_filter(g_enhanced ? g_set.texture_filter : 0);
+    alt_cars_init(work);
     const char *file = GAME_ENH_FONT_FILE;
     if (!file) return;
     char path[1024];

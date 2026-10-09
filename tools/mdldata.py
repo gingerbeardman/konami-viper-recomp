@@ -72,8 +72,19 @@ def cmd_names(game, prefix=''):
     for n in sorted(strings(read_file(game, 'game/mdldata/mdlname.zin'))):
         if n.startswith(prefix): print(n)
 
+def gma_lba(game):
+    """First CF sector of the game image (directory sectors are relative to it)."""
+    cf = os.path.join(ROOT, 'work', game, 'cf')
+    head = open(os.path.join(cf, os.listdir(cf)[0]), 'rb').read(512)
+    with open(os.path.join(ROOT, 'work', game, 'cf.img'), 'rb') as img:
+        for lba in range(0, 0x10000):
+            img.seek(lba * 512)
+            if img.read(512) == head: return lba
+    raise ValueError('game image not found in cf.img')
+
 def cmd_cflog(game, log, t0=0.0, t1=1e9):
-    ents = sorted((int(e['sector'], 16), int(e['size'], 16), e['name']) for e in manifest(game))
+    base = gma_lba(game)
+    ents = sorted((int(e['sector'], 16) + base, int(e['size'], 16), e['name']) for e in manifest(game))
     def owner(lba):
         for s, size, name in ents:
             if s <= lba < s + (size + 511) // 512: return name
