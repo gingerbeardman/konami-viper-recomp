@@ -5,6 +5,17 @@
 #include "hot_layout.h"
 #include "runtime.h"
 #include "voodoo_headless.h"
+#ifdef VIPER_WII_SNAP_VERTICES
+/* Vertex X/Y as the Voodoo's setup sees them: 12.4 fixed point, rounded to
+ * nearest 1/16 pixel (add/subtract 1.5*2^23 at 16x scale; exact for any
+ * screen coordinate). A car's paint and shine passes are transformed
+ * separately and differ by ~1e-4 pixel; snapped they are identical, so the
+ * depth-EQUAL shine covers the paint (no twinkling dots on showroom and
+ * RESULT cars, which the cabinet does not show). */
+static inline float SNAP16(float f){float t=f*16.f+12582912.f;return (t-12582912.f)*(1.f/16.f);}   /* -frounding-math keeps the add and subtract */
+#else
+#define SNAP16(f) (f)
+#endif
 #include <string.h>
 #include <stdlib.h>
 #ifdef VIPER_WII_TEXTURE_LAYOUT_CACHE
@@ -719,7 +730,7 @@ static void triangle_packet_copying(unsigned pc, uint32_t cmd) {
         if(format==59&&!(cmd&(1u<<28))){
             /* Every field but z is assigned, so skip the zero fill. */
             v.z=0;
-            v.x=fifo_float(word++);v.y=fifo_float(word++);
+            v.x=SNAP16(fifo_float(word++));v.y=SNAP16(fifo_float(word++));
             v.r=fifo_float(word++);v.g=fifo_float(word++);v.b=fifo_float(word++);
             v.a=fifo_float(word++);v.wb=fifo_float(word++);
             v.w0=v.w1=fifo_float(word++);
@@ -728,7 +739,7 @@ static void triangle_packet_copying(unsigned pc, uint32_t cmd) {
 #endif
         {
         v = (NativeVertex){0}; v.wb = v.w0 = v.w1 = 1;
-        v.x=fifo_float(word++); v.y=fifo_float(word++);
+        v.x=SNAP16(fifo_float(word++)); v.y=SNAP16(fifo_float(word++));
         if (cmd & (1u<<28)) {
             if (format & 3) {
                 uint32_t argb = vram_read(word++);
@@ -791,7 +802,7 @@ WII_HOT_triangle_packet static void triangle_packet(unsigned pc, uint32_t cmd) {
 #ifdef VIPER_WII_FIFO_FORMAT59
         if(format==59&&!(cmd&(1u<<28))){
             pv->z=0;
-            pv->x=fifo_float(word++);pv->y=fifo_float(word++);
+            pv->x=SNAP16(fifo_float(word++));pv->y=SNAP16(fifo_float(word++));
             pv->r=fifo_float(word++);pv->g=fifo_float(word++);pv->b=fifo_float(word++);
             pv->a=fifo_float(word++);pv->wb=fifo_float(word++);
             pv->w0=pv->w1=fifo_float(word++);
@@ -800,7 +811,7 @@ WII_HOT_triangle_packet static void triangle_packet(unsigned pc, uint32_t cmd) {
 #endif
         {
         NativeVertex v = {0}; v.wb = v.w0 = v.w1 = 1;
-        v.x=fifo_float(word++); v.y=fifo_float(word++);
+        v.x=SNAP16(fifo_float(word++)); v.y=SNAP16(fifo_float(word++));
         if (cmd & (1u<<28)) {
             if (format & 3) {
                 uint32_t argb = vram_read(word++);
@@ -888,7 +899,7 @@ __attribute__((noinline)) static void triangle_packet59(uint32_t cmd,const uint3
     for (unsigned i = 0; i < vertices; i++, words += 10) {
         NativeVertex *pv=&buf[3+i];
         pv->z=0;
-        pv->x=packet_float(words[0]);pv->y=packet_float(words[1]);
+        pv->x=SNAP16(packet_float(words[0]));pv->y=SNAP16(packet_float(words[1]));
         pv->r=packet_float(words[2]);pv->g=packet_float(words[3]);pv->b=packet_float(words[4]);
         pv->a=packet_float(words[5]);pv->wb=packet_float(words[6]);
         pv->w0=pv->w1=packet_float(words[7]);

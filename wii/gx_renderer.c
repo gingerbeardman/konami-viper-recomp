@@ -491,8 +491,17 @@ static char edge_sprite_text[2048];static unsigned edge_sprite_len;   /* this fr
 #ifdef VIPER_WII_FRAME_CAPTURE
 /* This frame's triangles per (fbzMode, alphaMode, fbzColorPath) state. */
 static struct {uint32_t fbz,alpha,cp;unsigned n;float wmin,wmax;} state_tally[48];static unsigned state_tally_n;
+#ifdef VIPER_WII_PASS_TRACE
+/* Diagnostic: exact vertices of the car's paint (depth LESS) and shine
+ * (depth EQUAL) passes in a showroom frame, to compare them offline. */
+static WiiVoodooVertex pass_tris[2][400][3];static unsigned pass_n[2];
+#endif
 static void tally_state(const WiiVoodooView *v,const WiiVoodooVertex p[3]){
     uint32_t fbz=v->regs[0x110/4],alpha=v->regs[0x10c/4],cp=v->regs[0x104/4];
+#ifdef VIPER_WII_PASS_TRACE
+    {unsigned k=((fbz>>5)&7)==1?0:((fbz>>5)&7)==2?1:2;
+     if(k<2&&(fbz&16)&&pass_n[k]<400){memcpy(pass_tris[k][pass_n[k]++],p,3*sizeof *p);}}
+#endif
     unsigned i=0;for(;i<state_tally_n;i++)if(state_tally[i].fbz==fbz&&state_tally[i].alpha==alpha&&state_tally[i].cp==cp)break;
     if(i==state_tally_n){if(i==48)return;state_tally_n++;state_tally[i].fbz=fbz;state_tally[i].alpha=alpha;state_tally[i].cp=cp;state_tally[i].n=0;state_tally[i].wmin=1e30f;state_tally[i].wmax=0;}
     state_tally[i].n++;for(unsigned k=0;k<3;k++){if(p[k].wb<state_tally[i].wmin)state_tally[i].wmin=p[k].wb;if(p[k].wb>state_tally[i].wmax)state_tally[i].wmax=p[k].wb;}
@@ -3319,6 +3328,9 @@ static void present(void *user,const WiiVoodooView *v,unsigned base) {
 #ifdef VIPER_WII_FRAME_CAPTURE
     frame_capture();
     edge_sprite_len=0;edge_sprite_text[0]=0;state_tally_n=0;
+#ifdef VIPER_WII_PASS_TRACE
+    pass_n[0]=pass_n[1]=0;
+#endif
 #endif
 #ifdef VIPER_WII_DEPTH_TRACE
     if(!(render_frame%15)){char b[400];unsigned o=0;
@@ -3424,6 +3436,14 @@ static void frame_capture(void){
         /* Trailer: how this frame was drawn. */
         fprintf(f,"ss_result=%d ss_backoff=%u ss_len=%u sprite_near_tris=%llu display=%d\n",ss_result,ss_backoff,ss_backoff_len,sprite_near_tris,display_mode);
         fputs(edge_sprite_text,f);
+#ifdef VIPER_WII_PASS_TRACE
+        for(unsigned k=0;k<2;k++)for(unsigned i=0;i<pass_n[k];i++){
+            fprintf(f,"pass%u",k);
+            for(unsigned j=0;j<3;j++){const WiiVoodooVertex *q=&pass_tris[k][i][j];uint32_t bx,by,bw;memcpy(&bx,&q->x,4);memcpy(&by,&q->y,4);memcpy(&bw,&q->wb,4);
+                fprintf(f," %08lx,%08lx,%08lx",(unsigned long)bx,(unsigned long)by,(unsigned long)bw);}
+            fprintf(f,"\n");
+        }
+#endif
         for(unsigned i=0;i<state_tally_n;i++)fprintf(f,"state fbz=%08lx alpha=%08lx cp=%08lx tris=%u wb=%.4f..%.4f\n",(unsigned long)state_tally[i].fbz,(unsigned long)state_tally[i].alpha,(unsigned long)state_tally[i].cp,state_tally[i].n,(double)state_tally[i].wmin,(double)state_tally[i].wmax);
 #endif
         fclose(f);

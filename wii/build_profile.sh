@@ -815,6 +815,14 @@ case "${WII_PERF_DISPLAY_MULTI:-0}" in
     2) flags="$flags -DVIPER_WII_DISPLAY_MULTI -DVIPER_WII_SUPERSAMPLE -DVIPER_WII_DISPLAY_CYCLE"; output="$output-multicycle" ;;
     *) echo 'WII_PERF_DISPLAY_MULTI must be 0, 1 or 2' >&2; exit 2 ;;
 esac
+# Vertex X/Y snapped to 1/16 pixel as the Voodoo's 12.4 setup does: a car's
+# separately transformed paint and shine passes then match exactly (no
+# depth-EQUAL dots). Changes the EFB oracle, not RAM.
+case "${WII_PERF_SNAP_VERTICES:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_SNAP_VERTICES"; output="$output-snap" ;;
+    *) echo 'WII_PERF_SNAP_VERTICES must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_NATIVE_RES:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_NATIVE_RES"; output="$output-native" ;;

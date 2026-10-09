@@ -456,6 +456,14 @@ case "$WII_LIVE_SS_SHARPEN" in
 esac
 # The game drawn at its native 512x384 (1:1 as the cabinet rasterises it:
 # no texture seams, glyphs on whole pixels), then scaled to the screen.
+# Vertex X/Y snapped to 1/16 pixel as the Voodoo's 12.4 setup does: a car's
+# separately transformed paint and shine passes then match exactly (no
+# depth-EQUAL dots). Changes the EFB oracle, not RAM.
+case "${WII_LIVE_SNAP_VERTICES:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_SNAP_VERTICES"; output="$output-snap" ;;
+    *) echo 'WII_LIVE_SNAP_VERTICES must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_LIVE_NATIVE_RES:-1}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_NATIVE_RES"; output="$output-native" ;;
@@ -529,6 +537,12 @@ case "${WII_LIVE_FRAME_CAPTURE:-0}" in
     1) flags="$flags -DVIPER_WII_FRAME_CAPTURE -DVIPER_WII_WATCHDOG_S=400"; output="$output-cap" ;;
     [1-9][0-9]*) flags="$flags -DVIPER_WII_FRAME_CAPTURE=$WII_LIVE_FRAME_CAPTURE -DVIPER_WII_FRAME_CAPTURE_COUNT=${WII_LIVE_FRAME_CAPTURE_COUNT:-4} -DVIPER_WII_FRAME_CAPTURE_STEP=${WII_LIVE_FRAME_CAPTURE_STEP:-1} -DVIPER_WII_WATCHDOG_S=400"; output="$output-cap$WII_LIVE_FRAME_CAPTURE" ;;
     *) echo 'WII_LIVE_FRAME_CAPTURE must be 0, 1 (showroom) or a start frame' >&2; exit 2 ;;
+esac
+# Diagnostic (with WII_LIVE_FRAME_CAPTURE=1): exact paint/shine pass vertices in the capture trailer.
+case "${WII_LIVE_PASS_TRACE:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_PASS_TRACE"; output="$output-passtrace" ;;
+    *) echo 'WII_LIVE_PASS_TRACE must be 0 or 1' >&2; exit 2 ;;
 esac
 # Diagnostic: clear the render box to magenta after each supersample tile copy (undrawn pixels show).
 case "${WII_LIVE_SS_TILE_MAGENTA:-0}" in
