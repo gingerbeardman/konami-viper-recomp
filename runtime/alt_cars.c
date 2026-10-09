@@ -18,7 +18,15 @@
  * traffic model with all its vertices at the origin, so it draws nothing. The new container must
  * fit in the original's size, the buffer the game allocated for it.
  *
- * RT_ALT_CAR=N (0..15) picks the traffic car; RT_ALT_CAR_LOG=1 logs every queued file read.
+ * Car select: the game's handler 0x8b528 runs every frame of the car select screen; the
+ * "car_select" hook (0x8b5c4, after it has set the tuned-up bit from the shift lever) marks the
+ * screen as shown and steps through k_cars on each shift DOWN press (IN3 bit 6, active low), which
+ * the game ignores there. The pick starts off at each car select and is dropped when the game
+ * leaves play (the phase in the settings word's top byte falls below 0xa3, the car select).
+ * The car select's own 3D scene still shows the original car; the overlay names the pick.
+ *
+ * RT_ALT_CAR=N (0..15) forces traffic car N; RT_ALT_CAR_LOG=1 logs every queued file read and
+ * each change of the settings word.
  */
 #include "alt_cars.h"
 #include "runtime.h"
@@ -31,9 +39,22 @@ extern int g_enhanced;
 #define TCAR_CARS 16
 #define TCAR_EMPTY_SRC 32            /* mrr_car00a: the smallest traffic model */
 
+/* the shift-down list: traffic car index (TCAR_carNNa) and overlay name */
+static const struct { int tcar; const char *name; } k_cars[] = {
+    { 1, "FIAT PANDA" }, { 15, "CITROEN 2CV" }, { 2, "LANCIA" }, { 10, "PEUGEOT" },
+    { 5, "VOLVO ESTATE" }, { 7, "TAXI" }, { 3, "VAN" }, { 8, "RED CAR" },
+};
+#define N_CARS ((int)(sizeof k_cars / sizeof k_cars[0]))
+
+extern uint8_t g_in[8];
 static uint8_t *g_tcar;              /* TCAR_mdl.zin, unpacked */
 static size_t g_tcar_len;
-static int g_alt = -1;
+static int g_forced = -1;            /* RT_ALT_CAR */
+static int g_pick = -1;              /* index in k_cars, -1: the original car */
+static uint64_t g_frame, g_select_frame;
+static int g_shift_down;
+
+static int alt_tcar(void) { return g_forced >= 0 ? g_forced : g_pick >= 0 ? k_cars[g_pick].tcar : -1; }
 
 static uint32_t name_hash(const char *s) {
     uint32_t r = 0;
@@ -71,10 +92,6 @@ static uint32_t read_host(const void *src, uint32_t off) { return be32((const ui
 static uint32_t read_guest(const void *src, uint32_t off) { return LD32((uint32_t)(uintptr_t)src + off); }
 
 void alt_cars_init(const char *work) {
-    const char *v = getenv("RT_ALT_CAR");
-    if (!v) return;
-    int n = atoi(v);
-    if (n < 0 || n >= TCAR_CARS) return;
     char path[1024];
     snprintf(path, sizeof path, "%s/fs/_unk/%08x.bin", work, name_hash("game/mdldata/TCAR_mdl.zin"));
     FILE *f = fopen(path, "rb");
@@ -91,8 +108,11 @@ void alt_cars_init(const char *work) {
         rt_log("alt cars: unexpected TCAR_mdl.zin\n");
         free(g_tcar); g_tcar = NULL; return;
     }
-    g_alt = n;
-    rt_log("alt cars: player car -> traffic car %d\n", n);
+    const char *v = getenv("RT_ALT_CAR");
+    if (v && atoi(v) >= 0 && atoi(v) < TCAR_CARS) {
+        g_forced = atoi(v);
+        rt_log("alt cars: player car -> traffic car %d\n", g_forced);
+    }
 }
 
 /* offset and size of model i of the TCAR container */
@@ -113,7 +133,8 @@ static int is_player_models(const char *name) {
 }
 
 void alt_cars_file_loaded(PPCContext *c) {
-    if (!g_enhanced || g_alt < 0) return;
+    int tcar = alt_tcar();
+    if (!g_enhanced || !g_tcar || tcar < 0) return;
     if (c->r[3] != 0) return;
     uint32_t name_ea = LD32(c->r[26] + 4), dest = LD32(c->r[26] + 0x10);
     char name[64];
@@ -136,7 +157,7 @@ void alt_cars_file_loaded(PPCContext *c) {
     Container tc;
     parse_header(&tc, read_host, g_tcar, (uint32_t)g_tcar_len);
     uint32_t car_off, car_size, empty_off, empty_size;
-    tcar_model(g_alt, &car_off, &car_size);
+    tcar_model(tcar, &car_off, &car_size);
     tcar_model(TCAR_EMPTY_SRC, &empty_off, &empty_size);
     uint32_t sizes_at = tc.sizes_at, models_at = sizes_at + 4 * orig.nmodels;
     uint32_t len = models_at + car_size + (orig.nmodels - 1) * empty_size;
@@ -164,5 +185,43 @@ void alt_cars_file_loaded(PPCContext *c) {
     }
     for (uint32_t b = 0; b < len; b++) ST8(dest + b, out[b]);
     free(out);
-    rt_log("alt cars: %s -> traffic car %d (model %u of %u, %#x of %#x bytes)\n", name, g_alt, body, orig.nmodels, len, orig_len);
+    rt_log("alt cars: %s -> traffic car %d (model %u of %u, %#x of %#x bytes)\n", name, tcar, body, orig.nmodels, len, orig_len);
+}
+
+/* the race settings word: car in bits 9-11, tuned-up in bit 8 (read at race setup, 0x8e378) */
+#define GAME_TOC 0x154da8u
+static uint32_t settings_word_ea(void) {
+    uint32_t p = LD32(GAME_TOC + 0x54);
+    return (p >= 0x100000 && p < RAM_SIZE - 8) ? p + 4 : 0;
+}
+
+/* the car select screen is up: its handler ran within the last few frames (it runs at 30 Hz) */
+static int in_car_select(void) { return g_select_frame && g_frame - g_select_frame <= 4; }
+
+void alt_cars_car_select(PPCContext *c) {
+    (void)c;
+    if (!g_enhanced || !g_tcar) return;
+    if (!in_car_select()) { g_pick = -1; g_shift_down = 1; }   /* a new car select: original car */
+    g_select_frame = g_frame ? g_frame : 1;
+    int down = !(g_in[3] & 0x40);
+    if (down && !g_shift_down) {
+        g_pick = g_pick + 1 < N_CARS ? g_pick + 1 : -1;
+        if (getenv("RT_ALT_CAR_LOG")) rt_log("alt cars: car select pick %s\n", g_pick >= 0 ? k_cars[g_pick].name : "original");
+    }
+    g_shift_down = down;
+}
+
+const char *alt_cars_select_label(void) {
+    if (!g_enhanced || !g_tcar || !in_car_select()) return NULL;
+    return g_pick >= 0 ? k_cars[g_pick].name : "";
+}
+
+void alt_cars_on_frame(uint64_t frame) {
+    static uint32_t last = 0xffffffffu;
+    g_frame = frame;
+    uint32_t ea = settings_word_ea();
+    uint32_t w = ea ? LD32(ea) : 0;
+    if (w != last && getenv("RT_ALT_CAR_LOG")) rt_log("alt cars: frame %llu settings %08x\n", (unsigned long long)frame, w);
+    last = w;
+    if ((w >> 24) < 0xa3) g_pick = -1;                         /* out of play: attract, coin-up */
 }

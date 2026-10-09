@@ -161,10 +161,10 @@ static void name_confirm_hook(PPCContext *c) {
 
 typedef struct { uint32_t addr; const char *name; } Hook;
 static const Hook k_hooks[] = GAME_ENH_HOOKS;
-enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_EXPLORER_CAMERA, HOOK_EXPLORER_RACE, HOOK_FILE_LOADED };
+enum { HOOK_NONE, HOOK_ATTRACT, HOOK_PROJECTION, HOOK_VIEWPORT, HOOK_NAME_INDEX, HOOK_NAME_CONFIRM, HOOK_EXPLORER_CAMERA, HOOK_EXPLORER_RACE, HOOK_FILE_LOADED, HOOK_CAR_SELECT };
 
 static int hook_kind(uint32_t pc) {
-    static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm", "explorer_camera", "explorer_race", "file_loaded" };
+    static const char *const names[] = { "", "attract", "projection", "viewport", "name_index", "name_confirm", "explorer_camera", "explorer_race", "file_loaded", "car_select" };
     for (const Hook *h = k_hooks; h->name; h++)
         if (h->addr == pc)
             for (int k = 1; k < (int)(sizeof names / sizeof names[0]); k++)
@@ -175,6 +175,7 @@ static int hook_kind(uint32_t pc) {
 void rt_hook(PPCContext *c, uint32_t pc) {
     switch (hook_kind(pc)) {
     case HOOK_FILE_LOADED: alt_cars_file_loaded(c); break;
+    case HOOK_CAR_SELECT: alt_cars_car_select(c); break;
     case HOOK_EXPLORER_CAMERA: if (g_enhanced) explorer_camera(c, g_frame); break;
     case HOOK_EXPLORER_RACE: if (g_enhanced) explorer_race(c); break;
     case HOOK_NAME_INDEX: if (g_enhanced) name_index_hook(c); break;
@@ -251,6 +252,7 @@ void enh_on_frame(const uint32_t *buf, int w, int h) {
     if (!g_enhanced) return;
     g_frame++;
     explorer_on_frame(g_frame);
+    alt_cars_on_frame(g_frame);
     fps_tick(buf, w, h);
     if (g_enh_log < 0) g_enh_log = getenv("RT_ENH_LOG") != NULL;
     int attract = g_attract_frame && g_frame - g_attract_frame <= ATTRACT_GRACE_FRAMES;
@@ -904,6 +906,9 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
                  explorer_speed() * 3.6f, explorer_height());
         draw_centered(fb, w, h, FONT_SMALL, h - font_height(FONT_SMALL) - 20, status, 0xffd800);
     }
+    const char *alt = alt_cars_select_label();
+    if (alt && *alt && g_font)                       /* car select: the (unannounced) shift-down car */
+        draw_text(fb, w, h, FONT_MEDIUM, (w - 512) / 2 + 12, 70, alt, 0xffd800);
     if (g_paused && !g_pause_controls) {
         const int z = FONT_MEDIUM, step = font_height(z) + 8;
         static const int items[3] = { T_RESUME, T_CONTROLS, T_MAIN_MENU };
