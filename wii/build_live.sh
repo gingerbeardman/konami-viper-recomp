@@ -501,11 +501,13 @@ case "${WII_LIVE_RUMBLE:-1}" in
     0) flags="$flags -DVIPER_WII_NO_RUMBLE"; output="$output-norumble" ;;
     *) echo 'WII_LIVE_RUMBLE must be 0 or 1' >&2; exit 2 ;;
 esac
-# Option: skip drawing every other frame while more than a frame behind real time.
-case "${WII_LIVE_FRAMESKIP:-0}" in
+# Option: skip drawing every other frame while more than a frame behind real time (1), or while the sound queue is 100 ms short (2).
+case "${WII_LIVE_FRAMESKIP:-2}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_AUTO_FRAMESKIP"; output="$output-fskip" ;;
-    *) echo 'WII_LIVE_FRAMESKIP must be 0 or 1' >&2; exit 2 ;;
+    2) [ "$WII_LIVE_AUDIO_LATENCY" != 0 ] || { echo 'Audio frameskip needs the audio clock (WII_LIVE_AUDIO_LATENCY)' >&2; exit 2; }
+       flags="$flags -DVIPER_WII_AUTO_FRAMESKIP -DVIPER_WII_FRAMESKIP_AUDIO"; output="$output-fskipa" ;;
+    *) echo 'WII_LIVE_FRAMESKIP must be 0, 1 or 2 (2: while the sound queue runs low)' >&2; exit 2 ;;
 esac
 # Picture aspect: auto (default: follow the console; set to 16:9, the TV stretches the 640-wide frame, so the 4:3 modes are squeezed to 3/4 width and only WIDE fills it, hardware 2026-10-09), 43 (always the full frame) or 169 (always squeezed).
 case "${WII_LIVE_ASPECT:-auto}" in

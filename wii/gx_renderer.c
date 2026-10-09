@@ -1144,6 +1144,7 @@ static unsigned render_frame;
  * frame unchanged; the display shows the previous picture once more. */
 extern volatile int32_t wii_pace_behind_us;
 static int skip_frame;
+unsigned wii_frames_skipped;   /* read by the pace trace */
 #endif
 static int render_this_frame(void){
 #ifdef VIPER_WII_AUTO_FRAMESKIP
@@ -3288,7 +3289,17 @@ static void present(void *user,const WiiVoodooView *v,unsigned base) {
 #endif
     int draw_frame=render_this_frame();render_frame++;
 #ifdef VIPER_WII_AUTO_FRAMESKIP
+#ifdef VIPER_WII_FRAMESKIP_AUDIO
+    /* Audio-paced: behind means the sound queue is running down. Skip the
+     * next frame's drawing (at most every other frame) while it is more than
+     * 100 ms short, so the game catches up and refills it, as the arcade
+     * drops frames under load and keeps its sound. */
+    {extern int wii_audio_backlog_us(void);int q=wii_audio_backlog_us();
+     skip_frame=draw_frame&&q>=0&&q<(VIPER_WII_AUDIO_LATENCY_MS-100)*1000;}
+#else
     skip_frame=draw_frame&&wii_pace_behind_us>17000;
+#endif
+    if(skip_frame)wii_frames_skipped++;
 #endif
     if(!draw_frame)return;
     wii_gx_own_thread();

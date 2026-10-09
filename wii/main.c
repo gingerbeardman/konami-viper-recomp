@@ -340,15 +340,27 @@ static void pace_trace(void){
     extern unsigned long long hw_cf_sectors,hw_cf_host_reads;
     static uint64_t last;static unsigned last_under,last_skip;static unsigned long long last_sect,last_reads;
     uint64_t now=gettime();unsigned g=(unsigned)(rt_now()/CPU_HZ);
-    if(last&&pace_len<sizeof pace_text-128)
     {struct mallinfo mi=mallinfo();
+#ifdef VIPER_WII_SUPERSAMPLE
      extern unsigned ss_dl_peak,ss_dl_overflows;
      rt_log("VIPER WII SSDL g=%u peak=%u overflows=%u\n",g,ss_dl_peak,ss_dl_overflows);ss_dl_peak=0;
+#endif
      rt_log("VIPER WII HEAP g=%u used=%u free_in_heap=%u arena=%u mem1_left=%lu mem2_left=%lu\n",g,(unsigned)mi.uordblks,(unsigned)mi.fordblks,(unsigned)mi.arena,
         (unsigned long)((uintptr_t)SYS_GetArena1Hi()-(uintptr_t)SYS_GetArena1Lo()),(unsigned long)((uintptr_t)SYS_GetArena2Hi()-(uintptr_t)SYS_GetArena2Lo()));}
-        pace_len+=snprintf(pace_text+pace_len,sizeof pace_text-pace_len,"g=%u wall_ms=%llu under=%u skip=%u behind_max_ms=%d resync=%u cf_sectors=%llu cf_reads=%llu\n",
+    if(last){
+        char line[160];
+#ifdef VIPER_WII_AUTO_FRAMESKIP
+        extern unsigned wii_frames_skipped;static unsigned last_fskip;unsigned fskip=wii_frames_skipped-last_fskip;last_fskip=wii_frames_skipped;
+#else
+        unsigned fskip=0;
+#endif
+        snprintf(line,sizeof line,"g=%u wall_ms=%llu under=%u skip=%u behind_max_ms=%d resync=%u cf_sectors=%llu cf_reads=%llu fskip=%u\n",
             g,(unsigned long long)ticks_to_millisecs(now-last),wii_audio_underruns-last_under,wii_audio_skips-last_skip,
-            (int)(wii_pace_trace_max/1000),wii_pace_trace_resyncs,hw_cf_sectors-last_sect,hw_cf_host_reads-last_reads);
+            (int)(wii_pace_trace_max/1000),wii_pace_trace_resyncs,hw_cf_sectors-last_sect,hw_cf_host_reads-last_reads,fskip);
+        rt_log("VIPER WII PACE %s",line);   /* also in the SD log (Dolphin) */
+        size_t n=strlen(line);
+        if(pace_len+n<sizeof pace_text){memcpy(pace_text+pace_len,line,n+1);pace_len+=n;}   /* the network report keeps what fits */
+    }
     last=now;last_under=wii_audio_underruns;last_skip=wii_audio_skips;wii_pace_trace_max=0;wii_pace_trace_resyncs=0;
     last_sect=hw_cf_sectors;last_reads=hw_cf_host_reads;
     if(g>=VIPER_WII_PACE_TRACE&&wii_net_report_wanted()){
