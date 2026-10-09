@@ -251,6 +251,11 @@ void alt_cars_file_loaded(PPCContext *c) {
         if (m == body) {
             memcpy(dst, g_tcar + car_off, n = car_size);
             shift_texture(dst, n, orig.ntex);
+            if (getenv("RT_ALT_TIRES"))                       /* with the original tyres: fold the baked wheels up */
+                for (int v = 0; v < (dst[8] << 8 | dst[9]); v++) {
+                    uint8_t *p = dst + 0x1c + 6 * v;
+                    if ((int16_t)(p[2] << 8 | p[3]) <= 2) { p[2] = 0; p[3] = 25; }
+                }
         } else if (keep >> m & 1) {
             memcpy(dst, src + at[m], n = size[m]);
             if ((int)m == k_parts[sec].pan) {                   /* inside the new footprint */
