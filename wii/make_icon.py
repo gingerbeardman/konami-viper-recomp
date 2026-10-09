@@ -2,7 +2,7 @@
 (wii/icons/<game>.png, 128x48) with a short variant label stamped in its
 bottom-left corner, on the baseline of the Japanese title and in its blue,
 using a built-in 4x7 pixel font (no system fonts needed).
-Run: python3 wii/make_icon.py LABEL OUT.png [--base wii/icons/gticlub2.png] [--bold] [--left N]
+Run: python3 wii/make_icon.py LABEL OUT.png [--base wii/icons/gticlub2.png] [--bold] [--left N] [--top N]
      e.g. python3 wii/make_icon.py "1:1 N" apps/viper-gticlub2-1to1-nearest/icon.png"""
 import argparse
 from pathlib import Path
@@ -57,7 +57,7 @@ X0, TOP = 3, 35            # left edge; the Japanese title occupies rows 35-42
 LIMIT = 44                 # the Japanese title starts at x = 47
 
 
-def stamp(base: Path, label: str, out: Path, bold: bool = False, left: int = X0) -> None:
+def stamp(base: Path, label: str, out: Path, bold: bool = False, left: int = X0, top: int = TOP) -> None:
     """bold: each stroke two pixels wide (glyphs one column wider)."""
     im = Image.open(base).convert('RGB')
     x = left
@@ -71,9 +71,9 @@ def stamp(base: Path, label: str, out: Path, bold: bool = False, left: int = X0)
         for row, bits in enumerate(glyph):
             for col, bit in enumerate(bits):
                 if bit == '#':
-                    im.putpixel((x + col, TOP + row), INK)
+                    im.putpixel((x + col, top + row), INK)
                     if bold:
-                        im.putpixel((x + col + 1, TOP + row), INK)
+                        im.putpixel((x + col + 1, top + row), INK)
         x += width + 1
     out.parent.mkdir(parents=True, exist_ok=True)
     im.save(out)
@@ -86,5 +86,6 @@ if __name__ == '__main__':
     p.add_argument('--base', type=Path, default=Path(__file__).resolve().parent / 'icons' / 'gticlub2.png')
     p.add_argument('--bold', action='store_true', help='strokes two pixels wide')
     p.add_argument('--left', type=int, default=X0, help=f'left edge in pixels (default {X0})')
+    p.add_argument('--top', type=int, default=TOP, help=f'top row in pixels (default {TOP})')
     a = p.parse_args()
-    stamp(a.base, a.label, a.out, a.bold, a.left)
+    stamp(a.base, a.label, a.out, a.bold, a.left, a.top)
