@@ -23,7 +23,8 @@
  * screen as shown and steps through k_cars on each shift DOWN press (IN3 bit 6, active low), which
  * the game ignores there. The pick starts off at each car select and is dropped when the game
  * leaves play (the phase in the settings word's top byte falls below 0xa3, the car select).
- * The car select's own 3D scene still shows the original car; the overlay names the pick.
+ * Like the game's own cars, the pick is not announced; the car select's 3D scene still shows the
+ * original car. The names are for the log.
  *
  * RT_ALT_CAR=N (0..15) forces traffic car N; RT_ALT_CAR_LOG=1 logs every queued file read and
  * each change of the settings word.
@@ -209,11 +210,6 @@ void alt_cars_car_select(PPCContext *c) {
         if (getenv("RT_ALT_CAR_LOG")) rt_log("alt cars: car select pick %s\n", g_pick >= 0 ? k_cars[g_pick].name : "original");
     }
     g_shift_down = down;
-}
-
-const char *alt_cars_select_label(void) {
-    if (!g_enhanced || !g_tcar || !in_car_select()) return NULL;
-    return g_pick >= 0 ? k_cars[g_pick].name : "";
 }
 
 void alt_cars_on_frame(uint64_t frame) {

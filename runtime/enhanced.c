@@ -906,9 +906,6 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
                  explorer_speed() * 3.6f, explorer_height());
         draw_centered(fb, w, h, FONT_SMALL, h - font_height(FONT_SMALL) - 20, status, 0xffd800);
     }
-    const char *alt = alt_cars_select_label();
-    if (alt && *alt && g_font)                       /* car select: the (unannounced) shift-down car */
-        draw_text(fb, w, h, FONT_MEDIUM, (w - 512) / 2 + 12, 70, alt, 0xffd800);
     if (g_paused && !g_pause_controls) {
         const int z = FONT_MEDIUM, step = font_height(z) + 8;
         static const int items[3] = { T_RESUME, T_CONTROLS, T_MAIN_MENU };
