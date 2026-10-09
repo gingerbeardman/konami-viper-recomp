@@ -418,6 +418,11 @@ static void cf_command(uint8_t cmd) {
     case 0x20: case 0x21: case 0xc4:            /* READ SECTORS / READ MULTIPLE */
         cf.lba = cf_cur_lba();
         cf.remaining = cf.count ? cf.count : 256;
+        {   /* RT_CF_LOG=1: log every read command, e.g. to see which game files are loaded */
+            static int log = -1;
+            if (log < 0) log = getenv("RT_CF_LOG") != NULL;
+            if (log) rt_log("CF: read lba %u count %d\n", cf.lba, cf.remaining);
+        }
         cf.writing = 0;
         cf_load_sector();
         cf.status |= ST_DRQ;
@@ -678,6 +683,24 @@ void hw_nvram_options_fix(uint8_t *nv) {
     uint16_t cs = (uint16_t)(0xffff - sum);
     nv[GAME_NVRAM_OPT_CSUM] = (uint8_t)(cs >> 8);
     nv[GAME_NVRAM_OPT_CSUM + 1] = (uint8_t)cs;
+}
+
+/* The profile's nvram_force: TEST MODE option bits set at every boot, in both modes (the NETWORK
+ * ID: 1, a single cabinet; some dumps come from cabinet 2 of a linked set, and the race HUD then
+ * says PLAYER 2). Only an option block whose checksum is valid is touched; an empty NVRAM gets
+ * the game's factory settings. */
+static void nvram_force(void) {
+    static const struct { int addr, mask, value; } k_force[] = GAME_NVRAM_FORCE;
+    if (k_force[0].addr < 0 || !GAME_NVRAM_OPT_CSUM) return;
+    uint32_t sum = 0;
+    for (int o = GAME_NVRAM_OPT_START; o <= GAME_NVRAM_OPT_CSUM; o += 2) sum += (uint32_t)(g_nvram[o] << 8 | g_nvram[o + 1]);
+    if ((sum & 0xffff) != 0xffff) return;
+    int changed = 0;
+    for (int i = 0; k_force[i].addr >= 0; i++) {
+        uint8_t v = (uint8_t)((g_nvram[k_force[i].addr] & ~k_force[i].mask) | k_force[i].value);
+        if (v != g_nvram[k_force[i].addr]) { g_nvram[k_force[i].addr] = v; changed = 1; }
+    }
+    if (changed) { hw_nvram_options_fix(g_nvram); rt_log("NVRAM: profile settings applied (nvram_force)\n"); }
 }
 
 static uint8_t nvram_read(uint32_t off) {
@@ -1112,6 +1135,7 @@ void hw_init(const HwConfig *cfg) {
     if (f) {
         if (fread(g_nvram, 1, sizeof g_nvram, f) != sizeof g_nvram) rt_log("NVRAM: short file\n");
         fclose(f);
+        nvram_force();
     } else {
         rt_log("NVRAM: %s not found, starting from an empty NVRAM\n", cfg->nvram_path ? cfg->nvram_path : "(none)");
     }

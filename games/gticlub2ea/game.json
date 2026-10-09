@@ -76,7 +76,11 @@
         "0x83a1c": "name_confirm",
         "0x7df48": "scenery_visibility",
         "0x7df6c": "scenery_cell_distance",
-        "0x7e090": "scenery_object_distance"
+        "0x7e090": "scenery_object_distance",
+        "0x8cacc": null,
+        "0x8caf0": "course_select",
+        "0x8c028": null,
+        "0x8c04c": "transmission_select"
       }
     },
     "test_menu_game_mode": 13

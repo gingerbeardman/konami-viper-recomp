@@ -2638,6 +2638,8 @@ void voodoo_1_device::swap_buffers()
 		m_hires_scale = m_hires_pending;
 		m_wide = m_wide_pending;
 		m_hires.clear();
+		m_blur_tex.clear();
+		m_blur_frame.clear();
 		m_hires_aux.clear();
 		m_hires_out_valid = false;
 	}
@@ -2998,6 +3000,76 @@ u16 *voodoo_1_device::hires_target(u16 const *native)
 	return buf.data();
 }
 
+// Thrill Drive 2's motion blur at the scaled resolution. The game copies each frame into
+// textures with 2D blits (screen_to_screen_blit) and draws them back over the next frame as
+// quads mapped one texel per pixel. At 4:3 the rasterizer draws them as on the hardware (at 2X
+// from the native textures). In widescreen the textures hold only the 4:3 picture, so the quads
+// are drawn here instead, with the same arithmetic as the rasterizer (texture
+// colour times the iterated colour, source alpha / one minus source alpha with the iterated
+// alpha, the same dither), from the scaled copy of the frame the blits saw (m_blur_frame), at
+// every scaled pixel; a quad that reaches an edge of the 4:3 picture extends to the margin.
+// Only quads that really map the copied frame back to the same place are taken (rows and
+// columns checked), the first triangle of each draws the whole quad, the second is skipped.
+bool voodoo_1_device::blur_quad(voodoo::poly_data const &poly, voodoo::voodoo_renderer::vertex_t const *vert, u16 *target)
+{
+	extern unsigned long long g_voodoo_swaps;
+	auto it = m_blur_tex.find(m_tmu[0].regs().texture_baseaddr());
+	if (it == m_blur_tex.end() || it->second.filled + 1 < g_voodoo_swaps || m_blur_frame.empty())
+		return false;
+	blur_tex &bt = it->second;
+	auto const alphamode = m_reg.alpha_mode();
+	auto const fbzmode = m_reg.fbz_mode();
+	if (!alphamode.alphablend() || alphamode.srcrgbblend() != 1 || alphamode.dstrgbblend() != 5 || fbzmode.enable_depthbuf())
+		return false;
+	s32 const qx0 = s32(std::lround(std::min({vert[0].x, vert[1].x, vert[2].x}))), qx1 = s32(std::lround(std::max({vert[0].x, vert[1].x, vert[2].x})));
+	s32 const qy0 = s32(std::lround(std::min({vert[0].y, vert[1].y, vert[2].y}))), qy1 = s32(std::lround(std::max({vert[0].y, vert[1].y, vert[2].y})));
+	s32 const yorigin = m_renderer->yorigin();
+	auto bufrow = [&](s32 y) { return fbzmode.y_origin() ? yorigin - y : y; };
+	if (bt.coloffs != qx0 || qy1 - qy0 > s32(bt.srcrow.size()) || qx1 <= qx0 || qy1 <= qy0)
+		return false;
+	// one texel per pixel from the quad's corner, sampled at texel centres, no perspective (the
+	// start values are those at vertex A)
+	s64 const ax = m_reg.ax() >> 4, ay = m_reg.ay() >> 4;
+	if (poly.ds0dx != poly.dt0dy || poly.dt0dx != 0 || poly.ds0dy != 0 || poly.dw0dx != 0 || poly.dw0dy != 0 ||
+		2 * poly.starts0 != (2 * (ax - qx0) + 1) * poly.ds0dx || 2 * poly.startt0 != (2 * (ay - qy0) + 1) * poly.dt0dy)
+		return false;
+	for (s32 v = 0; v < qy1 - qy0; v++)
+		if (bt.srcrow[v] != bufrow(qy0 + v))
+			return false;
+	if (bt.done == g_voodoo_swaps)
+		return true;                            // the other triangle of the quad: already drawn
+	bt.done = g_voodoo_swaps;
+
+	s32 const n = m_hires_scale, m = m_wide, hrow = s32(m_renderer->rowpixels() + 2 * m) * n;
+	s32 const rows = s32(m_blur_frame.size() / hrow);
+	auto clamp8 = [](s32 v) { return std::clamp(v >> 12, 0, 255); };
+	s32 const sa = clamp8(m_reg.start_a()), ir = clamp8(m_reg.start_r()), ig = clamp8(m_reg.start_g()), ib = clamp8(m_reg.start_b());
+	// the area in scaled pixels: native x maps to (x + M) * N; the 4:3 edges reach the margins
+	s32 const x0 = (qx0 <= 0 ? 0 : (qx0 + m) * n), x1 = (qx1 >= m_display_w ? (m_display_w + 2 * m) * n : (qx1 + m) * n);
+	s32 const cl = fbzmode.enable_clipping() ? std::max<s32>(x0, s32(m_reg.clip_left()) <= 0 ? 0 : (m_reg.clip_left() + m) * n) : x0;
+	s32 const cr = fbzmode.enable_clipping() ? std::min<s32>(x1, s32(m_reg.clip_right()) >= m_display_w ? (m_display_w + 2 * m) * n : (m_reg.clip_right() + m) * n) : x1;
+	s32 const yo = (yorigin + 1) * n - 1;
+	m_renderer->wait("blur_quad");
+	for (s32 sy = qy0 * n; sy < qy1 * n; sy++)
+	{
+		if (fbzmode.enable_clipping() && (sy < s32(m_reg.clip_top()) * n || sy >= s32(m_reg.clip_bottom()) * n))
+			continue;
+		s32 const row = fbzmode.y_origin() ? yo - sy : sy;
+		if (row < 0 || row >= rows)
+			continue;
+		voodoo::dither_helper const dither(sy, fbzmode);
+		u16 const *src = &m_blur_frame[size_t(row) * hrow];
+		u16 *dst = &target[size_t(row) * hrow];
+		for (s32 x = cl; x < cr; x++)
+		{
+			rgb_t const s = m_shared->rgb565[src[x]], d = m_shared->rgb565[dst[x]];
+			auto mix = [sa](s32 sc, s32 it, s32 dc) { return std::min(255, ((sc * (it + 1) >> 8) * (sa + 1) + dc * (256 - sa)) >> 8); };
+			dst[x] = dither.pixel(x, mix(s.r(), ir, d.r()), mix(s.g(), ig, d.g()), mix(s.b(), ib, d.b()));
+		}
+	}
+	return true;
+}
+
 // the emulated cost of a scaled or widened draw: that of the native 4:3 picture
 s32 voodoo_1_device::hires_native_pixels(s32 pixels) const
 {
@@ -3210,6 +3282,13 @@ s32 voodoo_1_device::triangle()
 	vert[1].y = float(m_reg.by()) * (1.0f / 16.0f);
 	vert[2].x = float(m_reg.cx()) * (1.0f / 16.0f);
 	vert[2].y = float(m_reg.cy()) * (1.0f / 16.0f);
+
+	// recomp: in widescreen, a quad of Thrill Drive 2's motion blur is drawn by blur_quad over the
+	// whole picture (it then needs no rasterizing)
+	if (m_wide && poly.tex0 != nullptr && !m_blur_tex.empty())
+		if (u16 *target = hires_target(poly.destbase))
+			if (blur_quad(poly, vert, target))
+				return TRIANGLE_SETUP_CLOCKS + 256 * 128;
 
 	// recomp: a displayed colour buffer may be rendered at a higher resolution
 	hires_scale_poly(poly, vert);

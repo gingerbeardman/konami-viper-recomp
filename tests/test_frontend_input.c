@@ -32,6 +32,9 @@ static int menu_calls, last_menu_action;
 void enh_menu_action(int a) { menu_calls++; last_menu_action=a; }
 int enh_name_type(int a) { return a; }
 void enh_name_step(int a) { (void)a; }
+int enh_wheel_select_active(void) { return 0; }
+double enh_wheel_select_pos(void) { return 0; }
+void enh_wheel_select_step(int d) { (void)d; }
 static int pause_calls;
 int enh_escape(void) { pause_calls++; paused = !paused; return 1; }
 void enh_focus_lost(void) { if (!paused && !menu_active) enh_escape(); }

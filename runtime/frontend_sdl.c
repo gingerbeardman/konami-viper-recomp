@@ -10,7 +10,9 @@
  *   E  shift up   Q  shift down   5  coin   1  start   F2  test   9  service
  *   (enhanced mode: test, service and coin are not passed to the game: TEST MODE cannot be
  *   opened, and the game is on free play. In the rankings' name entry the keyboard types the
- *   letters, Backspace deletes, Enter ends, Left/Right and the D-pad step through the letters)
+ *   letters, Backspace deletes, Enter ends, Left/Right and the D-pad step through the letters;
+ *   in the course select (and GTI Club 2's transmission select) Left/Right, A/D, the D-pad
+ *   and the stick step through the choices, and the wheel stays on the chosen one)
  *   Gamepad: left stick = steering, R2/L2 = gas/brake, R1/L1 = shift up/down,
  *            X = handbrake, Start = start, Back = coin
  *   Switch: optional ZL = handbrake; ZR = gas, L/R = shift down/up,
@@ -420,13 +422,14 @@ static void apply_inputs(double dt) {
     hold(&ctl.handbrake, SRC_PAD, pad_active && SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_X));
 
     /* keyboard steering: ramp towards target */
-    double target = !!ctl.steer_right - !!ctl.steer_left;
+    int wsel = enh_wheel_select_active();   /* a wheel select steers the wheel to the chosen entry */
+    double target = wsel ? enh_wheel_select_pos() : !!ctl.steer_right - !!ctl.steer_left;
     double speed = 4.0 * SDL_min(dt, 0.05);
     if (ctl.steer < target) ctl.steer = SDL_min(target, ctl.steer + speed);
     else if (ctl.steer > target) ctl.steer = SDL_max(target, ctl.steer - speed);
     double steer = ctl.steer;
     double tilt = gyro_steering(dt);
-    if (tilt != 0 && !ctl.steer_left && !ctl.steer_right) steer = tilt;
+    if (tilt != 0 && !ctl.steer_left && !ctl.steer_right && !wsel) steer = tilt;
     /* Take the strongest pedal source: a slightly pressed trigger must not reduce a
      * fully held key/button. Right-stick Y supplies proportional pedals on Switch Pro. */
     double gas = ctl.gas ? 1.0 : 0.0, brake = ctl.brake ? 1.0 : 0.0;
@@ -434,7 +437,7 @@ static void apply_inputs(double dt) {
     if (g_pad && g_input_focus) {
         double stick = controller_axis(SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_LEFTX),
                                        g_stick_deadzone, g_stick_curve);
-        if (stick != 0) steer = stick;
+        if (stick != 0 && !wsel) steer = stick;
         double pedals = controller_axis(SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_RIGHTY),
                                         g_stick_deadzone, 1.0);
         double left_trigger = controller_trigger(
@@ -751,8 +754,14 @@ int frontend_run(int scale) {
                     SDL_SetWindowFullscreen(win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
                     enh_set_fullscreen(!fs);    /* enhanced mode: remembered in the settings */
                     fs_applied = !fs;
-                } else if (!(enh_name_entry_active() && !enh_paused() && name_key(ev.key.keysym.sym)))
+                } else if (!(enh_name_entry_active() && !enh_paused() && name_key(ev.key.keysym.sym))) {
+                    if (!ev.key.repeat && !enh_paused() && enh_wheel_select_active()) {
+                        SDL_Keycode k = ev.key.keysym.sym;
+                        if (k == SDLK_LEFT || k == SDLK_a) enh_wheel_select_step(-1);
+                        else if (k == SDLK_RIGHT || k == SDLK_d) enh_wheel_select_step(1);
+                    }
                     key(ev.key.keysym.sym, 1);
+                }
                 break;
             case SDL_KEYUP: key(ev.key.keysym.sym, 0); break;
             case SDL_TEXTINPUT:
@@ -762,6 +771,15 @@ int frontend_run(int scale) {
             case SDL_CONTROLLERDEVICEADDED: open_pad(); break;
             case SDL_CONTROLLERDEVICEREMOVED:
                 if (pad_matches(ev.cdevice.which)) { close_pad(); open_pad(); }
+                break;
+            case SDL_CONTROLLERAXISMOTION:
+                if (ev.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX && pad_matches(ev.caxis.which)) {
+                    /* wheel selects: pushing the stick to one side steps once (steering is polled) */
+                    static int zone;
+                    int z = ev.caxis.value < -16000 ? -1 : ev.caxis.value > 16000 ? 1 : 0;
+                    if (z && z != zone && !enh_paused()) enh_wheel_select_step(z);
+                    zone = z;
+                }
                 break;
             case SDL_CONTROLLERBUTTONDOWN:
                 if (pad_matches(ev.cbutton.which)) g_menu_repeat_button = -1;
@@ -819,6 +837,9 @@ int frontend_run(int scale) {
                 else if (enh_name_entry_active() && !enh_paused() && (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ||
                                                                        ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT))
                     enh_name_step(ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? -1 : 1);
+                else if (enh_wheel_select_active() && !enh_paused() && (ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ||
+                                                                          ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT))
+                    enh_wheel_select_step(ev.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? -1 : 1);
                 else pad_button(ev.cbutton.button, 1);
                 break;
             case SDL_MOUSEBUTTONDOWN:
