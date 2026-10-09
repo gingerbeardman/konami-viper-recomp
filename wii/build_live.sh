@@ -471,7 +471,10 @@ case "${WII_LIVE_SS_BOX:-}" in
     [0-9]*x[0-9]*) flags="$flags -DVIPER_WII_SS_BOX_W=${WII_LIVE_SS_BOX%x*} -DVIPER_WII_SS_BOX_H=${WII_LIVE_SS_BOX#*x}"; output="$output/ssb${WII_LIVE_SS_BOX%x*}" ;;
     *) echo 'WII_LIVE_SS_BOX must be WxH' >&2; exit 2 ;;
 esac
-case "${WII_LIVE_NATIVE_RES:-1}" in
+# Off by default since 2026-10-09: SUPER then renders 1280x960, an exact 2x
+# of the 640x480 output (box-filtered 2:1), chosen on hardware over native's
+# 1024x768 (1.6x) and 960x720 (1.5x); no slower on the scripted race.
+case "${WII_LIVE_NATIVE_RES:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_NATIVE_RES"; output="$output-native" ;;
     *) echo 'WII_LIVE_NATIVE_RES must be 0 or 1' >&2; exit 2 ;;
