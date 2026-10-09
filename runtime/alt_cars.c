@@ -66,7 +66,7 @@ static const struct { int tcar; const char *name, *rsec; int sec, count, body, m
 };
 /* The cars' shadows are flat quads in the EFFECTS section (id 7, 199 models): <car>_shadow under
  * the player's car and R<car>_shadow under the rivals (the indices above). At boot the section gets
- * a copy of both for each alternate, resized to its footprint: models 199 + 2 * car (+1 rival). */
+ * both for each alternate, the Mini's resized to its footprint: models 199 + 2 * car (+1 rival). */
 #define SEC_EFFECTS 7
 #define EFFECTS_COUNT 199
 #define N_CARS ((int)(sizeof k_cars / sizeof k_cars[0]))
@@ -381,8 +381,9 @@ static void swap_player(int sec, int tcar, uint32_t dest, const char *name) {
     free(l.bytes);
 }
 
-/* EFFECTS, at boot: the alternates' shadows (see k_cars), copies of the base car's quads stretched
- * to the alternate's footprint, the way the game sizes each car's own */
+/* EFFECTS, at boot: the alternates' shadows (see k_cars). A shadow quad is textured with a blurred
+ * silhouette of its car, so every alternate gets the Mini's, the boxiest, stretched to its
+ * footprint (the Super 7's would show its fenders around the Beetle). */
 static void add_alt_shadows(uint32_t dest) {
     Loaded l;
     if (!load_container(&l, dest)) return;
@@ -396,7 +397,7 @@ static void add_alt_shadows(uint32_t dest) {
         tcar_model(k_cars[car].tcar, &car_off, &car_size);
         Extent nb = model_extent(g_tcar + car_off);
         for (int r = 0; r < 2; r++) {
-            int src = r ? k_cars[car].rshadow : k_cars[car].shadow, i = EFFECTS_COUNT + 2 * car + r;
+            int src = r ? k_cars[0].rshadow : k_cars[0].shadow, i = EFFECTS_COUNT + 2 * car + r;
             uint8_t *q = quads + 256 * (2 * car + r);
             if (l.size[src] > 256) { free(quads); free(l.bytes); return; }
             memcpy(q, l.bytes + l.at[src], l.size[src]);
