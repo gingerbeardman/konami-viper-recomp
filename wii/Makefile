@@ -264,6 +264,17 @@ $(OUT)/tilt_probe.elf: $(OUT)/tilt_probe.o
 $(OUT)/tilt_probe.dol: $(OUT)/tilt_probe.elf
 	elf2dol $< $@
 
+# Wii Remote rumble tester (wii/rumble_tester.c): PWM patterns for tuning on hardware.
+.PHONY: rumble-tester
+rumble-tester: $(OUT)/rumble_tester.dol
+$(OUT)/rumble_tester.o: wii/rumble_tester.c
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+$(OUT)/rumble_tester.elf: $(OUT)/rumble_tester.o
+	$(CC) $(MACHDEP) -Wl,--gc-sections -L$(LIBOGC_LIB) $^ -lwiiuse -lbte $(LIBS) -o $@
+$(OUT)/rumble_tester.dol: $(OUT)/rumble_tester.elf
+	elf2dol $< $@
+
 # Remote SD card helper (wii/sd_tool.c, driven by wii/sd_remote.py).
 .PHONY: sd-tool
 sd-tool: build/wii/sd_tool/sd_tool.dol
