@@ -13,7 +13,9 @@
  * Hold the remote upright. UP/DOWN pick a row, LEFT/RIGHT change it, A plays
  * or stops the selected kind, B plays all kinds in turn (2 s each), 1 resets
  * every kind to what the game build uses (light shakes 1 of 8, heavy shakes
- * 2 of 6, steering pull fully on above its torque threshold), HOME
+ * 2 of 6, steering pull fully on above its torque threshold), 2 maps the
+ * game's own torque straight to power (on-time = torque / 15 of the period,
+ * averaged over the kind's command pattern), HOME
  * saves the settings to sd:/viper/rumble_settings.txt and returns to the
  * Homebrew Channel. The screen counts rumble commands per second (each is a
  * Bluetooth packet). */
@@ -31,7 +33,24 @@ static const unsigned k_cycle[N_KINDS] = { 0, 120, 90, 120, 0, 0 };
  * heavy shakes (car rubs, big bumps) 2 of 6, steering pull fully on; tuned on hardware */
 static const int k_game_period[N_KINDS] = { 8, 6, 8, 6, 1, 1 };
 static const int k_game_on[N_KINDS] = { 1, 2, 1, 2, 1, 1 };
+/* the game's torque mapped directly: each kind's motor commands (torque 0-15) averaged over its
+ * pattern, as on-time = period * torque / 15, with the period matching the command rhythm.
+ * cobbles 0xa0/0x89 every 4 frames: 0 and 9; car rub 0x8a 0x80 0x9a 0x80: 10, 0, 10, 0;
+ * wall scrape 0xa0 0x88 0x89: 0, 8, 9; big bump and steering pull are not one fixed pattern,
+ * so they take the heavy shake threshold (10) and the steady-pull threshold (6) */
+static const int k_torque_pattern[N_KINDS][4] = { { 0, 9 }, { 10, 0, 10, 0 }, { 0, 8, 9 }, { 10 }, { 6 }, { 15 } };
+static const int k_torque_len[N_KINDS] = { 2, 4, 3, 1, 1, 1 };
+static const int k_torque_period[N_KINDS] = { 8, 6, 6, 6, 5, 1 };
 static int period[N_KINDS], on[N_KINDS];
+
+static void set_game_torque(void) {
+    for (int k = 0; k < N_KINDS; k++) {
+        int sum = 0;
+        for (int i = 0; i < k_torque_len[k]; i++) sum += k_torque_pattern[k][i];
+        period[k] = k_torque_period[k];
+        on[k] = (2 * period[k] * sum + 15 * k_torque_len[k]) / (30 * k_torque_len[k]);   /* rounded */
+    }
+}
 enum { ROW_KIND, ROW_PERIOD, ROW_ON, N_ROWS };
 
 static int motor;
@@ -90,6 +109,7 @@ int main(void) {
         if (down & WPAD_BUTTON_B) { playing = tour = 1; kind = 0; started = frame; }
         if (down & WPAD_BUTTON_1)
             for (int k = 0; k < N_KINDS; k++) { period[k] = k_game_period[k]; on[k] = k_game_on[k]; }
+        if (down & WPAD_BUTTON_2) set_game_torque();
         if (tour && frame - started >= 120) {
             kind++;
             started = frame;
@@ -105,7 +125,7 @@ int main(void) {
         printf("\x1b[2;0H");
         printf("  WII REMOTE RUMBLE POWER                HOME: save and quit\n\n");
         printf("  UP/DOWN row  LEFT/RIGHT change  A play/stop  B play all\n");
-        printf("  1 game defaults\n\n");
+        printf("  1 port defaults  2 game torque (direct)\n\n");
         printf("  %c KIND    %-12s\n", row == ROW_KIND ? '>' : ' ', k_kinds[kind]);
         printf("  %c PERIOD  %2d frames (%5.1f Hz)   \n", row == ROW_PERIOD ? '>' : ' ', period[kind], 60.0 / period[kind]);
         printf("  %c ON      %2d frames (%3d%% power)   \n\n", row == ROW_ON ? '>' : ' ', on[kind], on[kind] * 100 / period[kind]);
