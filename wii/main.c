@@ -332,7 +332,11 @@ static void stray_tick(void *arg){
 int32_t wii_pace_trace_max;unsigned wii_pace_trace_resyncs;
 static char pace_text[64*1024];static unsigned pace_len;
 static void pace_trace(void){
+#ifdef VIPER_WII_AUDIO
     extern volatile unsigned wii_audio_underruns,wii_audio_skips;
+#else
+    static unsigned wii_audio_underruns,wii_audio_skips;   /* no sound in this build */
+#endif
     extern unsigned long long hw_cf_sectors,hw_cf_host_reads;
     static uint64_t last;static unsigned last_under,last_skip;static unsigned long long last_sect,last_reads;
     uint64_t now=gettime();unsigned g=(unsigned)(rt_now()/CPU_HZ);
@@ -442,9 +446,9 @@ static void progress(void *arg){
         (unsigned long long)gx.depth_upload_us,(unsigned long long)gx.color_upload_us);
     rt_log("VIPER WII GX CACHE hits=%llu misses=%llu\n",
         (unsigned long long)gx.color_cache_hits,(unsigned long long)gx.color_cache_misses);
-    rt_log("VIPER WII GX CACHE MEMORY bytes=%llu peak=%llu evictions=%llu\n",
+    rt_log("VIPER WII GX CACHE MEMORY bytes=%llu peak=%llu evictions=%llu heap_evictions=%llu\n",
         (unsigned long long)gx.color_cache_bytes,(unsigned long long)gx.color_cache_peak_bytes,
-        (unsigned long long)gx.color_cache_evictions);
+        (unsigned long long)gx.color_cache_evictions,(unsigned long long)gx.color_cache_heap_evictions);
 #ifdef VIPER_WII_GX_PLANE_PROFILE
     for(unsigned i=0;i<3;i++)rt_log("VIPER WII GX PLANE kind=%u calls=%llu us=%llu\n",
         i,(unsigned long long)gx.plane_calls[i],(unsigned long long)gx.plane_us[i]);

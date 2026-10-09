@@ -1007,7 +1007,20 @@ WII_HOT_bind_flat_texture static void bind_flat_texture(const WiiVoodooView *v,u
             discard_texture_slot(victim);profile.color_cache_evictions++;
         }
         texture_slot_images[slot]=memalign(32,image_bytes);
-        if(!texture_slot_images[slot])rt_fatal("GX resident texture allocation");
+#ifdef VIPER_WII_TEST_TEXTURE_OOM
+        {static unsigned n;if(!(++n%20)){free(texture_slot_images[slot]);texture_slot_images[slot]=NULL;}}   /* exercise the retry */
+#endif
+        /* The heap can run short (or too fragmented for this size) before the
+         * byte budget does, after a long session of varied textures: free
+         * more cached images and retry before giving up. */
+        while(!texture_slot_images[slot]){
+            unsigned victim=wii_texture_cache_victim(texture_cache,COLOR_CACHE_SLOTS,texture_victim,texture_pinned,1);
+            if(victim==COLOR_CACHE_SLOTS)rt_fatal("GX resident texture allocation");
+            texture_victim=(victim+1)%COLOR_CACHE_SLOTS;
+            if(!fenced){gx_wait(2);fenced=1;}
+            discard_texture_slot(victim);profile.color_cache_evictions++;profile.color_cache_heap_evictions++;
+            texture_slot_images[slot]=memalign(32,image_bytes);
+        }
         texture_slot_bytes[slot]=image_bytes;texture_resident_bytes+=image_bytes;
         profile.color_cache_bytes=texture_resident_bytes;
         if(profile.color_cache_bytes>profile.color_cache_peak_bytes)profile.color_cache_peak_bytes=profile.color_cache_bytes;

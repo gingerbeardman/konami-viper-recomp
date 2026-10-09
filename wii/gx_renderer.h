@@ -17,7 +17,7 @@ typedef struct {
     uint64_t split_depth_draws,lookup_plane_reuses;
     uint64_t tmu_pipeline_draws,dual_texture_draws;
     uint64_t color_cache_hits,color_cache_misses;
-    uint64_t color_cache_bytes,color_cache_peak_bytes,color_cache_evictions;
+    uint64_t color_cache_bytes,color_cache_peak_bytes,color_cache_evictions,color_cache_heap_evictions;
     uint64_t texture_sources,texture_source_bytes,texture_source_updates,texture_palette_updates,texture_trace_overflow;
     uint64_t plane_us[3],plane_calls[3];
     uint64_t setup_us[5],setup_calls[5];
