@@ -271,7 +271,7 @@ $(OUT)/rumble_tester.o: wii/rumble_tester.c
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -Werror -c $< -o $@
 $(OUT)/rumble_tester.elf: $(OUT)/rumble_tester.o
-	$(CC) $(MACHDEP) -Wl,--gc-sections -L$(LIBOGC_LIB) $^ -lwiiuse -lbte $(LIBS) -o $@
+	$(CC) $(MACHDEP) -Wl,--gc-sections -L$(LIBOGC_LIB) $^ -lwiiuse -lbte -lfat $(LIBS) -o $@
 $(OUT)/rumble_tester.dol: $(OUT)/rumble_tester.elf
 	elf2dol $< $@
 

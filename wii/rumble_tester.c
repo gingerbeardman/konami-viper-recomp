@@ -2,33 +2,52 @@
  * The remote's motor is on/off only (one bit in every output report), so
  * strength has to come from timing: software PWM, the motor switched on for
  * ON frames out of every PERIOD frames (60 per second).
- * Hold the remote upright. UP/DOWN pick a row, LEFT/RIGHT change it, A starts
- * or stops the pattern, B fires a bump, HOME returns to the Homebrew Channel.
- * Patterns:
- *   CONTINUOUS   motor on
- *   PWM          ON of every PERIOD frames
- *   COBBLES OLD  the game's cobble shake (motor commands 0xa0 and 0x89
- *                alternating every 4 frames) through the port's current rule:
- *                on at torque 6+, at most one change per 6 frames
- *   COBBLES PWM  the same commands, played as PWM while they keep coming
- *   BUMP         B: one burst of BUMP frames
- * The screen counts rumble commands per second: each is a Bluetooth packet. */
+ * Each kind of rumble the game asks for has its own PERIOD and ON, and plays
+ * in the rhythm the game uses for it (logged from the cabinet motor):
+ *   COBBLES      rough surfaces: continuous while on them
+ *   CAR RUB      contact with another car: 1 s episodes
+ *   WALL SCRAPE  grinding along a wall: 0.3 s bursts
+ *   BIG BUMP     kerbs, hard edges, impacts: 0.25 s bursts
+ *   STEER PULL   the wheel's steady pull through corners: continuous
+ *   FULL ON      the motor on, for reference
+ * Hold the remote upright. UP/DOWN pick a row, LEFT/RIGHT change it, A plays
+ * or stops the selected kind, B plays all kinds in turn (2 s each), HOME
+ * saves the settings to sd:/viper/rumble_settings.txt and returns to the
+ * Homebrew Channel. The screen counts rumble commands per second (each is a
+ * Bluetooth packet). */
 #include <gccore.h>
 #include <wiiuse/wpad.h>
+#include <fat.h>
 #include <stdio.h>
 
-enum { CONTINUOUS, PWM, COBBLES_OLD, COBBLES_PWM, BUMP_ONLY, N_MODES };
-static const char *const k_modes[N_MODES] = { "CONTINUOUS", "PWM", "COBBLES OLD", "COBBLES PWM", "BUMP ONLY" };
-enum { ROW_MODE, ROW_PERIOD, ROW_ON, ROW_BUMP, N_ROWS };
+enum { COBBLES, CAR_RUB, WALL_SCRAPE, BIG_BUMP, STEER_PULL, FULL_ON, N_KINDS };
+static const char *const k_kinds[N_KINDS] = { "COBBLES", "CAR RUB", "WALL SCRAPE", "BIG BUMP", "STEER PULL", "FULL ON" };
+/* the game's rhythm: active for ACTIVE frames out of every CYCLE (0 = continuous) */
+static const unsigned k_active[N_KINDS] = { 0, 60, 18, 15, 0, 0 };
+static const unsigned k_cycle[N_KINDS] = { 0, 120, 90, 120, 0, 0 };
+/* starting points: 1 of 8 for cobbles and 2 of 6 for bumps felt right on hardware */
+static int period[N_KINDS] = { 8, 6, 6, 6, 8, 1 };
+static int on[N_KINDS] = { 1, 2, 1, 2, 1, 1 };
+enum { ROW_KIND, ROW_PERIOD, ROW_ON, N_ROWS };
 
-static int motor;              /* what the remote was last told */
+static int motor;
 static unsigned sends, sends_shown;
 
-static void set_motor(int on) {
-    if (on == motor) return;
-    WPAD_Rumble(WPAD_CHAN_0, on);
-    motor = on;
+static void set_motor(int value) {
+    if (value == motor) return;
+    WPAD_Rumble(WPAD_CHAN_0, value);
+    motor = value;
     sends++;
+}
+
+static void save(void) {
+    if (!fatInitDefault()) return;
+    FILE *f = fopen("sd:/viper/rumble_settings.txt", "w");
+    if (!f) return;
+    fprintf(f, "# kind period on (60 Hz frames: motor on for ON of every PERIOD)\n");
+    for (int k = 0; k < N_KINDS; k++) fprintf(f, "%s %d %d\n", k_kinds[k], period[k], on[k]);
+    fclose(f);
+    fatUnmount("sd:");
 }
 
 int main(void) {
@@ -44,9 +63,8 @@ int main(void) {
     VIDEO_Flush();
     VIDEO_WaitVSync();
 
-    int row = 0, mode_i = COBBLES_PWM, period = 6, on = 1, bump = 6, running = 0;
-    unsigned frame = 0, bump_left = 0, old_hold = 0;
-    int old_on = 0;
+    int row = 0, kind = COBBLES, playing = 0, tour = 0;
+    unsigned frame = 0, started = 0;
     for (;; frame++) {
         WPAD_ScanPads();
         u32 type;
@@ -57,49 +75,42 @@ int main(void) {
         if (down & WPAD_BUTTON_DOWN) row = (row + 1) % N_ROWS;
         int step = (down & WPAD_BUTTON_RIGHT) ? 1 : (down & WPAD_BUTTON_LEFT) ? -1 : 0;
         if (step) {
-            if (row == ROW_MODE) mode_i = (mode_i + N_MODES + step) % N_MODES;
-            if (row == ROW_PERIOD) { period += step; if (period < 1) period = 1; if (period > 60) period = 60; }
-            if (row == ROW_ON) on += step;
-            if (row == ROW_BUMP) { bump += step; if (bump < 1) bump = 1; if (bump > 60) bump = 60; }
+            if (row == ROW_KIND) { kind = (kind + N_KINDS + step) % N_KINDS; started = frame; }
+            if (row == ROW_PERIOD) { period[kind] += step; if (period[kind] < 1) period[kind] = 1; if (period[kind] > 30) period[kind] = 30; }
+            if (row == ROW_ON) on[kind] += step;
         }
-        if (on < 0) on = 0;
-        if (on > period) on = period;
-        if (down & WPAD_BUTTON_A) running = !running;
-        if (down & WPAD_BUTTON_B) bump_left = (unsigned)bump;
+        if (on[kind] < 0) on[kind] = 0;
+        if (on[kind] > period[kind]) on[kind] = period[kind];
+        if (down & WPAD_BUTTON_A) { playing = !playing; tour = 0; started = frame; }
+        if (down & WPAD_BUTTON_B) { playing = tour = 1; kind = 0; started = frame; }
+        if (tour && frame - started >= 120) {
+            kind++;
+            started = frame;
+            if (kind >= N_KINDS) { kind = 0; playing = tour = 0; }
+        }
 
-        /* the game's cobble commands: torque 0 (shake bit) and torque 9, every 4 frames */
-        int cmd_torque = (frame / 4) & 1 ? 9 : 0;
-        int want = 0;
-        if (running) switch (mode_i) {
-        case CONTINUOUS: want = 1; break;
-        case PWM: want = (int)(frame % (unsigned)period) < on; break;
-        case COBBLES_OLD:
-            if (old_hold) old_hold--;
-            else if ((cmd_torque >= 6) != old_on) { old_on = cmd_torque >= 6; old_hold = 6; }
-            want = old_on;
-            break;
-        case COBBLES_PWM: want = (int)(frame % (unsigned)period) < on; break;
-        default: break;
-        }
-        if (bump_left) { want = 1; bump_left--; }
+        unsigned t = frame - started;
+        int active = playing && (!k_cycle[kind] || t % k_cycle[kind] < k_active[kind]);
+        int want = active && (int)(t % (unsigned)period[kind]) < on[kind];
         if (connected) set_motor(want);
         if (frame % 60 == 0) { sends_shown = sends; sends = 0; }
 
         printf("\x1b[2;0H");
-        printf("  WII REMOTE RUMBLE TESTER        HOME: back to HBC\n\n");
-        printf("  UP/DOWN row   LEFT/RIGHT change   A start/stop   B bump\n\n");
-        printf("  %c MODE    %-14s\n", row == ROW_MODE ? '>' : ' ', k_modes[mode_i]);
-        printf("  %c PERIOD  %2d frames (%5.1f Hz)   \n", row == ROW_PERIOD ? '>' : ' ', period, 60.0 / period);
-        printf("  %c ON      %2d frames (%3d%% duty)   \n", row == ROW_ON ? '>' : ' ', on, period ? on * 100 / period : 0);
-        printf("  %c BUMP    %2d frames (%4d ms)   \n\n", row == ROW_BUMP ? '>' : ' ', bump, bump * 1000 / 60);
-        printf("  %-8s  motor %-3s  %3u commands/s  remote %-12s\n", running ? "RUNNING" : "stopped",
+        printf("  WII REMOTE RUMBLE POWER                HOME: save and quit\n\n");
+        printf("  UP/DOWN row  LEFT/RIGHT change  A play/stop  B play all\n\n");
+        printf("  %c KIND    %-12s\n", row == ROW_KIND ? '>' : ' ', k_kinds[kind]);
+        printf("  %c PERIOD  %2d frames (%5.1f Hz)   \n", row == ROW_PERIOD ? '>' : ' ', period[kind], 60.0 / period[kind]);
+        printf("  %c ON      %2d frames (%3d%% power)   \n\n", row == ROW_ON ? '>' : ' ', on[kind], on[kind] * 100 / period[kind]);
+        printf("  %-12s motor %-3s  %3u commands/s  remote %-10s\n\n", playing ? (tour ? "PLAYING ALL" : "PLAYING") : "stopped",
                motor ? "ON" : "off", sends_shown, connected ? "connected" : "not found");
-        printf("\n  PERIOD and ON apply to PWM and COBBLES PWM.\n");
-        printf("  COBBLES OLD is the port's current rule, for comparison.\n");
+        for (int k = 0; k < N_KINDS; k++)
+            printf("  %c %-12s %2d of %2d  (%3d%%)   \n", k == kind ? '*' : ' ', k_kinds[k], on[k], period[k], on[k] * 100 / period[k]);
         VIDEO_WaitVSync();
     }
     set_motor(0);
     WPAD_Shutdown();
+    printf("\n  saving settings...\n");
+    save();
     /* Blank before handing back: the loader's framebuffer is not cleared, so
      * the old buffer would flash as static while it starts. */
     VIDEO_SetBlack(TRUE);
