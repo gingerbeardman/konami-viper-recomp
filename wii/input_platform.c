@@ -37,19 +37,58 @@ void wii_input_init(void){
 }
 /* Wii Remote rumble from the cabinet's K-type steering motor (bit 7 drive,
  * bits 0-3 torque). The remote's motor is on/off and every change is a
- * Bluetooth command, so: on while the drive is strong enough, at most one
- * change per 100 ms (6 polls), never during the first 10 s after boot (the
- * game's own motor test), and only with a remote connected. */
+ * Bluetooth command, and nothing happens during the first 10 s after boot
+ * (the game's own motor test) or without a remote.
+ * The game shakes the wheel over rough surfaces and impacts: commands with
+ * bit 5 set alternating with torque (cobbles: 0xa0 and 0x89 about 14 times a
+ * second), or torque flipping direction (bit 4) between commands. A shake
+ * plays as software PWM, on for VIPER_WII_RUMBLE_SHAKE_ON of every
+ * VIPER_WII_RUMBLE_SHAKE_PERIOD polls (60 Hz): 1 of 6 felt right for cobbles on
+ * hardware (wii/rumble_tester.c); shakes at torque 10+ (big bumps, impacts)
+ * use twice the on-time. It lasts SHAKE_HOLD polls past the last one.
+ * Otherwise the motor is on while the drive is strong enough, with at most
+ * one change per 100 ms (6 polls). */
 #ifndef VIPER_WII_RUMBLE_MIN_TORQUE
 #define VIPER_WII_RUMBLE_MIN_TORQUE 6
 #endif
+#ifndef VIPER_WII_RUMBLE_SHAKE_PERIOD
+#define VIPER_WII_RUMBLE_SHAKE_PERIOD 6
+#endif
+#ifndef VIPER_WII_RUMBLE_SHAKE_ON
+#define VIPER_WII_RUMBLE_SHAKE_ON 1
+#endif
+#define SHAKE_HOLD 7
 extern volatile uint8_t wii_motor;
 static int rumble_on;static unsigned rumble_hold;
+static uint8_t shake_prev;static unsigned shake_left,shake_level,shake_phase;
+static unsigned shake_level_of(uint8_t prev,uint8_t m){
+    unsigned level=(m&15)>(prev&15)?(m&15):(prev&15);
+    if(!(m&0x80))return 0;
+    if(m&0x20)return level?level:8;
+    if((prev&0x80)&&(prev&15)&&(m&15)&&((prev^m)&0x10))return level;
+    return 0;
+}
+static void rumble_set(int want){
+    if(want!=rumble_on&&remote_enabled){WPAD_Rumble(WPAD_CHAN_0,want);rumble_on=want;}
+}
 static void rumble_update(int connected){
     uint8_t m=wii_motor;
-    int want=connected&&poll_count>600&&(m&0x80)&&(m&15)>=VIPER_WII_RUMBLE_MIN_TORQUE;
+    if(m!=shake_prev){
+        unsigned level=shake_level_of(shake_prev,m);
+        if(level){shake_level=level;if(!shake_left)shake_phase=0;shake_left=SHAKE_HOLD;}
+        shake_prev=m;
+    }
+    if(!connected||poll_count<=600){if(connected)rumble_set(0);shake_left=0;return;}
+    if(shake_left){
+        shake_left--;
+        unsigned on=VIPER_WII_RUMBLE_SHAKE_ON*(shake_level>=10?2:1);
+        rumble_set(shake_phase++%VIPER_WII_RUMBLE_SHAKE_PERIOD<on);
+        rumble_hold=0;
+        return;
+    }
+    int want=(m&0x80)&&(m&15)>=VIPER_WII_RUMBLE_MIN_TORQUE;
     if(rumble_hold){rumble_hold--;return;}
-    if(want!=rumble_on&&remote_enabled&&connected){WPAD_Rumble(WPAD_CHAN_0,want);rumble_on=want;rumble_hold=6;}
+    if(want!=rumble_on){rumble_set(want);rumble_hold=6;}
 }
 void wii_input_shutdown(void){
     if(initialized&&remote_enabled){if(rumble_on)WPAD_Rumble(WPAD_CHAN_0,0);WPAD_Shutdown();}
