@@ -36,6 +36,7 @@ int main(void) {
     WPAD_Init();
     GXRModeObj *mode = VIDEO_GetPreferredMode(NULL);
     void *xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(mode));
+    VIDEO_ClearFrameBuffer(mode, xfb, COLOR_BLACK);
     console_init(xfb, 20, 20, mode->fbWidth, mode->xfbHeight, mode->fbWidth * VI_DISPLAY_PIX_SZ);
     VIDEO_Configure(mode);
     VIDEO_SetNextFramebuffer(xfb);
@@ -99,5 +100,11 @@ int main(void) {
     }
     set_motor(0);
     WPAD_Shutdown();
+    /* Blank before handing back: the loader's framebuffer is not cleared, so
+     * the old buffer would flash as static while it starts. */
+    VIDEO_SetBlack(TRUE);
+    VIDEO_Flush();
+    VIDEO_WaitVSync();
+    VIDEO_WaitVSync();
     return 0;
 }
