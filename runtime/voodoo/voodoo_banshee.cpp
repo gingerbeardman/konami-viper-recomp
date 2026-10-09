@@ -1569,9 +1569,11 @@ void voodoo_banshee_device::execute_blit(u32 data)
 			break;
 
 		case 1:         // Screen-to-screen blit
-			// TODO
-			if (LOG_BANSHEE_2D)
-				logerror("   blit_2d:screen_to_screen: src X %d, src Y %d\n", data & 0xfff, (data >> 16) & 0xfff);
+			// recomp: implemented (MAME leaves it as a TODO). Thrill Drive 2 copies each finished
+			// frame, one line per launch, into four textures it then blends over the next frame:
+			// the motion blur of its attract mode and crashes. Without the copy those textures
+			// held stale VRAM, drawn as multicoloured noise.
+			screen_to_screen_blit(BIT(data, 0, 12), BIT(data, 16, 12));
 			break;
 
 		case 2:         // Screen-to-screen stretch blit
@@ -1640,6 +1642,133 @@ void voodoo_banshee_device::execute_blit(u32 data)
 		default:
 			fatalerror("%s: Unsupported 2D unknown command %d", tag(), m_blt_cmd);
 	}
+}
+
+
+//-------------------------------------------------
+//  screen_to_screen_blit -- recomp: copy a
+//  rectangle within VRAM (2D command 1)
+//
+//  The launch data gives the source corner; dstXY and dstSize the destination. A tiled
+//  surface (bit 31 of its base address) has its stride in 128-byte tiles; the 3D side stores
+//  tiled colour buffers linearly with that stride (reg_colbufstride_w), so the copy reads them
+//  linearly too. The ROP combines source and destination (the pattern is taken as 0), the
+//  destination is clipped to clip0 or clip1, and INC_X_START / INC_Y_START advance dstXY by the
+//  size, as a line-by-line copy needs. A source that is a displayed colour buffer with a
+//  scaled render target (enhanced mode: resolution, widescreen) is read from that target, one
+//  sample per native pixel (the top-left one, which matches the native value), so the copy is
+//  the same at every scale.
+//-------------------------------------------------
+
+void voodoo_banshee_device::screen_to_screen_blit(u32 srcx, u32 srcy)
+{
+	static u8 const s_format_bpp[16] = { 1,1,1,2,3,4,1,1,2,2,1,1,1,1,1,1 };
+	u32 const cmd = m_2d_regs.read(banshee_2d_regs::command);
+	u32 const srcaddr = m_2d_regs.read(banshee_2d_regs::srcBaseAddr), dstaddr = m_2d_regs.read(banshee_2d_regs::dstBaseAddr);
+	u32 const srcfmt = m_2d_regs.read(banshee_2d_regs::srcFormat), dstfmt = m_2d_regs.read(banshee_2d_regs::dstFormat);
+	u32 const srcbase = BIT(srcaddr, 0, 24), dstbase = BIT(dstaddr, 0, 24);
+	u32 const srcstride = BIT(srcaddr, 31) ? BIT(srcfmt, 0, 7) * 128 : BIT(srcfmt, 0, 14);
+	u32 const dststride = BIT(dstaddr, 31) ? BIT(dstfmt, 0, 7) * 128 : BIT(dstfmt, 0, 14);
+	u32 const bpp = s_format_bpp[BIT(dstfmt, 16, 3)];
+	s32 const w = m_blt_dst_width, h = m_blt_dst_height;
+	u8 const rop = BIT(cmd, 24, 8);
+	if (s_format_bpp[BIT(srcfmt, 16, 4)] != bpp || w <= 0 || h <= 0)
+	{
+		logerror("blit_2d:screen_to_screen: unsupported (src format %08x, dst format %08x, %dx%d)\n", srcfmt, dstfmt, w, h);
+		return;
+	}
+	m_renderer->wait("screen_to_screen_blit");
+
+	// the rectangles: with a negative direction the coordinates are the right/bottom edge
+	s32 const dx = BIT(cmd, 14) ? -1 : 1, dy = BIT(cmd, 15) ? -1 : 1;
+	s32 const sx0 = dx > 0 ? s32(srcx) : s32(srcx) - w + 1, sy0 = dy > 0 ? s32(srcy) : s32(srcy) - h + 1;
+	s32 const tx0 = dx > 0 ? s32(m_blt_dst_x) : s32(m_blt_dst_x) - w + 1, ty0 = dy > 0 ? s32(m_blt_dst_y) : s32(m_blt_dst_y) - h + 1;
+	u32 const clipmin = m_2d_regs.read(BIT(cmd, 23) ? banshee_2d_regs::clip1Min : banshee_2d_regs::clip0Min);
+	u32 const clipmax = m_2d_regs.read(BIT(cmd, 23) ? banshee_2d_regs::clip1Max : banshee_2d_regs::clip0Max);
+	s32 const cx0 = BIT(clipmin, 0, 12), cy0 = BIT(clipmin, 16, 12), cx1 = BIT(clipmax, 0, 12), cy1 = BIT(clipmax, 16, 12);
+
+	// a scaled render target holding the source, if any
+	u16 const *hires = nullptr;
+	s32 hrow = 0, hrows = 0, n = m_hires_scale;
+	if (bpp == 2 && (m_hires_scale > 1 || m_wide))
+	{
+		auto it = m_hires.find(srcbase);
+		if (it != m_hires.end() && !it->second.empty())
+		{
+			hrow = s32(srcstride / 2 + 2 * m_wide) * n;
+			hrows = s32(it->second.size() / hrow);
+			hires = it->second.data();
+		}
+	}
+
+	// widescreen: keep this part of the source at full resolution (the margins too, at the 4:3
+	// edges) and which source row each texture row holds, for blur_quad
+	if (hires && m_wide)
+	{
+		if (m_blur_frame.size() != size_t(hrow) * hrows) m_blur_frame.assign(size_t(hrow) * hrows, 0);
+		s32 const c0 = sx0 <= 0 ? 0 : (sx0 + m_wide) * n, c1 = sx0 + w >= m_display_w ? hrow : (sx0 + w + m_wide) * n;
+		for (s32 y = 0; y < h; y++)
+			for (s32 k = 0; k < n; k++)
+			{
+				s32 const row = (sy0 + y) * n + k;
+				if (row >= 0 && row < hrows && c1 > c0)
+					memcpy(&m_blur_frame[size_t(row) * hrow + c0], &hires[size_t(row) * hrow + c0], size_t(c1 - c0) * 2);
+			}
+		extern unsigned long long g_voodoo_swaps;
+		auto &bt = m_blur_tex[dstbase];
+		bt.coloffs = sx0 - tx0;
+		for (s32 y = 0; y < h; y++)
+		{
+			s32 const r = ty0 + y;
+			if (r < 0 || r >= 4096) continue;
+			if (bt.srcrow.size() <= size_t(r)) bt.srcrow.resize(r + 1, -1);
+			bt.srcrow[r] = s16(sy0 + y);
+		}
+		bt.filled = g_voodoo_swaps;
+	}
+
+	// the destination clipped, the source corner moved with it
+	s32 const x0 = std::max(tx0, cx0), x1 = std::min(tx0 + w, cx1), y0 = std::max(ty0, cy0), y1 = std::min(ty0 + h, cy1);
+	s32 const sx = sx0 + (x0 - tx0), sy = sy0 + (y0 - ty0), span = (x1 - x0) * s32(bpp);
+	u8 const r0 = BIT(rop, 0) ? 0xff : 0, r1 = BIT(rop, 1) ? 0xff : 0, r2 = BIT(rop, 2) ? 0xff : 0, r3 = BIT(rop, 3) ? 0xff : 0;
+	auto rop3 = [=](u8 sv, u8 dv) -> u8 {      // ROP3 a byte at a time, the pattern at 0
+		return (~sv & ~dv & r0) | (~sv & dv & r1) | (sv & ~dv & r2) | (sv & dv & r3);
+	};
+	s64 const fbsize = s64(m_fbmask) + 1;
+
+	// rows (and bytes) in the direction the command gives, as the hardware: overlapping
+	// rectangles copy right without a temporary buffer
+	for (s32 i = 0; i < y1 - y0 && span > 0; i++)
+	{
+		s32 const row = dy > 0 ? i : y1 - y0 - 1 - i, py = sy + row;
+		s64 const da = s64(dstbase) + s64(y0 + row) * dststride + s64(x0) * bpp;
+		if (da < 0 || da + span > fbsize) continue;
+		u8 *const d = &m_fbram[da];
+		if (hires && py >= 0 && py * n < hrows)
+		{
+			u16 const *const sr = &hires[size_t(py) * n * hrow];
+			for (s32 x = 0; x < x1 - x0; x++)
+			{
+				u16 const v = sr[(sx + x + m_wide) * n];
+				d[x * 2] = rop3(u8(v), d[x * 2]);
+				d[x * 2 + 1] = rop3(u8(v >> 8), d[x * 2 + 1]);
+			}
+			continue;
+		}
+		s64 const sa = s64(srcbase) + s64(py) * srcstride + s64(sx) * bpp;
+		if (sa < 0 || sa + span > fbsize) continue;
+		u8 const *const sv = &m_fbram[sa];
+		if (rop == 0xcc) memmove(d, sv, span);
+		else
+			for (s32 b = 0; b < span; b++)
+			{
+				s32 const k = dx > 0 ? b : span - 1 - b;
+				d[k] = rop3(sv[k], d[k]);
+			}
+	}
+
+	if (BIT(cmd, 10)) m_blt_dst_x += w * dx;      // INC_X_START
+	if (BIT(cmd, 11)) m_blt_dst_y += h * dy;      // INC_Y_START
 }
 
 

@@ -71,7 +71,23 @@ The profile fields:
     game's wheel from index 0, followed by DEL and END; `index_reg` is the register holding the
     wheel index at the `name_index` hook, `index_field` (optional) a 16-bit copy of it at
     `offset` from register `reg`, and `confirm_reg` the result of the confirmation check at the
-    `name_confirm` hook.
+    `name_confirm` hook;
+  - `text_fixes`: typos in the game's text textures, fixed in VRAM (section 5a). Each fix
+    names a band of rows `y` of an A8 texture at `addr` (`stride` bytes per row), the CRC-32
+    of the original band, the `spans` of its own columns that rebuild it (`[x0, x1]`, or
+    `{"rot180": [x0, x1, y0, y1]}` for a rectangle turned upside down) and optionally `fit`,
+    the columns the game draws (a wider line is squeezed into them);
+  - `wheel_select`: the screens that take a choice from the wheel position (section 5a), keyed
+    by the name of the hook that runs on each (`course_select`, `transmission_select`).
+    `positions` are wheel positions (-1 full left … 1 full right), one inside each choice's
+    steering zone, from left to right.
+
+- `nvram_force` (top level): TEST MODE option bits set at every boot, in both modes, as
+  `addr: {mask, value}` (only when the option block's checksum is valid; the checksum is then
+  recomputed). Used for the NETWORK ID: 1, a single cabinet. The GTI Club 2 JAB and Thrill
+  Drive 2 EBB dumps come from cabinet 2 of a linked set, so the race HUD said PLAYER 2 (and
+  GTI Club 2's rank list 2P); the ID is bits 6–7 of `0x9C` (GTI Club 2) or `0xA0` (Thrill
+  Drive 2), as ID − 1. EAA, JAA and AAA are already on ID 1.
 
 `recomp.py` turns the profile into `generated/<id>/game_config.h` (`GAME_*` macros). The runtime
 is compiled once per game against it; there is no runtime game switch. The other TD2 versions
@@ -140,9 +156,14 @@ What GTI Club 2 turned out to need:
   - flag bytes are read LSB first; 1 = literal;
   - 0 = pair `b0 b1`, with `len=(b0&15)+3` and `dist=((b0&0xF0)<<4)|b1`;
   - `dist=0` ends the stream.
-- There are 140 entries, and 139 pass their checksum.
-- 68 names were recovered from strings. The rest are built at runtime; they are not needed,
-  because the kernel looks files up by hash.
+- There are 140 entries, and 139 pass their checksum (the 140th is the empty `@@@@@@@@` entry).
+- Every file of the five versions has its name (`tools/names.txt`, 316 paths), so nothing is
+  left in `_unk/`. The kernel looks files up by hash, and many names are built at run time
+  (section and model names plus `_mdl.zin`/`_tex.zin`), so they were recovered by hashing
+  candidates: directories of the known names × words from the game module and from the name
+  lists (`game/gldata/secname.zin`, `mdlname.zin`, `texname.zin`; GTI Club 2's
+  `game/mdldata/header.zin`) × the usual suffixes. A small C brute forcer does the ~10 million
+  hashes in under a second. See section 5d for what the names revealed.
 
 ### Executable modules
 
@@ -234,9 +255,9 @@ The modules use the PowerOpen/AIX ABI: function pointers are descriptors `{code,
     `0x63ffffff` for thrild2 (IN2 `0x43`), `0x61ffffff` for gticlub2ea (IN2 `0x41`), checked
     against MAME. The runtime builds it from the profile's IN2 (`hw_boot_param()`).
   - gticlub2ea copies it to the halfword at `0x826`. If bit `0x2000` (DIP SW:3) is clear, the
-    check at `0x54628` falls through to a rental/expiry lock ("GAME MODE LOCKED! PLEASE SET THE
-    PASSWORD", with an "EXPIRY DATE" in the NVRAM). With a hard-coded TD2 value the game always
-    showed the lock screen.
+    check at `0x54628` can fall through to the "GAME MODE LOCKED! PLEASE SET THE PASSWORD"
+    screen (see "Game mode lock" below). With a hard-coded TD2 value the game always showed the
+    lock screen.
 - **Devices** (`hw.c`, behaviour taken from MAME `viper.cpp`):
   - EPIC (IRQs + 4 global timers);
   - I2C with an **ADC0838 in differential mode** for steering and pedals:
@@ -338,7 +359,9 @@ The modules use the PowerOpen/AIX ABI: function pointers are descriptors `{code,
 | Test / Service | F2 / 9 | — |
 | Fullscreen / Quit | F11 / Esc | — |
 
-In the enhanced mode the rankings name is typed on the keyboard (section 5a).
+In the enhanced mode the rankings name is typed on the keyboard, and in the course select (and
+GTI Club 2's transmission select) ← → (A D, the D-pad or the stick) step from one choice to the
+next (section 5a).
 In games with a handbrake, Nintendo Switch controllers default to ZL handbrake, ZR accelerator,
 and L / R shift down / up. Controls → Switch ZL can restore ZL brake.
 Thrill Drive 2 EBB has no handbrake and keeps ZL brake. Switch + opens or closes the enhanced
@@ -358,6 +381,53 @@ FF300000           unknown serial device
 FFE00000 UART, FFE10000 I/O, FFE30000 NVRAM, FFE70000 DS2430, FFE98000 LANC
 FFF00000-FFF3FFFF  BIOS
 ```
+
+### Game mode lock ("GAME MODE LOCKED! PLEASE SET THE PASSWORD")
+
+Reverse-engineered from gticlub2ea. The addresses below are for that version. gticlub2, thrild2,
+thrild2j and thrild2a contain the same two fixed codes, right before the "GAME MODE LOCKED!"
+string. Real cabinets can show this screen too: the game does not start until a password is
+entered.
+
+- **Current date:** the kernel time routine (`0x3be6c`) reads the M48T58 clock registers
+  (NVRAM `0x1FF9`–`0x1FFF`). The year is always taken as 2000 + the two BCD digits
+  (`tm_year` = yy + 100).
+- **Decision at boot** (`0x54628`, called from the state machine at `0x468a8`). It loads the
+  NVRAM option block and looks at the word at offset `0x60`:
+  1. Bit `0x40000000` set: never lock.
+  2. DIP SW:3 on (bit `0x2000` of the halfword at `0x826`): no lock.
+  3. Bit `0x80000000` set: locked.
+  4. The timezone setting is disabled: no lock.
+  5. RTC year ≥ 2001: the game sets bit `0x40000000`, saves, and never checks again.
+  6. Otherwise (year 2000): the configured timezone hour is checked against a per-region
+     `{min, max, default}` table at `0xc1530`, indexed by the region byte `0x3ce50()`. If the
+     hour is out of range, the game sets `0x80000000`, saves, and shows the lock screen
+     (`0x5475c`).
+
+  So with a working clock the lock never triggers. A cabinet that locks again some time after
+  its NVRAM was reflashed most likely has a dead M48T58 battery: the clock falls back to year
+  `00` and the settings get corrupted.
+- **Unlock** (password editor at `0x51f4c`, check at `0x5208c`). The code is 4 bytes, entered as
+  8 hex digits. The check accepts:
+  - a code computed from the RTC date, valid from yesterday to two days ahead;
+  - the fixed code `09091999`;
+  - the fixed code `49120331`.
+
+  All three codes are 4-byte strings stored at `0xc18e8`/`0xc18ec`. On SAVE AND EXIT (`0x51de8`)
+  the game clears the top three bits of the word at `0x60`. That removes the lock but not the
+  cause: if the clock still reads 2000, the game can lock again.
+- **Not the same password:** the TEST MODE "PASSWORD" menu, the one that shows a SID and an
+  "EXPIRY DATE", belongs to the KONAMI INTERNET CHALLENGE.
+  - The SID is 6 bytes that the game derives from the DS2430 serial number. It does not show
+    the raw serial.
+  - The entered 8 bytes are decrypted with two-key 3DES (`0x51054`). The two keys are derived
+    from the SID. The decrypted block must contain the SID, a 10-bit tag and the expiry date
+    (days since 1970).
+  - Once that password expires, ranking codes stop being shown (`0x6be00`).
+  - It plays no part in the game mode lock.
+
+These findings come from reading the code only. They have not been tested in the runtime or on
+a real cabinet.
 
 ## 5a. Enhanced mode (`--enhanced`, `runtime/enhanced.c`)
 
@@ -396,11 +466,11 @@ An optional layer on top of the faithful port, in development. Everything is gat
     also works headless. The menu stays hidden until the game has started; if START is ignored,
     it comes back after 4 s.
   - The font is the A8 texture of the attract captions ("PRESS START BUTTON"). It sits in VRAM at
-    `0x6E400` and comes from `_unk/21ae0c7d.bin` at `0x6A0C0` (identical in JAB and EAA). It has
+    `0x6E400` and comes from `game/mdldata/COMMON_tex.zin` at `0x6A0C0` (identical in JAB and EAA). It has
     three sizes on fixed grids (24×40, 16×32, 12×24) with proportional glyphs, and holds only
     uppercase letters and punctuation. `enh_init` measures the ink width of each glyph.
   - Thrill Drive 2 uses its stencil font: two A8 textures (VRAM `0x6C000` and `0x7C000`), from
-    `_unk/76278279.bin` at `0x14` and `0x10024`. It is one size on a 32×48 grid, with digits,
+    `game/gldata/VRAM_tex.zin` at `0x14` and `0x10024`. It is one size on a 32×48 grid, with digits,
     A–Z, a few symbols and kanji, drawn at scales 0.85, 0.6 and 0.45 with bilinear sampling.
   - Found by logging the textures used on the WARNING screen (`RT_VOODOO_TEXLOG=1`, which now
     prints timestamps) and dumping the VRAM (`RT_VOODOO_VRAMDUMP=path:frame`).
@@ -537,6 +607,43 @@ An optional layer on top of the faithful port, in development. Everything is gat
     (`+0x18` of the structure at TOC `0x6EC`) is set.
   - Tested headless on Thrill Drive 2 EBB (a forced ranking, `RT_ENH_MENU` `name=` actions);
     GTI Club 2 needs a finished race, which scripted inputs cannot drive.
+- **Italian typos (Thrill Drive 2):** the Italian texts are A8 textures (`VRAM_I_tex.zin`,
+  eight 256-wide pages, loaded at boot to VRAM `0x295300` + 0x10000 per page), and four have
+  typos: "per Tasmissone Maniale" (car select), "Ostruzione a veicolo di emargenza", "Costo
+  totale Dei danni" and "ORA ANALIZZIAMO LA TUA TECNICA ." (results). In the enhanced mode
+  `text_fixes` rebuilds those rows in VRAM from letters of the same texture: the r of "per"
+  and the i of "Tasmissone", a u from the n of "Maniale" turned by 180 degrees (the lines
+  above have u, in a larger size), the second e of "emargenza", the d of "danni" (as wide as
+  the D), the full stop moved left. "per Trasmissione Manuale" is two letters longer and the
+  game draws columns 0–206 only, so its spaces are 2 pixels narrower and the line is squeezed
+  by about 4%.
+  - Every 16 frames the band's CRC-32 is compared with the original's; on a match the band is
+    rebuilt (with the renderer idle). The game's pixels never leave the game: the profile holds
+    only coordinates and CRCs. The other Italian texts read correctly; the accents are
+    apostrophes ("velocita'"), as the font has none. The classic mode keeps the originals.
+- **Wheel selects (course, transmission):** these screens take the choice from the position of
+  the wheel, in zones of the steering range, so with a key the choice springs back to the
+  centre one as soon as the key is released. In the enhanced mode the selection steps instead:
+  ← → (A D, the D-pad, or the stick pushed to one side) move one choice left or right, and the
+  frontend holds the wheel at that choice's position from the profile (`wheel_select`), ramping
+  there as the keyboard steering does. The game still does the choosing, with its own sounds
+  and animations; no game state is written.
+  - Each screen has a hook that runs every frame of it; the screen counts as active while its
+    hook ran in the last 10 frames, and each new one starts at the position nearest the centre
+    (the wheel at rest). The hook names are resolved once, so `rt_hook()` only compares
+    addresses.
+  - Thrill Drive 2 (EBB, JAA, AAA: the same code at the same addresses): `0x828C4`, index at
+    `r27+0x28`. Below −0x3E80 JAPAN, above +0x3E80 USA, EUROPE in between, with a hysteresis
+    back to ±0x2710 (full lock ±0x7F80): positions −1, 0, +1.
+  - GTI Club 2: the steering read at `0x8CAC8` (EAA `+0x24`), hook after it. Above −0x2000
+    TOWN, down to −0x7000 COAST, below that MOUNTAIN; the centre and the whole right side are
+    TOWN, so the positions are −1 (MOUNTAIN), −0.5625 (COAST), 0 (TOWN). A course not yet
+    available falls back as on the cabinet.
+  - GTI Club 2, transmission (`0x8C010`, steering read at `0x8C024`, EAA `+0x24`): at or below
+    −0x2AAA MANUAL, otherwise AUTOMATIC (the default at rest): positions −1 (MT), 0 (AT).
+    Thrill Drive 2 takes the transmission with the shift lever, so it needs nothing.
+  - Checked headless: fixed wheel values give the expected choice on every screen, and each hook
+    fires only on its screen. The key handling needs the SDL frontend.
 - **Texts:** English and Italian (`k_text`), chosen by the profile's `language` field. The menus
   switch as soon as the option changes. The fonts have no accented letters, so the Italian texts
   avoid them. A value too wide for its row falls back to the small font.
@@ -570,8 +677,8 @@ An optional layer on top of the faithful port, in development. Everything is gat
   and uses no 2D engine.
 - **Thrill Drive 2** also draws into three off-screen colour buffers (`0x4000`, `0x8000`,
   `0x15B000`), probably textures it renders itself (the rear-view mirror). It uses the 2D engine:
-  about 80,000 screen-to-screen blits, which MAME's core leaves unimplemented (`TODO`), and about
-  3 million host-to-screen blits.
+  about 80,000 screen-to-screen blits, which MAME's core leaves unimplemented (`TODO`; now
+  implemented here, see "Motion blur" below), and about 3 million host-to-screen blits.
 - **Triangle setup.** Most triangles come through the setup engine (CMDFIFO packet type 3), which
   derives the gradients from the vertices. Scaling the vertex coordinates by N therefore renders
   the same scene at N× resolution.
@@ -615,8 +722,42 @@ An optional layer on top of the faithful port, in development. Everything is gat
     compared over attract and race.
   - Speed: 70 emulated seconds take 15.7 s at 2× on GTI Club 2 and 20.6 s on TD2, against
     about 7 s at 1×.
-  - TD2's 2D host-to-screen blits and the unimplemented screen-to-screen blits still act on VRAM
-    only. No missing element was seen at 2×, but this was not checked in depth.
+  - TD2's 2D host-to-screen blits act on VRAM only. Its screen-to-screen blits read a displayed
+    colour buffer from its scaled render target (see "Motion blur" below).
+
+**Motion blur** (Thrill Drive 2, `screen_to_screen_blit` in `voodoo_banshee.cpp`). In the attract
+mode and on the CRASHED replay the picture used to fill with multicoloured noise; on a cabinet
+those moments show a motion blur.
+- After each frame the game copies the finished picture (the tiled colour buffer `0x6DE000` or
+  `0x73E000`, 512×384) into four 256-wide textures, one line per screen-to-screen blit (ROP
+  `0xCC`, `INC_Y_START`, the source row in the launch data, bottom row first): rows 383–128 of
+  the left and right halves into `0x00C000` and `0x02C000` (256×256), rows 127–0 into `0x04C000`
+  and `0x05C000` (256×128). It then draws them over the next frame as four quads (RGB565,
+  texture × iterated colour 255, alpha blending with an iterated alpha ramping from 0 to 127,
+  4×4 dither).
+- MAME's core leaves screen-to-screen blits as a `TODO`, so the textures held stale VRAM, which
+  the blending showed as noise.
+- The implementation reads a tiled surface linearly with its stride in 128-byte tiles (the
+  layout the 3D side writes), applies the ROP (pattern taken as 0), clips the destination and
+  advances `dstXY` for `INC_X_START`/`INC_Y_START`.
+- It works a row at a time with no temporary buffer: the destination is clipped once, then each
+  row is a `memmove` for `0xCC` (any other ROP goes byte by byte, from four masks). Rows go in
+  the direction the command gives, as on the hardware, so overlapping rectangles copy right. A
+  blur frame (768 one-row blits) costs about 11 µs, against about 1 ms for a per-pixel copy
+  through a buffer, which was the first version.
+- **Widescreen** (`blur_quad` in `voodoo.cpp`). The textures hold the native 4:3 picture, so
+  drawn as they are the blur would stop at the 4:3 edges.
+  While copying, the blits also keep the source at full resolution, margins included
+  (`m_blur_frame`, from the scaled render target), and record which source row each texture row
+  holds. When the game draws one of those quads, and it maps the copy back one texel per pixel
+  onto the same place (rows, columns, texture gradients checked), the quad is drawn there
+  instead of being rasterized: the same arithmetic as the rasterizer (texture colour × iterated
+  colour, source alpha / one minus source alpha with the iterated alpha, the same dither) at
+  every scaled pixel, from the full-resolution copy, with a quad that reaches a 4:3 edge
+  extended to the margin. So there is one blur, the game's, over the whole picture. It runs
+  after waiting for the renderer, in drawing order (scene before, HUD after); the first triangle
+  of a quad draws all of it and the second is skipped. Only the widescreen formats use it: at
+  4:3, 1X or 2X, the rasterizer draws the quads from the textures, as on the hardware.
 
 ## 5c. Widescreen (enhanced mode, DISPLAY → ASPECT RATIO)
 
@@ -687,7 +828,7 @@ transform, keeps its 4:3 layout in the centre.
   512) is widened to the margins; any other is moved by M.
 - An untextured triangle spanning exactly x = 0…512 (the fades to a colour) is stretched about
   the centre to the full width, with its x gradients divided by k. The textured full-screen
-  effects stay 4:3: TD2's crash noise is not a single quad.
+  effects stay 4:3, except TD2's motion blur, drawn over the whole picture (section 5b).
 - The emulated cost of a draw is scaled back to the native 4:3 area (`hires_native_pixels`).
 - A front buffer without a scaled target (no triangles since the option changed, or only 2D
   blits) is published enlarged and centred, so the frame size never changes from frame to
@@ -700,6 +841,58 @@ transform, keeps its 4:3 layout in the centre.
 **Known limits.** Elements that the original kept just off screen can show at the sides (TD2's
 crash captions scrolling in). The in-car start camera of TD2 shows the edge of its cockpit
 model. 21:9 has not been checked for missing scenery at the far edges, beyond the attract demos.
+
+## 5d. Hidden and unused content
+
+What the file names (section 3), a log of the files each run loads (`RT_CF_LOG=1`, after the
+boot-time checksum pass that reads the whole image) and the code show. Attract mode and races
+were run headless; the findings come from those runs and from reading the code.
+
+**Both games**
+- `system/prog.zin` is the kernel itself (identical to the boot block payload, `kernel.bin`).
+- `copydisk/prog.zin` is a factory card duplicator. The kernel runs it instead of `fpga` and
+  `game` when `0xd724` sees a second card (status nibble at `0xffe10002`); it copies the game
+  card to the destination card ("too small destination card", "destination overwrite trigger
+  timeout").
+- The TEST MODE main menu has no hidden items. The SECURITY KEY / PCB / KEY / ORG / PRODUCTION
+  MODE / DISTRIBUTION / RTC TIME SETTING screen (TD2 `0x5cf40`) belongs to the boot state
+  machine's security key and conversion path ("PLEASE INSERT KEY", "CONVERSION SUCCEED");
+  a normal boot shows only DEVICE CHECK (U57, U13), RTC OK and AWAKENING.
+
+**Thrill Drive 2** (EBB; JAA and AAA have the same files)
+- `game/comcar/cc_test.zin`: a test set of computer-car paths (2 paths; the real ones have 12).
+  It is the fourth entry of the path table at `0xcf358` (Japan, USA, Europe, test), loaded by
+  `0x62fcc` with the course index, but the road table at `0xcf318` has only three courses, so it
+  cannot be reached.
+- Car 53 was cut: `PCAR53_mdl` and `ECAR53_mdl` are identical 124-byte placeholders and
+  `ACAR53_tex` is empty, and the game's car lists (`0xd1250`) stop at 12 cars (02, 03, 11, 12,
+  13, 21, 22, 42, 43, 50, 51, 52; 50–52 are the secret ones of the car select).
+- `game/gldata/EXAMPLE_mdl.zin` holds a single model, `dbg_cube`, with a 64×32 texture.
+- `game/vram/include/f08x08-font.zin`: an 8×8 ASCII font, 8 bits per pixel, that nothing loads
+  (only the 8×16 font is named in the code).
+- `TITLE_I_tex` is empty (no separate title for Italian). The `PCAR*` models load on demand,
+  not in a single-player game: the attract/game preload (`0x7f630`) lists only `ACAR`/`ECAR`
+  and SELECT. They are probably the other cabinets' cars in link play (an untested guess; the
+  HUD shows the cabinet's PLAYER number).
+
+**GTI Club 2** (JAB; EAA has the same files)
+- Unused title logos: `tHOTRUNNERS_tex` ("HOT RUNNERS – Racing in Italy") and
+  `tITALIANO500_tex` ("ITALIANO 500"), next to `titleEA` (GTI CLUB 2), `titleUA` (DRIVING
+  PARTY – Racing in Italy) and `titleJA` (Corso Italiano). Each is two 256×256 ARGB4444
+  textures. Probably working titles.
+- Orphan strings of a replay manager: "1P SHT1 & SHT2 .. SELECT DATA IMPORT", "2P SHT2 & SHT3 ..
+  REPLAY DATA CLEAR", "ALL(FROM HERE) DATA OUTPUT", "Replay %2u", "-- Replay data is Vacant --"
+  and `repdata000`–`003.brp`. No code references them (a scan of every TOC-based reference
+  finds none), so the feature was removed and its texts left behind.
+- The initials blacklist at `0x100c28` (KKK, IRA, GOD, …) is used by the name entry (`0x83c6c`).
+- Roads: `CA` is the plaza where car and course are chosen (models in `CAB`, no rival paths),
+  `CB` COAST, `CC` MOUNTAIN, `CD` TOWN (also the attract course). All eight cars are selectable
+  (shift up for the tuned `T*` versions), so no car is hidden.
+- Empty placeholders: `CA_mdl/tex`, `SKY2`, `SKY3`, `YST`, `TEST_tex`; `TEST_mdl` only points to
+  the DEMO and KONAMI images.
+
+Not covered: input combinations or DIP switches that could open a debug screen were not
+searched for in the input code.
 
 ## 6. Current status (2026-09-29)
 
@@ -816,4 +1009,5 @@ RT_SC_LOG=1 ./td2                     # log kernel syscalls
 RT_VOODOO_LOG=1 ./td2                 # messages from MAME's Voodoo core
 RT_VOODOO_TEXLOG=1 ./td2              # log each new texture setup (format, LODs, base registers)
 RT_VOODOO_VRAMDUMP=vram.bin:1300 ./td2 --headless ...   # dump the whole VRAM at frame 1300
+RT_CF_LOG=1 ./td2 --headless ...      # log each CF read command (LBA, sectors): which game files load
 ```

@@ -88,7 +88,11 @@
         "0x7df24": null,
         "0x7e06c": null,
         "0x7e134": null,
-        "0x7e14c": null
+        "0x7e14c": null,
+        "0x8cacc": null,
+        "0x8caf0": "course_select",
+        "0x8c028": null,
+        "0x8c04c": "transmission_select"
       }
     },
     "test_menu_game_mode": 13

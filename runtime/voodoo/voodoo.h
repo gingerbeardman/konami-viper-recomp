@@ -504,9 +504,10 @@ public:
 		pix = m_hires_out.data(); w = m_hires_out_w; h = m_hires_out_h;
 		return true;
 	}
-	// recomp debug: raw framebuffer/texture memory (RT_VOODOO_VRAMDUMP)
+	// recomp: raw framebuffer/texture memory (RT_VOODOO_VRAMDUMP, enhanced-mode text fixes)
 	u8 const *debug_fbram() const { return m_fbram; }
 	u32 debug_fbsize() const { return m_fbmask + 1; }
+	u8 *fbram_for_write() { m_renderer->wait("fbram_for_write"); return m_fbram; }   // the renderer idle first
 	// nominal clock values
 	static constexpr u32 NOMINAL_CLOCK = 50'000'000;
 
@@ -680,6 +681,11 @@ protected:
 	std::vector<u32> m_hires_out;
 	int m_hires_out_w = 0, m_hires_out_h = 0;
 	bool m_hires_out_valid = false;                             // pointer to aligned framebuffer
+	// recomp: Thrill Drive 2's motion blur at the scaled resolution (blur_quad)
+	struct blur_tex { std::vector<s16> srcrow; s32 coloffs; unsigned long long filled, done; };
+	std::vector<u16> m_blur_frame;                              // the last copied frame, scaled target layout
+	std::unordered_map<u32, blur_tex> m_blur_tex;               // textures copied from a displayed buffer
+	bool blur_quad(voodoo::poly_data const &poly, voodoo::voodoo_renderer::vertex_t const *vert, u16 *target);
 	u32 m_fbmask;                            // mask to apply to pointers
 	std::unique_ptr<u8[]> m_memory;          // allocated framebuffer/texture memory
 	std::unique_ptr<voodoo::shared_tables> m_shared; // shared tables
