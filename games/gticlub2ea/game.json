@@ -60,6 +60,10 @@
         "0x61b70": "attract",
         "0x839b4": null,
         "0x839f8": null,
+        "0x45e64": null,
+        "0x8b5c4": null,
+        "0x45e88": "file_loaded",
+        "0x8b5e8": "car_select",
         "0x839d8": "name_index",
         "0x83a1c": "name_confirm"
       }
