@@ -218,6 +218,41 @@ if [ -n "${WII_DOLPHIN_OVERCLOCK:-}" ]; then
   printf 'cpu_overclock=%s\n' "$WII_DOLPHIN_OVERCLOCK" >> "$RUN_DIR/launch-settings.txt"
   set -- "$@" -C Dolphin.Core.OverclockEnable=True -C Dolphin.Core.Overclock="$WII_DOLPHIN_OVERCLOCK"
 fi
+# Console aspect: 169 (default, like the user's Wii: a 16:9 console and
+# window) or 43 (the scripted benchmark: its EFB oracle is the full 4:3 frame).
+case "${WII_DOLPHIN_ASPECT:-169}" in
+  169) console_wide=True; window_aspect=1; window_w=854 ;;
+  43) console_wide=False; window_aspect=2; window_w=640 ;;
+  *) echo 'WII_DOLPHIN_ASPECT must be 169 or 43' >&2; exit 2 ;;
+esac
+printf 'aspect=%s\n' "${WII_DOLPHIN_ASPECT:-169}" >> "$RUN_DIR/launch-settings.txt"
+# The render window opens with a window_w x 480 picture area (DolphinQt
+# ignores RenderWindowWidth/Height and restores Qt.ini renderwidget/geometry,
+# so that is written here; Dolphin is killed, so it never saves over it).
+# Position: WII_DOLPHIN_WINDOW="x y screen screen_width" (default: the left
+# monitor, where it was placed by hand).
+python3 - "$USER_DIR/Config/Qt.ini" "$window_w" ${WII_DOLPHIN_WINDOW:--1512 38 1 1512} <<'PY'
+import sys,os,struct,re
+p,w,x,y,screen,sw=sys.argv[1],*map(int,sys.argv[2:7])
+title=28;h=480
+frame=(x,y,x+w-1,y+title+h-1);normal=(x,y+title,x+w-1,y+title+h-1)
+blob=struct.pack('>IHH4i4iiBBi4i',0x01d9d0cb,3,0,*frame,*normal,screen,0,0,sw,*normal)
+value='@ByteArray('+''.join('\\x%02x'%b for b in blob)+')'
+text=open(p,encoding='latin-1').read() if os.path.exists(p) else ''
+text=re.sub(r'\n?\[renderwidget\]\n(?:[^\[\n][^\n]*\n?)*','\n',text)
+text=text.rstrip('\n')+'\n\n[renderwidget]\ngeometry='+value+'\n'
+open(p,'w',encoding='latin-1').write(text)
+PY
+python3 - "$USER_DIR/Config/Dolphin.ini" <<'PY'
+import sys,os,configparser
+p=sys.argv[1]
+c=configparser.RawConfigParser();c.optionxform=str
+if os.path.exists(p):c.read(p,encoding='utf-8')
+if c.has_section('Display'):
+    for k in ('RenderWindowWidth','RenderWindowHeight'):c.remove_option('Display',k)
+    c.set('Display','RenderWindowAutoSize','False')
+with open(p,'w',encoding='utf-8') as f:c.write(f,space_around_delimiters=True)
+PY
 printf 'user_dir=%s\n' "$USER_DIR" >> "$RUN_DIR/launch-settings.txt"
 printf 'fps_overlay=True\n' >> "$RUN_DIR/launch-settings.txt"
 exec "$@" \
@@ -231,4 +266,4 @@ exec "$@" \
   -C Graphics.Hacks.EFBAccessEnable=True \
   -C Graphics.Settings.ShowFPS=True \
   -C Graphics.Settings.ShaderCompilationMode="$SHADER_MODE" \
-  -C SYSCONF.IPL.AR=False -C Graphics.Settings.AspectRatio=2 --exec="$RUN_DIR/viper.dol"
+  -C SYSCONF.IPL.AR=$console_wide -C Graphics.Settings.AspectRatio=$window_aspect --exec="$RUN_DIR/viper.dol"

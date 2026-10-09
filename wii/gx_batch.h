@@ -205,10 +205,17 @@ static void gx_lazy_init(void) {
     memset(&gx_want, 0xfe, sizeof gx_want);
     gx_shadow_reset();
 }
+#ifdef VIPER_WII_SUPERSAMPLE
+static int ss_scissor_segment(u32 x, u32 y, u32 w, u32 h);   /* gx_renderer.c */
+#endif
 static void shadow_scissor(u32 x, u32 y, u32 w, u32 h) {
     if (gx_shadow.sx != x || gx_shadow.sy != y || gx_shadow.sw != w || gx_shadow.sh != h) {
         gx_batch_flush(); gx_state_gen++;
-        gx_shadow.sx = x; gx_shadow.sy = y; gx_shadow.sw = w; gx_shadow.sh = h; GX_SetScissor(x, y, w, h);
+        gx_shadow.sx = x; gx_shadow.sy = y; gx_shadow.sw = w; gx_shadow.sh = h;
+#ifdef VIPER_WII_SUPERSAMPLE
+        if (ss_scissor_segment(x, y, w, h)) return;   /* a recorded frame keeps it per segment */
+#endif
+        GX_SetScissor(x, y, w, h);
     }
 }
 /* Any direct projection load ends reuse of the renderer's w x h ortho. */

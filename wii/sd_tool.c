@@ -268,6 +268,18 @@ int main(int argc, char **argv) {
             finish(!failed, line + 4);
             bad = failed ? reply_err("delete") : reply_ok(NULL, 0);
         } else if (!strcmp(line, "QUIT")) { reply_ok(NULL, 0); break; }
+        else if (!strcmp(line, "REBOOT")) {
+            /* A full console restart (into the System Menu): clears a state a
+             * return to the Homebrew Channel would not, e.g. a wedged IOS. */
+            reply_ok(NULL, 0);
+            net_close(sock);
+            fatUnmount("sd:");
+            printf("  rebooting\n");
+            VIDEO_SetBlack(TRUE);
+            VIDEO_Flush();
+            VIDEO_WaitVSync();
+            SYS_ResetSystem(SYS_RESTART, 0, 0);
+        }
         else bad = reply_err("unknown request");
         if (bad) break;
     }

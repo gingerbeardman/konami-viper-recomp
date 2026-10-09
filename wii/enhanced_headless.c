@@ -64,6 +64,12 @@ void wii_enhanced_input_tick(void) {
         g_analog[1]=200;
         if(!accelerator_logged){accelerator_logged=1;rt_log("VIPER DIAGNOSTIC scripted full accelerator\n");}
     }
+#ifdef VIPER_WII_SCRIPTED_VIEW
+    /* Diagnostic: tap START/VIEW (6 ticks every 2 s) through the race, to
+     * cycle the cameras into interior view. */
+    {static unsigned tick;uint64_t g=rt_now()/CPU_HZ;
+     if(g>=68){if(tick%115<6){g_in[3]&=(uint8_t)~0x10;if(tick%115==0)rt_log("VIPER DIAGNOSTIC scripted view press g=%u\n",(unsigned)g);}tick++;}}
+#endif
     if(!selected&&rt_now()/CPU_HZ>=18&&wii_enhanced_menu_active()) {
         selected=1;rt_log("VIPER DIAGNOSTIC Wii selecting enhanced Start Game\n");
         wii_enhanced_start();

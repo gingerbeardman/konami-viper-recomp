@@ -42,9 +42,11 @@ static void sample_lr(uint32_t pc,uint32_t lr){
     lr_overflow++;
 }
 #endif
+/* 0 pauses sampling without stopping the tick (diagnostic gates). */
+volatile uint32_t wii_pc_profile_gate=1;
 static void sample(KTickTask *task){
     (void)task;
-    if(!running)return;
+    if(!running||!wii_pc_profile_gate)return;
     uint32_t pc=KThreadGetSelf()->ctx.pc&~(VIPER_WII_PC_PROFILE_BUCKET_BYTES-1u);
 #ifdef VIPER_WII_PC_PROFILE_LR
     sample_lr(pc,KThreadGetSelf()->ctx.lr);
@@ -91,4 +93,21 @@ void wii_pc_profile_stop(void){
         rt_log("VIPER WII PC LR pc=%08lx lr=%08lx count=%lu\n",
             (unsigned long)lr_bins[i].pc,(unsigned long)lr_bins[i].lr,(unsigned long)lr_bins[i].count);
 #endif
+}
+
+/* The busiest bins of the report wii_pc_profile_stop logs, as text (for
+ * network reports; small, so it needs no big buffer in a full heap). */
+#include <stdio.h>
+unsigned wii_pc_profile_text(char *out,unsigned cap){
+    unsigned n=snprintf(out,cap,"VIPER WII PC SUMMARY samples=%lu overflow=%lu bucket_bytes=%u period_us=%u\n",
+        (unsigned long)samples,(unsigned long)overflow,
+        (unsigned)VIPER_WII_PC_PROFILE_BUCKET_BYTES,(unsigned)VIPER_WII_PC_PROFILE_PERIOD_US);
+    for(unsigned pass=0;pass<400&&n<cap-64;pass++){   /* descending counts, one bin per pass */
+        unsigned best=SLOTS;
+        for(unsigned i=0;i<SLOTS;i++)if(bins[i].count&&(best==SLOTS||bins[i].count>bins[best].count))best=i;
+        if(best==SLOTS)break;
+        n+=snprintf(out+n,cap-n,"VIPER WII PC bin=%08lx count=%lu\n",(unsigned long)bins[best].pc,(unsigned long)bins[best].count);
+        bins[best].count=0;
+    }
+    return n;
 }

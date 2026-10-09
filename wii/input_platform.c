@@ -25,6 +25,12 @@ static void queue_diagnostic(int kind,int a,int b,int c){
     else diagnostic_dropped++;
 }
 static float roll_center;
+/* Our menu stays hidden in attract until a button is pressed; that press
+ * only reveals it (buttons are ignored until all are released). It hides
+ * again once a game starts. */
+static volatile int menu_revealed,menu_reveal_request;
+static int menu_swallow;
+int wii_menu_revealed(void){return menu_revealed;}
 void wii_input_init(void){
     if(initialized)return;
     if(LWP_MutexInit(&mutex,0))rt_fatal("Wii input mutex initialization");
@@ -83,6 +89,8 @@ void wii_input_poll(void){
         float gx=d->gforce.x,gy=d->gforce.y,gz=d->gforce.z;
         float tilt=atan2f(gy,sqrtf(gx*gx+gz*gz))*(180.0f/(float)M_PI);
         if(isfinite(tilt)){
+            if(d->btns_d&&!menu_revealed&&wii_enhanced_menu_active())menu_reveal_request=1;   /* swallowed: not a display change */
+            else
 #ifdef VIPER_WII_DISPLAY_MULTI
             if(d->btns_d&WPAD_BUTTON_MINUS){void wii_gx_display_cycle(void);wii_gx_display_cycle();}
 #else
@@ -145,6 +153,11 @@ void wii_input_guest_tick(void){
         else rt_log("VIPER WII INPUT FORMAT reconnect result=%d\n",d->a);
     }
     if(dropped)rt_log("VIPER WII INPUT DIAGNOSTICS dropped=%u\n",dropped);
+    if(!wii_enhanced_menu_active())menu_revealed=menu_reveal_request=0;
+    else if(!menu_revealed&&(edges||menu_reveal_request)){menu_revealed=1;menu_reveal_request=0;menu_swallow=1;}
+    if(menu_swallow){
+        if(s.buttons)edges=0,s.buttons=0;else menu_swallow=0;
+    }
     if(edges)rt_log("VIPER WII INPUT EDGE mask=%08lx connected=%d steer=%d accel=%d brake=%d\n",
         (unsigned long)edges,s.connected,s.steer,s.accel,s.brake);
     if(edges&WII_IN_RESTART){void wii_request_race_restart(void);wii_request_race_restart();}

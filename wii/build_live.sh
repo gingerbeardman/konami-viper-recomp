@@ -403,6 +403,13 @@ case "${WII_LIVE_DIRECT_BUDGET:-1}" in
     *) echo 'WII_LIVE_DIRECT_BUDGET must be 0 or 1' >&2; exit 2 ;;
 esac
 # The game's sound through the Wii audio DMA (wii/audio.c).
+# Sound queue in ms that paces the game (hides load hitches up to that long; 0: time-paced, ~40 ms queue).
+WII_LIVE_AUDIO_LATENCY=${WII_LIVE_AUDIO_LATENCY:-300}
+case "$WII_LIVE_AUDIO_LATENCY" in
+    0) ;;
+    [1-9]*) flags="$flags -DVIPER_WII_AUDIO_LATENCY_MS=$WII_LIVE_AUDIO_LATENCY"; output="$output-alat$WII_LIVE_AUDIO_LATENCY" ;;
+    *) echo 'WII_LIVE_AUDIO_LATENCY must be 0 or milliseconds' >&2; exit 2 ;;
+esac
 case "${WII_LIVE_AUDIO:-1}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_AUDIO"; output="$output-audio" ;;
@@ -433,8 +440,29 @@ case "${WII_LIVE_DIRECT_VERSION:-1}" in
     1) flags="$flags -DVIPER_WII_DIRECT_VERSION"; output="$output-dver" ;;
     *) echo 'WII_LIVE_DIRECT_VERSION must be 0 or 1' >&2; exit 2 ;;
 esac
-# MULTI: the display mode cycles at run time with Minus (1:1, 1:1 nearest,
-# scaled, scaled supersampled); replaces the build-time letterbox/nearest.
+# Supersampled frames replayed while the next is emulated (two lists):
+# hardware 3.580 -> 2.351 s, the cost that made the sound stutter.
+case "${WII_LIVE_SS_PIPELINE:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_SS_PIPELINE"; output="$output-sspipe" ;;
+    *) echo 'WII_LIVE_SS_PIPELINE must be 0 or 1' >&2; exit 2 ;;
+esac
+# Supersampled frames sharpened (unsharp mask, k = 1/4, 1/2 or 3/4; 0 off).
+WII_LIVE_SS_SHARPEN=${WII_LIVE_SS_SHARPEN:-1_2}
+case "$WII_LIVE_SS_SHARPEN" in
+    0) ;;
+    1_4|1_2|3_4) flags="$flags -DVIPER_WII_SS_SHARPEN=GX_TEV_KCSEL_$WII_LIVE_SS_SHARPEN"; output="$output-sharp$WII_LIVE_SS_SHARPEN" ;;
+    *) echo 'WII_LIVE_SS_SHARPEN must be 0, 1_4, 1_2 or 3_4' >&2; exit 2 ;;
+esac
+# The game drawn at its native 512x384 (1:1 as the cabinet rasterises it:
+# no texture seams, glyphs on whole pixels), then scaled to the screen.
+case "${WII_LIVE_NATIVE_RES:-1}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_NATIVE_RES"; output="$output-native" ;;
+    *) echo 'WII_LIVE_NATIVE_RES must be 0 or 1' >&2; exit 2 ;;
+esac
+# MULTI: the display mode cycles at run time with Minus (SHARP, SHARP PIXEL,
+# FULL, FULL SUPER, WIDE, WIDE SUPER); replaces the build-time letterbox/nearest.
 case "${WII_LIVE_DISPLAY_MULTI:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_DISPLAY_MULTI -DVIPER_WII_SUPERSAMPLE"; output="$output-multi" ;;
@@ -454,7 +482,7 @@ case "${WII_LIVE_NEAREST:-0}" in
     1) flags="$flags -DVIPER_WII_NEAREST_TEXTURES"; output="$output-nearest" ;;
     *) echo 'WII_LIVE_NEAREST must be 0 or 1' >&2; exit 2 ;;
 esac
-# Option: the game's 512x384 shown 1:1, centred in 640x480 with black borders.
+# Option (SHARP): the game's 384 lines unscaled (half the arcade's 768), centred in 640x480 with black borders.
 case "${WII_LIVE_LETTERBOX:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_LETTERBOX"; output="$output-lbox" ;;
@@ -471,11 +499,54 @@ case "${WII_LIVE_FRAMESKIP:-0}" in
     1) flags="$flags -DVIPER_WII_AUTO_FRAMESKIP"; output="$output-fskip" ;;
     *) echo 'WII_LIVE_FRAMESKIP must be 0 or 1' >&2; exit 2 ;;
 esac
-# Picture aspect: 43 (default: the full frame; on a console set to 16:9 the Wii video mode already gives a 4:3 picture on a stretched display, hardware 2026-10-08), 169 (extra squeeze), or auto (squeeze when the console is 16:9).
-case "${WII_LIVE_ASPECT:-43}" in
+# Picture aspect: auto (default: follow the console; set to 16:9, the TV stretches the 640-wide frame, so the 4:3 modes are squeezed to 3/4 width and only WIDE fills it, hardware 2026-10-09), 43 (always the full frame) or 169 (always squeezed).
+case "${WII_LIVE_ASPECT:-auto}" in
     auto) ;;
     43|169) flags="$flags -DVIPER_WII_FORCE_ASPECT=${WII_LIVE_ASPECT:-43}"; output="$output-ar${WII_LIVE_ASPECT:-43}" ;;
     *) echo 'WII_LIVE_ASPECT must be auto, 43 or 169' >&2; exit 2 ;;
+esac
+# Diagnostic: log per guest second wall time, audio underruns and lag; remote runs send pace.txt at guest second N.
+case "${WII_LIVE_PACE_TRACE:-0}" in
+    0) ;;
+    [1-9]*) flags="$flags -DVIPER_WII_PACE_TRACE=$WII_LIVE_PACE_TRACE -DVIPER_WII_WATCHDOG_S=400"; output="$output-pace$WII_LIVE_PACE_TRACE" ;;
+    *) echo 'WII_LIVE_PACE_TRACE must be 0 or a guest second' >&2; exit 2 ;;
+esac
+# Diagnostic (with WII_LIVE_PACE_TRACE and play profile): sample PCs only in guest seconds FROM-TO, e.g. 66-71.
+case "${WII_LIVE_PROFILE_WINDOW:-}" in
+    '') ;;
+    *-*) flags="$flags -DVIPER_WII_PROFILE_WINDOW_FROM=${WII_LIVE_PROFILE_WINDOW%-*} -DVIPER_WII_PROFILE_WINDOW_TO=${WII_LIVE_PROFILE_WINDOW#*-}"; output="$output-pw$WII_LIVE_PROFILE_WINDOW" ;;
+    *) echo 'WII_LIVE_PROFILE_WINDOW must be FROM-TO' >&2; exit 2 ;;
+esac
+# Diagnostic: start in display mode 0-5 (MULTI) and ignore the saved one.
+case "${WII_LIVE_DISPLAY_START:-}" in
+    '') ;;
+    [0-5]) flags="$flags -DVIPER_WII_DISPLAY_START=$WII_LIVE_DISPLAY_START"; output="$output-dstart$WII_LIVE_DISPLAY_START" ;;
+    *) echo 'WII_LIVE_DISPLAY_START must be 0-5' >&2; exit 2 ;;
+esac
+# Diagnostic: save the output box of 40 car-showroom frames (1) or 4 frames from frame N; remote runs send them back.
+case "${WII_LIVE_FRAME_CAPTURE:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_FRAME_CAPTURE -DVIPER_WII_WATCHDOG_S=400"; output="$output-cap" ;;
+    [1-9][0-9]*) flags="$flags -DVIPER_WII_FRAME_CAPTURE=$WII_LIVE_FRAME_CAPTURE -DVIPER_WII_FRAME_CAPTURE_COUNT=${WII_LIVE_FRAME_CAPTURE_COUNT:-4} -DVIPER_WII_FRAME_CAPTURE_STEP=${WII_LIVE_FRAME_CAPTURE_STEP:-1} -DVIPER_WII_WATCHDOG_S=400"; output="$output-cap$WII_LIVE_FRAME_CAPTURE" ;;
+    *) echo 'WII_LIVE_FRAME_CAPTURE must be 0, 1 (showroom) or a start frame' >&2; exit 2 ;;
+esac
+# Diagnostic: clear the render box to magenta after each supersample tile copy (undrawn pixels show).
+case "${WII_LIVE_SS_TILE_MAGENTA:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_SS_TILE_MAGENTA"; output="$output-magenta" ;;
+    *) echo 'WII_LIVE_SS_TILE_MAGENTA must be 0 or 1' >&2; exit 2 ;;
+esac
+# Diagnostic: log title-screen sprite coordinates near the logo (needs logging).
+case "${WII_LIVE_SPRITE_TRACE:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_SPRITE_TRACE"; output="$output-strace" ;;
+    *) echo 'WII_LIVE_SPRITE_TRACE must be 0 or 1' >&2; exit 2 ;;
+esac
+# Diagnostic: log the per-frame linear-depth W range (needs logging).
+case "${WII_LIVE_DEPTH_TRACE:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_DEPTH_TRACE"; output="$output-dtrace" ;;
+    *) echo 'WII_LIVE_DEPTH_TRACE must be 0 or 1' >&2; exit 2 ;;
 esac
 case "${WII_LIVE_NO_LOG:-0}" in
     0) ;;

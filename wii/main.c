@@ -56,6 +56,8 @@ void rt_log(const char *fmt,...) {
     else vprintf(fmt,ap);
     va_end(ap);
 }
+/* Diagnostics: close and reopen the log so a later hang cannot lose it. */
+void wii_log_sync(void){if(logfile){fclose(logfile);logfile=fopen("sd:/viper/boot.log","a");}}
 void rt_fatal(const char *why){
     /* Persist the reason before any display/console operation can stall. */
     rt_log("VIPER WII STOP %s\n",why);
@@ -141,7 +143,24 @@ void rt_pace_vblank(void){
     if(!started){origin=now-microsecs_to_ticks(virt_us);started=1;return;}
     int64_t ahead=(int64_t)virt_us-(int64_t)ticks_to_microsecs(now-origin);
     wii_pace_behind_us=ahead<0?(int32_t)(ahead< -1000000?1000000:-ahead):0;
+#ifdef VIPER_WII_PACE_TRACE
+    {extern int32_t wii_pace_trace_max;if(wii_pace_behind_us>wii_pace_trace_max)wii_pace_trace_max=wii_pace_behind_us;
+     extern unsigned wii_pace_trace_resyncs;if(ahead< -250000)wii_pace_trace_resyncs++;}
+#endif
     if(ahead< -250000){origin=now-microsecs_to_ticks(virt_us);return;}
+#if defined(VIPER_WII_AUDIO) && defined(VIPER_WII_AUDIO_LATENCY_MS)
+    /* Audio-paced: wait only while more than the target sound is queued, so
+     * after any hitch the game runs on until the queue is full again (the
+     * time debt alone is forgiven past 0.25 s, which left the queue short and
+     * every later hitch audible). Real time still caps the lead, in case
+     * the game produces no sound. */
+    {int queued=wii_audio_backlog_us();
+     if(queued>=0&&ahead<=(VIPER_WII_AUDIO_LATENCY_MS+100)*1000){
+        int over=queued-VIPER_WII_AUDIO_LATENCY_MS*1000;
+        if(over>2000)usleep((unsigned int)(over-1000));
+        return;
+     }}
+#endif
     if(ahead>2000)usleep((unsigned int)(ahead-1000));
 }
 #endif
@@ -190,6 +209,21 @@ static void input_tick(void *arg){
     if(wii_race_restart_pending()){   /* as the desktop: no input while the race reloads */
         extern uint8_t g_in[];extern int16_t g_analog[];
         g_in[3]=g_in[4]=0xff;g_analog[0]=0;g_analog[1]=g_analog[2]=g_analog[3]=-200;
+    }
+#endif
+#if defined(VIPER_WII_PACE_TRACE) && defined(VIPER_WII_PC_PROFILE_PLAY)
+    /* Sample only while the game is falling behind (the stalls): the sound
+     * queue more than 50 ms under its target, or behind real time. */
+    {extern volatile uint32_t wii_pc_profile_gate;
+#ifdef VIPER_WII_PROFILE_WINDOW_FROM
+     /* A fixed guest-time window instead (e.g. the attract tunnel crash). */
+     {unsigned g=(unsigned)(rt_now()/CPU_HZ);wii_pc_profile_gate=g>=VIPER_WII_PROFILE_WINDOW_FROM&&g<VIPER_WII_PROFILE_WINDOW_TO;}
+#elif defined(VIPER_WII_AUDIO) && defined(VIPER_WII_AUDIO_LATENCY_MS)
+     int queued=wii_audio_backlog_us();
+     wii_pc_profile_gate=queued>=0&&queued<(VIPER_WII_AUDIO_LATENCY_MS-50)*1000;
+#else
+     wii_pc_profile_gate=wii_pace_behind_us>20000;
+#endif
     }
 #endif
     wii_enhanced_input_tick();rt_sched_at(rt_now()+(uint64_t)(CPU_HZ/57.5),input_tick,NULL);
@@ -290,8 +324,45 @@ static void stray_tick(void *arg){
 #else
 #define STRAY_SCAN(where) ((void)0)
 #endif
+#ifdef VIPER_WII_PACE_TRACE
+/* Diagnostic: one line per guest second (wall time it took, audio underruns
+ * and backlog skips, worst lag behind real time, pace resyncs), kept in RAM
+ * so SD writes cannot cause the stalls being measured. A remote run sends it
+ * as pace.txt at guest second VIPER_WII_PACE_TRACE and returns to the loader. */
+int32_t wii_pace_trace_max;unsigned wii_pace_trace_resyncs;
+static char pace_text[64*1024];static unsigned pace_len;
+static void pace_trace(void){
+    extern volatile unsigned wii_audio_underruns,wii_audio_skips;
+    extern unsigned long long hw_cf_sectors,hw_cf_host_reads;
+    static uint64_t last;static unsigned last_under,last_skip;static unsigned long long last_sect,last_reads;
+    uint64_t now=gettime();unsigned g=(unsigned)(rt_now()/CPU_HZ);
+    if(last&&pace_len<sizeof pace_text-128)
+    {struct mallinfo mi=mallinfo();
+     extern unsigned ss_dl_peak,ss_dl_overflows;
+     rt_log("VIPER WII SSDL g=%u peak=%u overflows=%u\n",g,ss_dl_peak,ss_dl_overflows);ss_dl_peak=0;
+     rt_log("VIPER WII HEAP g=%u used=%u free_in_heap=%u arena=%u mem1_left=%lu mem2_left=%lu\n",g,(unsigned)mi.uordblks,(unsigned)mi.fordblks,(unsigned)mi.arena,
+        (unsigned long)((uintptr_t)SYS_GetArena1Hi()-(uintptr_t)SYS_GetArena1Lo()),(unsigned long)((uintptr_t)SYS_GetArena2Hi()-(uintptr_t)SYS_GetArena2Lo()));}
+        pace_len+=snprintf(pace_text+pace_len,sizeof pace_text-pace_len,"g=%u wall_ms=%llu under=%u skip=%u behind_max_ms=%d resync=%u cf_sectors=%llu cf_reads=%llu\n",
+            g,(unsigned long long)ticks_to_millisecs(now-last),wii_audio_underruns-last_under,wii_audio_skips-last_skip,
+            (int)(wii_pace_trace_max/1000),wii_pace_trace_resyncs,hw_cf_sectors-last_sect,hw_cf_host_reads-last_reads);
+    last=now;last_under=wii_audio_underruns;last_skip=wii_audio_skips;wii_pace_trace_max=0;wii_pace_trace_resyncs=0;
+    last_sect=hw_cf_sectors;last_reads=hw_cf_host_reads;
+    if(g>=VIPER_WII_PACE_TRACE&&wii_net_report_wanted()){
+#ifdef VIPER_WII_PC_PROFILE_PLAY
+        /* One file: the receiver takes a single report per run. */
+        {extern unsigned wii_pc_profile_text(char *,unsigned);
+         wii_pc_profile_text(pace_text+pace_len,sizeof pace_text-pace_len);}
+#endif
+        wii_net_report_text("pace.txt",pace_text);
+        VIDEO_SetBlack(TRUE);VIDEO_Flush();VIDEO_WaitVSync();exit(0);
+    }
+}
+#endif
 static void progress(void *arg){
     (void)arg;
+#ifdef VIPER_WII_PACE_TRACE
+    pace_trace();
+#endif
 #ifdef VIPER_WII_PC_PROFILE
     extern void wii_pc_profile_start(void),wii_pc_profile_stop(void);
     static unsigned pc_profile_stage;

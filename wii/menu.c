@@ -1,5 +1,8 @@
 /* Original enhanced-mode medium glyphs, rendered directly with GX. No input
- * handlers live here: the enhanced Start pulse remains owned by guest input. */
+ * handlers live here: the enhanced Start pulse remains owned by guest input.
+ * Laid out as the game draws its captions (traced 2026-10-09): each glyph is
+ * its whole 16-pixel cell less one column, letters advance one cell and a
+ * space 0.6 of one. */
 #include "menu.h"
 #include "gx_renderer.h"
 #include "enhanced_headless.h"
@@ -14,6 +17,8 @@
 static uint8_t *font;
 static GXTexObj texture;
 typedef struct {unsigned x,y,w;} Glyph;
+#define CELL 16u
+#define SPACE (CELL*0.6f)
 static Glyph glyphs[128];
 static const struct {unsigned y;const char *chars;} rows[]={
  {120,"ABCDEFGHIJKLMNOP"},{152,"QRSTUVWXYZ:;!?,."},{416,"0123456789"}};
@@ -29,17 +34,16 @@ void wii_menu_init(void){
     if(!font){free(atlas);rt_fatal("Wii menu GX font allocation");}
     for(unsigned r=0;r<sizeof rows/sizeof rows[0];r++){
         for(unsigned col=0;rows[r].chars[col];col++){
-            unsigned x0=col*16,lo=16,hi=0;int found=0;
-            if(x0+16>FONT_W||rows[r].y+32>FONT_H)rt_fatal("Wii menu glyph bounds");
-            for(unsigned x=0;x<16;x++)for(unsigned y=0;y<32;y++)
-                if(atlas[(rows[r].y+y)*FONT_W+x0+x]>40){
-                    if(x<lo)lo=x;
-                    if(!found||x>hi)hi=x;
-                    found=1;break;
-                }
-            if(found)glyphs[(unsigned char)rows[r].chars[col]]=(Glyph){x0+lo,rows[r].y,hi-lo+1};
+            unsigned x0=col*CELL;int found=0;
+            if(x0+CELL>FONT_W||rows[r].y+32>FONT_H)rt_fatal("Wii menu glyph bounds");
+            for(unsigned x=0;x<CELL&&!found;x++)for(unsigned y=0;y<32;y++)
+                if(atlas[(rows[r].y+y)*FONT_W+x0+x]>40){found=1;break;}
+            if(found)glyphs[(unsigned char)rows[r].chars[col]]=(Glyph){x0,rows[r].y,CELL-1};
         }
     }
+    /* The slash is not in the medium rows: the game's own 16x32 one (it
+     * draws "6th/6" with it) sits by itself near the bottom of the atlas. */
+    glyphs['/']=(Glyph){91,476,CELL};
     /* GX RGBA8 AR/GB planes. RGB is WHITE, not alpha-premultiplied. */
     for(unsigned y=0;y<FONT_H;y++)for(unsigned x=0;x<FONT_W;x++){
         unsigned off=((y/4)*(FONT_W/4)+x/4)*64+((y&3)*4+(x&3))*2;
@@ -62,21 +66,26 @@ static void text(float x,float y,const char *s,int selected){
     GXColor color={255,selected?217:255,selected?0:255,255};
     for(;*s;s++){
         unsigned ch=(unsigned char)*s;
-        if(ch>=128||!glyphs[ch].w){x+=8;continue;}
+        if(ch>=128||!glyphs[ch].w){x+=SPACE;continue;}
         Glyph g=glyphs[ch];quad(x,y,x+g.w,y+32,(float)g.x/FONT_W,(float)g.y/FONT_H,
-            (float)(g.x+g.w)/FONT_W,(float)(g.y+32)/FONT_H,color,1);x+=g.w+3;
+            (float)(g.x+g.w)/FONT_W,(float)(g.y+32)/FONT_H,color,1);x+=CELL;
     }
 }
 static const char *notice;
 static unsigned notice_frames;
 void wii_menu_notice(const char *s){notice=s;notice_frames=60;}   /* the game presents ~30 per second */
 static float text_width(const char *s){
-    float w=0;
-    for(;*s;s++){unsigned ch=(unsigned char)*s;w+=(ch<128&&glyphs[ch].w)?glyphs[ch].w+3:8;}
-    return w;
+    float w=0;int glyph=0;
+    for(;*s;s++){unsigned ch=(unsigned char)*s;glyph=ch<128&&glyphs[ch].w;w+=glyph?CELL:SPACE;}
+    return glyph?w-1:w;   /* the last glyph is one column narrower than its cell */
 }
 void wii_menu_draw(void){
-    int menu=wii_enhanced_menu_active();
+#ifdef VIPER_WII_SCRIPTED_RACE
+    int menu=wii_enhanced_menu_active();   /* benchmarks have no input layer */
+#else
+    int wii_menu_revealed(void);
+    int menu=wii_enhanced_menu_active()&&wii_menu_revealed();
+#endif
     if(!menu&&!notice_frames)return;
     if(!font)rt_fatal("Wii menu draw before font initialization");
     Mtx44 p;guOrtho(p,0,384,0,512,0,1);GX_LoadProjectionMtx(p,GX_ORTHOGRAPHIC);
@@ -99,9 +108,9 @@ void wii_menu_draw(void){
     if(menu){
         text(36,199,"START GAME",1);text(36,229,"PLUS OR START",0);text(36,259,"TILT TO STEER",0);
 #ifdef VIPER_WII_DISPLAY_MULTI
-        text(36,289,"1 GAS B BRAKE",0);text(36,319,"MINUS DISPLAY",0);
+        text(36,289,"1 GAS 2/B BRAKE",0);text(36,319,"MINUS DISPLAY",0);
 #else
-        text(36,289,"1 GAS B BRAKE",0);text(36,319,"MINUS RECENTER",0);
+        text(36,289,"1 GAS 2/B BRAKE",0);text(36,319,"MINUS RECENTER",0);
 #endif
     }
     if(notice_frames){text(nx,16,notice,1);notice_frames--;}

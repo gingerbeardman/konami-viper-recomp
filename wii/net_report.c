@@ -128,7 +128,7 @@ int wii_net_report_text(const char *name, const char *text) {
     if (!target_port) return 0;
     int s = connect_target();
     if (s < 0) return -1;
-    static unsigned char out[4096];
+    static unsigned char out[32768];
     uLongf n = sizeof out;
     char head[64];
     int hn = snprintf(head, sizeof head, "ZFILE %s\n", name);

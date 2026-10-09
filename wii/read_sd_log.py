@@ -4,8 +4,9 @@ import struct
 from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('image',type=Path)
-p.add_argument('--file',default='boot.log',choices=['boot.log','ram.bin','efb.bin','pgo.bin'],help='file in viper directory')
+p.add_argument('--file',default='boot.log',help='8.3 file in viper directory (boot.log, ram.bin, efb.bin, pgo.bin, capNNNNN.bin)')
 p.add_argument('--output',type=Path,help='write exact bytes instead of printing decoded text')
+p.add_argument('--tail',action='store_true',help='also read past the recorded size and FAT chain end, through contiguous non-empty clusters (a log a hang left unclosed)')
 a=p.parse_args()
 with a.image.open('rb') as f:
     boot=f.read(512)
@@ -42,8 +43,22 @@ with a.image.open('rb') as f:
                     return cluster,struct.unpack_from('<I',e,28)[0]
         raise ValueError(f'missing {name!r}')
     directory,_=find(root,b'VIPER      ')
-    log,length=find(directory,{'boot.log':b'BOOT    LOG','ram.bin':b'RAM     BIN','efb.bin':b'EFB     BIN','pgo.bin':b'PGO     BIN'}[a.file])
+    log,length=find(directory,(lambda n,e:(n.upper().ljust(8)+e.upper().ljust(3)).encode())(*a.file.split('.')))
     content=b''.join(chain(log))[:length] if length else b''
+    if a.tail:
+        blocks=list(chain(log));last=log
+        for _ in chain(log):pass
+        c=log
+        while True:
+            f.seek(reserved*sector+c*4);n=struct.unpack('<I',f.read(4))[0]&0x0fffffff
+            if not 2<=n<0x0ffffff8:break
+            c=n
+        extra=[]
+        for k in range(1,4096):
+            f.seek(data+(c+k-2)*size);b=f.read(size)
+            if not b.strip(b'\0'):break
+            extra.append(b)
+        content=(b''.join(blocks)+b''.join(extra)).rstrip(b'\0')
     if a.output:
         a.output.write_bytes(content)
     else:

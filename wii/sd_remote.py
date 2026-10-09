@@ -7,6 +7,7 @@ Run: python3 wii/sd_remote.py --wii 192.168.1.224 COMMAND...
   put LOCAL sd:/apps/x/boot.dol     upload a file (parents created)
   putdir LOCALDIR sd:/apps/x        upload a directory tree
   rm sd:/apps/old                   delete a file or a whole directory
+  reboot                            restart the console (last command)
 Several commands can be chained with ';' as separate arguments, e.g.
   ls sd:/apps \\; rm sd:/apps/viper-bench-l1 \\; ls sd:/apps"""
 import argparse
@@ -26,6 +27,7 @@ class Session:
     def __init__(self, conn: socket.socket):
         self.conn = conn
         self.f = conn.makefile('rb')
+        self.rebooted = False
 
     def request(self, line: str, body: bytes = b'') -> bytes:
         self.conn.sendall(line.encode() + b'\n' + body)
@@ -86,6 +88,10 @@ def run(s: Session, cmd: list[str]) -> None:
     elif op == 'rm':
         s.request(f'DEL {args[0]}')
         print(f'deleted {args[0]}')
+    elif op == 'reboot':
+        s.request('REBOOT')
+        s.rebooted = True
+        print('rebooting')
     else:
         raise SystemExit(f'unknown command {op}')
 
@@ -121,7 +127,8 @@ def main() -> None:
             run(s, c)
     finally:
         try:
-            s.request('QUIT')
+            if not s.rebooted:
+                s.request('QUIT')
         except (OSError, RuntimeError):
             pass
         conn.close()

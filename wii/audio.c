@@ -5,7 +5,8 @@
  * the audio DMA interrupt resamples the queue to the Wii's 48 kHz and starts
  * the next buffer. Integer only: the DMA callback runs in interrupt context.
  * Underrun repeats the last frame (silence once the game stops); a backlog of
- * more than ~100 ms is skipped, like the desktop frontend. */
+ * more than ~100 ms is skipped, like the desktop frontend (with
+ * VIPER_WII_AUDIO_LATENCY_MS, the queue is the game's clock instead). */
 #include <gccore.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -18,11 +19,21 @@
 #ifndef VIPER_WII_AUDIO_GAIN
 #define VIPER_WII_AUDIO_GAIN 16        /* runtime/frontend_sdl.c g_audio_gain */
 #endif
+#ifdef VIPER_WII_AUDIO_LATENCY_MS
+/* Audio-paced (see rt_pace_vblank): the game is let ahead until this much
+ * sound is queued, so a hitch shorter than it is not heard; a backlog more
+ * than 150 ms over it (pacing slipped) is cut back to it. */
 enum {
-    RING = 8192,                       /* 44.1 kHz frames, power of two */
+    RING = VIPER_WII_AUDIO_LATENCY_MS + 150 < 16384 * 1000 / 44100 ? 16384 : 32768,
+    BACKLOG_KEEP = 44100 * VIPER_WII_AUDIO_LATENCY_MS / 1000,
+    BACKLOG_MAX = BACKLOG_KEEP + 44100 * 150 / 1000,
+};
+_Static_assert(BACKLOG_MAX < RING, "audio ring too small for the latency");
+#else
+enum { RING = 8192, BACKLOG_MAX = 44100 / 10, BACKLOG_KEEP = 44100 / 25 };
+#endif
+enum {
     DMA_FRAMES = VIPER_WII_AUDIO_DMA_FRAMES,   /* 48 kHz frames per DMA buffer */
-    BACKLOG_MAX = 44100 / 10,
-    BACKLOG_KEEP = 44100 / 25,
     STEP = (int)((65536LL * 44100 + 24000) / 48000)   /* 16.16 source frames per output frame */
 };
 static int16_t ring[RING][2];
@@ -87,6 +98,13 @@ static void dma_done(void) {
     fill(buf);
     AUDIO_InitDMA((u32)buf, DMA_FRAMES * 4);
     dma_next ^= 1;
+}
+
+/* Queued sound in microseconds, or -1 before the game's first block. */
+int wii_audio_backlog_us(void) {
+    unsigned w = ring_w, r = ring_r;
+    if (!started || !w) return -1;
+    return (int)((uint64_t)(w - r) * 1000000u / 44100u);
 }
 
 void wii_audio_init(void) {

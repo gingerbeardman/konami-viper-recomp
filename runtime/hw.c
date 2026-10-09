@@ -416,11 +416,28 @@ static void cf_set_lba(uint32_t lba) {
     }
 }
 
+/* Read-ahead: the guest reads files sector by sector; one host read fills
+ * CF_AHEAD sectors (aligned), so a file load costs a few large reads
+ * instead of a seek and a 512-byte read per sector (on the Wii's SD card
+ * those stalled scene loads long enough to starve the audio). */
+#define CF_AHEAD 64
+static uint8_t cf_ahead[CF_AHEAD * SECTOR];
+static uint32_t cf_ahead_lba = UINT32_MAX, cf_ahead_n;
+unsigned long long hw_cf_sectors, hw_cf_host_reads;
+
 static void cf_load_sector(void) {
     memset(cf.buf, 0, SECTOR);
     if (cf.img && cf.lba < cf.nsect) {
-        fseek(cf.img, (long)cf.lba * SECTOR, SEEK_SET);
-        if (fread(cf.buf, 1, SECTOR, cf.img) != SECTOR) cf.status |= ST_ERR;
+        hw_cf_sectors++;
+        if (cf.lba - cf_ahead_lba >= cf_ahead_n) {
+            uint32_t first = cf.lba / CF_AHEAD * CF_AHEAD, n = cf.nsect - first < CF_AHEAD ? cf.nsect - first : CF_AHEAD;
+            fseek(cf.img, (long)first * SECTOR, SEEK_SET);
+            size_t got = fread(cf_ahead, SECTOR, n, cf.img);
+            hw_cf_host_reads++;
+            cf_ahead_lba = first; cf_ahead_n = (uint32_t)got;
+        }
+        if (cf.lba - cf_ahead_lba < cf_ahead_n) memcpy(cf.buf, cf_ahead + (size_t)(cf.lba - cf_ahead_lba) * SECTOR, SECTOR);
+        else cf.status |= ST_ERR;
     }
     cf.buf_pos = 0;
     cf.buf_len = SECTOR;

@@ -15,7 +15,7 @@ pgrep -x Dolphin >/dev/null && { echo "Dolphin already running; refusing"; exit 
 [ -x build/winid ] || swiftc -O wii/winid.swift -o build/winid
 # A finished log left in the SD sync folder looks like an instant pass.
 rm -f "$ROOT/build/wii/dolphin-user/Load/WiiSDSync/viper/boot.log"
-WII_DOLPHIN_SPEED=${WII_DOLPHIN_SPEED:-0} sh wii/run_dolphin.sh "$DOL" > "$LOG" 2>&1 &
+WII_DOLPHIN_ASPECT=${WII_DOLPHIN_ASPECT:-43} WII_DOLPHIN_SPEED=${WII_DOLPHIN_SPEED:-0} sh wii/run_dolphin.sh "$DOL" > "$LOG" 2>&1 &
 WRAPPER=$!
 # Watch and stop Dolphin itself: the launcher can exit while Dolphin runs on.
 PID=

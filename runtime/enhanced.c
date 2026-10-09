@@ -454,11 +454,13 @@ void enh_init(const char *work, const char *settings) {
         int col = 0;
         for (const char *p = r->chars; *p; p++, col++) {
             if (*p == ' ' || (unsigned char)*p >= 128) continue;
-            int cx = col * fs->cw, lo = fs->cw, hi = -1;
-            for (int x = 0; x < fs->cw && cx + x < GAME_ENH_FONT_W; x++)
+            /* As the game draws its captions (traced on the Wii renderer, 2026-10-09):
+             * the whole cell less one column, 1:1; see glyph_advance. */
+            int cx = col * fs->cw, ink = 0;
+            for (int x = 0; x < fs->cw && cx + x < GAME_ENH_FONT_W && !ink; x++)
                 for (int y = 0; y < fs->ch && r->y + y < g_font_h; y++)
-                    if (atlas[(r->y + y) * GAME_ENH_FONT_W + cx + x] > 40) { if (x < lo) lo = x; if (x > hi) hi = x; break; }
-            if (hi >= lo) g_glyph[r->size][(unsigned char)*p] = (Glyph){ (int16_t)(cx + lo), (int16_t)r->y, (int16_t)(hi - lo + 1), (int16_t)fs->ch, 0 };
+                    if (atlas[(r->y + y) * GAME_ENH_FONT_W + cx + x] > 40) { ink = 1; break; }
+            if (ink) g_glyph[r->size][(unsigned char)*p] = (Glyph){ (int16_t)cx, (int16_t)r->y, (int16_t)(fs->cw - 1), (int16_t)fs->ch, 0 };
         }
     }
     for (int z = 0; z < FONT_NSIZES; z++)      /* no colon (Thrill Drive 2): two full stops */
@@ -471,17 +473,20 @@ void enh_init(const char *work, const char *settings) {
 
 static int font_px(int z, int v) { return (int)(v * k_font_sizes[z].scale + 0.5f); }
 static int font_height(int z) { return font_px(z, k_font_sizes[z].ch); }
-static int glyph_space(int z) { return font_px(z, k_font_sizes[z].cw / 2); }
-static int glyph_gap(int z) { return font_px(z, k_font_sizes[z].cw / 8 + 1); }
+/* The game's caption layout: a glyph advances one cell, a space 0.6 of one. */
+static float glyph_advance(int z) { return k_font_sizes[z].cw * k_font_sizes[z].scale; }
+static float glyph_space(int z) { return k_font_sizes[z].cw * 0.6f * k_font_sizes[z].scale; }
 static int glyph_width(int z, const Glyph *g) { return font_px(z, g->w); }
 
 static int text_width(int z, const char *s) {
-    int w = 0;
+    float w = 0;
+    int glyph = 0;
     for (; *s; s++) {
-        const Glyph *g = &g_glyph[z][(unsigned char)*s & 127];
-        w += g->w ? glyph_width(z, g) + glyph_gap(z) : glyph_space(z);
+        glyph = g_glyph[z][(unsigned char)*s & 127].w != 0;
+        w += glyph ? glyph_advance(z) : glyph_space(z);
     }
-    return w;
+    if (glyph) w -= k_font_sizes[z].scale;   /* the last glyph's spare column */
+    return (int)(w + 0.5f);
 }
 
 static void blend(uint32_t *px, uint32_t rgb, int a) {
@@ -537,7 +542,7 @@ static void draw_text(uint32_t *fb, int w, int h, int z, int x, int y, const cha
                 }
             }
         }
-        fx += (glyph_width(z, g) + glyph_gap(z)) * g_ui;
+        fx += glyph_advance(z) * g_ui;
     }
 }
 

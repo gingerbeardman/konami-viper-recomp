@@ -62,6 +62,10 @@ void wii_gx_own_thread(void){
 #include "voodoo_headless.h"
 #include "runtime.h"
 #include "menu.h"
+#ifdef VIPER_WII_FRAME_CAPTURE
+#include "net_report.h"
+static void frame_capture(void);
+#endif
 #include "texture.h"
 #include "texture_cache.h"
 #include "projective_texture.h"
@@ -135,9 +139,16 @@ static void shadow_ztex(u8 op,u8 fmt,u32 bias){
         gx_shadow.zt_op=op;gx_shadow.zt_fmt=fmt;gx_shadow.zt_bias=bias;GX_SetZTexture(op,fmt,bias);
     }
 }
+#ifdef VIPER_WII_SUPERSAMPLE
+static int ss_scissor_segment(u32 x,u32 y,u32 w,u32 h);
+#endif
 static void shadow_scissor(u32 x,u32 y,u32 w,u32 h){
     if(gx_shadow.sx!=x||gx_shadow.sy!=y||gx_shadow.sw!=w||gx_shadow.sh!=h){
-        gx_shadow.sx=x;gx_shadow.sy=y;gx_shadow.sw=w;gx_shadow.sh=h;GX_SetScissor(x,y,w,h);
+        gx_shadow.sx=x;gx_shadow.sy=y;gx_shadow.sw=w;gx_shadow.sh=h;
+#ifdef VIPER_WII_SUPERSAMPLE
+        if(ss_scissor_segment(x,y,w,h))return;
+#endif
+        GX_SetScissor(x,y,w,h);
     }
 }
 /* Any direct projection load ends reuse of the renderer's w x h ortho. */
@@ -290,6 +301,12 @@ static int geometry;
  * Sites: 1 depth upload, 2 color upload, 3 scanout, 4 present before copy,
  * 5 present after copy, 6 initialization. */
 volatile uint32_t wii_gx_wait_site;
+#ifdef VIPER_WII_HANG_TRACE
+static void hang_note(char w,int x,int y);
+#define HANG_NOTE(w,x,y) hang_note((w),(int)(x),(int)(y))
+#else
+#define HANG_NOTE(w,x,y) ((void)0)
+#endif
 static void gx_wait(unsigned site){
 #ifdef VIPER_WII_SUPERSAMPLE
 #ifdef VIPER_WII_SUPERSAMPLE_TRACE
@@ -298,6 +315,7 @@ static void gx_wait(unsigned site){
     ss_abort();   /* a wait inside a recorded frame would never finish */
 #endif
     uint64_t start=gettime();
+    HANG_NOTE('W',site,0);
     wii_gx_wait_site=site;GX_DrawDone();wii_gx_wait_site=0;
     if(site<8){profile.fence_calls[site]++;profile.fence_us[site]+=ticks_to_microsecs(gettime()-start);}
 }
@@ -346,28 +364,68 @@ static unsigned height(const WiiVoodooView *v){
     return dy?(unsigned)(((uint64_t)h*dy)>>20):h;
 }
 /* Output area in the 640x480 EFB. Default: the whole EFB (the game's
- * 512x384 scaled 1.25x). VIPER_WII_LETTERBOX: 512x384 at 1:1, centred, with
+ * 512x384 scaled 1.25x). VIPER_WII_LETTERBOX (SHARP): 384 lines unscaled, centred, with
  * black borders (half the cabinet's 1024x768; even font/pixel scaling). */
 /* Chosen at init: on a Wii set to 16:9 the TV stretches the 640-wide frame
  * to widescreen, so the picture is squeezed to 3/4 width and centred with
  * black side bars (it then shows at its true 4:3 shape; 1:1 keeps square
  * pixels). WII_FORCE_ASPECT 43/169 overrides the console setting. */
 static int OUT_X=0,OUT_Y=0,OUT_W=640,OUT_H=480;
+/* Render box: where the game's picture is drawn in the EFB. Normally the
+ * output box itself. VIPER_WII_NATIVE_RES: the arcade's own 512x384 (WIDE:
+ * 640x384, its 682 columns squeezed to the EFB width), so every triangle is
+ * rasterised and textured 1:1 as on the cabinet (no seams from bilinear
+ * sampling past atlas regions, glyphs on whole pixels); present scales the
+ * finished picture to the output box in one filtered pass. */
+static int RB_X=0,RB_Y=0,RB_W=640,RB_H=480;
 #ifdef VIPER_WII_DISPLAY_MULTI
 /* MULTI build: the display mode is chosen at run time (Minus cycles it). */
-enum { DISPLAY_1TO1, DISPLAY_1TO1_NEAREST, DISPLAY_SCALED, DISPLAY_SCALED_SS, DISPLAY_WIDE, DISPLAY_WIDE_SS, DISPLAY_MODES };
-static const char *const display_names[DISPLAY_MODES]={"1:1","1:1 NEAREST","SCALED","SCALED SUPERSAMPLED",
-    "WIDESCREEN","WIDESCREEN SUPERSAMPLED"};
-#ifndef VIPER_WII_DISPLAY_START
-#define VIPER_WII_DISPLAY_START DISPLAY_SCALED
+/* SHARP: 384 lines, exactly half the arcade's 768 (width stretched for the
+ * aspect); PIXEL: nearest-neighbour textures; FULL: all 480 lines; WIDE: 16:9,
+ * more view at the sides; SUPER: 2x2 supersampled. */
+enum { DISPLAY_SHARP, DISPLAY_SHARP_PIXEL, DISPLAY_FULL, DISPLAY_FULL_SUPER, DISPLAY_WIDE_PLAIN, DISPLAY_WIDE_SUPER, DISPLAY_MODES };
+static const char *const display_names[DISPLAY_MODES]={"SHARP","SHARP PIXEL","FULL","FULL SUPER",
+    "WIDE","WIDE SUPER"};
+/* Without a build-time start mode: supersampled, fitted to the TV's aspect.
+ * Scripted benchmarks keep FULL unless told otherwise. */
+#if !defined(VIPER_WII_DISPLAY_START) && defined(VIPER_WII_SCRIPTED_RACE)
+#define VIPER_WII_DISPLAY_START DISPLAY_FULL
 #endif
+#ifdef VIPER_WII_DISPLAY_START
 static volatile int display_mode=VIPER_WII_DISPLAY_START;
+#else
+static volatile int display_mode=DISPLAY_FULL_SUPER;
+#endif
 static int display_applied=-1;
 void wii_gx_display_cycle(void){display_mode=(display_mode+1)%DISPLAY_MODES;}
-#define DISPLAY_LETTERBOX (display_mode==DISPLAY_1TO1||display_mode==DISPLAY_1TO1_NEAREST)
-#define DISPLAY_NEAREST (display_mode==DISPLAY_1TO1_NEAREST)
-#define DISPLAY_SUPERSAMPLE (display_mode==DISPLAY_SCALED_SS||display_mode==DISPLAY_WIDE_SS)
-#define DISPLAY_WIDE (display_mode==DISPLAY_WIDE||display_mode==DISPLAY_WIDE_SS)
+/* The chosen mode survives a restart: one number in a text file. */
+#define DISPLAY_MODE_FILE "sd:/viper/display_mode.txt"
+/* Scripted benchmarks start in their configured mode and leave no file. */
+static void display_mode_load(void){
+#if !defined(VIPER_WII_DISPLAY_START) && !defined(VIPER_WII_FORCE_ASPECT)
+    if(CONF_GetAspectRatio()==CONF_ASPECT_16_9)display_mode=DISPLAY_WIDE_SUPER;
+#elif !defined(VIPER_WII_DISPLAY_START) && VIPER_WII_FORCE_ASPECT==169
+    display_mode=DISPLAY_WIDE_SUPER;
+#endif
+#if defined(VIPER_WII_SCRIPTED_RACE) || defined(VIPER_WII_DISPLAY_START)
+    return;   /* a build-time start mode wins over the saved one */
+#endif
+    FILE *f=fopen(DISPLAY_MODE_FILE,"r");int m;
+    if(!f)return;
+    if(fscanf(f,"%d",&m)==1&&m>=0&&m<DISPLAY_MODES)display_mode=m;
+    fclose(f);
+}
+static void display_mode_save(void){
+#ifdef VIPER_WII_SCRIPTED_RACE
+    return;
+#endif
+    FILE *f=fopen(DISPLAY_MODE_FILE,"w");
+    if(f){fprintf(f,"%d\n",display_mode);fclose(f);}
+}
+#define DISPLAY_LETTERBOX (display_mode==DISPLAY_SHARP||display_mode==DISPLAY_SHARP_PIXEL)
+#define DISPLAY_NEAREST (display_mode==DISPLAY_SHARP_PIXEL)
+#define DISPLAY_SUPERSAMPLE (display_mode==DISPLAY_FULL_SUPER||display_mode==DISPLAY_WIDE_SUPER)
+#define DISPLAY_WIDE (display_mode==DISPLAY_WIDE_PLAIN||display_mode==DISPLAY_WIDE_SUPER)
 #else
 void wii_gx_display_cycle(void){}
 #ifdef VIPER_WII_LETTERBOX
@@ -397,6 +455,14 @@ static void output_box_init(void){
 #endif
     if(wide&&!DISPLAY_WIDE)w=w*3/4;
     OUT_W=w;OUT_H=h;OUT_X=(640-w)/2;OUT_Y=(480-h)/2;
+#ifdef VIPER_WII_NATIVE_RES
+    {int rw=512+2*WIDE_M;if(rw>640)rw=640;   /* the game's 512x384 (logged as its only display size) */
+     if(rw==OUT_W&&OUT_H==384){RB_X=OUT_X;RB_Y=OUT_Y;}   /* SHARP on 4:3: already 1:1, no scaling pass */
+     else{RB_X=(640-rw)/2;RB_Y=(480-384)/2;}
+     RB_W=rw;RB_H=384;}
+#else
+    RB_X=OUT_X;RB_Y=OUT_Y;RB_W=OUT_W;RB_H=OUT_H;
+#endif
 }
 void wii_gx_output_box(int *x,int *y,int *w,int *h){*x=OUT_X;*y=OUT_Y;*w=OUT_W;*h=OUT_H;}
 #ifdef VIPER_WII_SUPERSAMPLE
@@ -404,6 +470,39 @@ void wii_gx_output_box(int *x,int *y,int *w,int *h){*x=OUT_X;*y=OUT_Y;*w=OUT_W;*
  * each replay loads its own (the tile's 2x scale and offset in clip space,
  * so the viewport stays the normal one). One projection per frame. */
 static int ss_recording,ss_proj_set;
+/* Per TMU: this triangle maps texels to pixels 1:1, axis-aligned (a 2D
+ * sprite: logo, HUD, hi-score car). The arcade samples those at texel
+ * centres; a 2x tile sampled bilinearly bleeds the neighbouring atlas texel
+ * into the edge pixels (hair-lines above the title-screen Konami logo).
+ * Point-sampled, each 2x2 group lands in the right texel and the box filter
+ * returns the arcade's pixel exactly. */
+static unsigned sprite_near;
+static unsigned long long sprite_near_tris;
+/* The flagged sprite's texel range per TMU (level-0 texels). Inside its
+ * texture it needs no repeat: it is clamped, so an edge pixel cannot wrap to
+ * the opposite edge. Hardware snaps vertices to 1/12 pixel; in WIDE the
+ * arcade's x=0 is fractional, and its first pixel sampled s just below 0,
+ * drawing the sprite's last column down the left edge (title logo,
+ * copyright line). Dolphin does not snap, so only the Wii showed it. */
+static float sprite_s_min[2],sprite_s_max[2],sprite_t_min[2],sprite_t_max[2];
+#ifdef VIPER_WII_FRAME_CAPTURE
+static char edge_sprite_text[2048];static unsigned edge_sprite_len;   /* this frame's flagged sprites at the left edge */
+#endif
+#ifdef VIPER_WII_FRAME_CAPTURE
+/* This frame's triangles per (fbzMode, alphaMode, fbzColorPath) state. */
+static struct {uint32_t fbz,alpha,cp;unsigned n;float wmin,wmax;} state_tally[48];static unsigned state_tally_n;
+static void tally_state(const WiiVoodooView *v,const WiiVoodooVertex p[3]){
+    uint32_t fbz=v->regs[0x110/4],alpha=v->regs[0x10c/4],cp=v->regs[0x104/4];
+    unsigned i=0;for(;i<state_tally_n;i++)if(state_tally[i].fbz==fbz&&state_tally[i].alpha==alpha&&state_tally[i].cp==cp)break;
+    if(i==state_tally_n){if(i==48)return;state_tally_n++;state_tally[i].fbz=fbz;state_tally[i].alpha=alpha;state_tally[i].cp=cp;state_tally[i].n=0;state_tally[i].wmin=1e30f;state_tally[i].wmax=0;}
+    state_tally[i].n++;for(unsigned k=0;k<3;k++){if(p[k].wb<state_tally[i].wmin)state_tally[i].wmin=p[k].wb;if(p[k].wb>state_tally[i].wmax)state_tally[i].wmax=p[k].wb;}
+}
+#endif
+/* A clip rectangle smaller than the box was set this frame: the next frame
+ * is drawn plain from its start, until one goes by without (letterboxed
+ * scenes like car select and loading: an abort part-way through a recorded
+ * frame left the loading screen grey). */
+static int ss_partial_clip;
 static unsigned ss_proj_w,ss_proj_h;
 static int ss_capture_projection(unsigned w,unsigned h){
     if(!ss_recording)return 0;
@@ -445,9 +544,6 @@ static void clip(const WiiVoodooView *v,int enabled) {
     uint32_t now[6]={v->io[0x98/4],v->io[0xa4/4],v->io[0xac/4],enabled?v->regs[0x118/4]:~0u,
         enabled?v->regs[0x11c/4]:~0u,v->regs[0x110/4]&(1u<<17)};
     if(!memcmp(key,now,sizeof key)){
-#ifdef VIPER_WII_SUPERSAMPLE
-        if(cx0!=(u32)OUT_X||cy0!=(u32)OUT_Y||cw!=(u32)OUT_W||ch!=(u32)OUT_H)ss_abort();
-#endif
         GX_SetScissor(cx0,cy0,cw,ch);return;}
     memcpy(key,now,sizeof key);
     unsigned w=width(v),h=height(v),l=0,r=w,t=0,b=h;
@@ -460,17 +556,14 @@ static void clip(const WiiVoodooView *v,int enabled) {
     if(r<l)r=l;
     if(b<t)b=t;
     if(v->regs[0x110/4]&(1u<<17)){unsigned old=t;t=h-b;b=h-old;}
-    unsigned x0,x1,y0=OUT_Y+t*OUT_H/h,y1=OUT_Y+b*OUT_H/h;
+    unsigned x0,x1,y0=RB_Y+t*RB_H/h,y1=RB_Y+b*RB_H/h;
     if(WIDE_M){   /* a rectangle reaching an edge reaches the margin's edge */
         unsigned ww=w+2*WIDE_M,lw=l?l+WIDE_M:0,rw=r>=w?ww:r+WIDE_M;
-        x0=OUT_X+lw*OUT_W/ww;x1=OUT_X+rw*OUT_W/ww;
-    }else{x0=OUT_X+l*OUT_W/w;x1=OUT_X+r*OUT_W/w;}
+        x0=RB_X+lw*RB_W/ww;x1=RB_X+rw*RB_W/ww;
+    }else{x0=RB_X+l*RB_W/w;x1=RB_X+r*RB_W/w;}
     cx0=x0;cy0=y0;cw=x1-x0;ch=y1-y0;
-#ifdef VIPER_WII_SUPERSAMPLE
-    /* Tiles do not rescale a clip rectangle smaller than the box (car select
-     * letterboxes itself this way): that frame is drawn at 1x. */
-    if(cx0!=(u32)OUT_X||cy0!=(u32)OUT_Y||cw!=(u32)OUT_W||ch!=(u32)OUT_H)ss_abort();
-#endif
+    /* A recorded supersample frame keeps each clip rectangle with its list
+     * segment and scales it per tile (ss_scissor_segment). */
     GX_SetScissor(cx0,cy0,cw,ch);
 }
 static void vertex(float x,float y,float depth,GXColor c) {
@@ -534,6 +627,10 @@ static float linear_depth_from_wdepth(unsigned d){
     unsigned m=d-1,e=m>>12,frac=~m&0xfff;
     return 1.f-ldexpf((float)(4096+frac),-(int)(13+e));
 }
+#endif
+#if defined(VIPER_WII_DEPTH_TRACE) || defined(VIPER_WII_FRAME_CAPTURE)
+/* Per-frame range of linear-depth W (wb=1/W) and a log2 histogram. */
+static float depth_trace_min=1e30f,depth_trace_max;static unsigned depth_trace_hist[32],depth_trace_flat;
 #endif
 static uint64_t wdepth_approximations;
 uint64_t wii_gx_wdepth_approximations(void){return wdepth_approximations;}
@@ -818,6 +915,17 @@ static void texture_off(void) {
     GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORDNULL,GX_TEXMAP_NULL,GX_COLOR0A0);
     GX_SetTevOp(GX_TEVSTAGE0,GX_PASSCLR);
 }
+#ifdef VIPER_WII_SUPERSAMPLE
+static inline int sprite_clamp_s(unsigned unit,unsigned w,unsigned level){
+    float n=(float)(w<<level);return (sprite_near>>unit&4)&&sprite_s_min[unit]>=0&&sprite_s_max[unit]<=n;
+}
+static inline int sprite_clamp_t(unsigned unit,unsigned h,unsigned level){
+    float n=(float)(h<<level);return (sprite_near>>unit&4)&&sprite_t_min[unit]>=0&&sprite_t_max[unit]<=n;
+}
+#else
+#define sprite_clamp_s(unit,w,level) 0
+#define sprite_clamp_t(unit,h,level) 0
+#endif
 WII_HOT_bind_flat_texture static void bind_flat_texture(const WiiVoodooView *v,uint32_t cmd,unsigned unit,unsigned format,u8 coord,u8 map,float *us,float *vs,int native_program) {
 #ifdef VIPER_WII_NATIVE_TEXTURE_SOURCE
     const uint32_t *r=v->tmu[unit];
@@ -936,17 +1044,26 @@ WII_HOT_bind_flat_texture static void bind_flat_texture(const WiiVoodooView *v,u
 #ifdef VIPER_WII_NATIVE_TEXTURE_SOURCE
     unsigned filter=source->linear?GX_LINEAR:GX_NEAR;
     if(DISPLAY_NEAREST)filter=GX_NEAR;   /* Option: every game texture point-sampled. */
+#ifdef VIPER_WII_SUPERSAMPLE
+    if(sprite_near&(1u<<unit))filter=GX_NEAR;
+#endif
     GXTexObj tex=wii_gx_texture_resource_acquire(&texture_resources[slot],texture_image,w,h,
-        source->clamp_s?GX_CLAMP:GX_REPEAT,source->clamp_t?GX_CLAMP:GX_REPEAT,filter);
+        (source->clamp_s||sprite_clamp_s(unit,w,level))?GX_CLAMP:GX_REPEAT,(source->clamp_t||sprite_clamp_t(unit,h,level))?GX_CLAMP:GX_REPEAT,filter);
 #elif defined(VIPER_WII_NATIVE_TEXTURE_RESOURCE)
     unsigned filter=(r[0]&6)?GX_LINEAR:GX_NEAR;
     if(DISPLAY_NEAREST)filter=GX_NEAR;   /* Option: every game texture point-sampled. */
+#ifdef VIPER_WII_SUPERSAMPLE
+    if(sprite_near&(1u<<unit))filter=GX_NEAR;
+#endif
     GXTexObj tex=wii_gx_texture_resource_acquire(&texture_resources[slot],texture_image,w,h,
-        (r[0]&64)?GX_CLAMP:GX_REPEAT,(r[0]&128)?GX_CLAMP:GX_REPEAT,filter);
+        ((r[0]&64)||sprite_clamp_s(unit,w,level))?GX_CLAMP:GX_REPEAT,((r[0]&128)||sprite_clamp_t(unit,h,level))?GX_CLAMP:GX_REPEAT,filter);
 #else
     GXTexObj tex;GX_InitTexObj(&tex,texture_image,w,h,GX_TF_RGBA8,(r[0]&64)?GX_CLAMP:GX_REPEAT,(r[0]&128)?GX_CLAMP:GX_REPEAT,GX_FALSE);
     unsigned filter=(r[0]&6)?GX_LINEAR:GX_NEAR;
     if(DISPLAY_NEAREST)filter=GX_NEAR;   /* Option: every game texture point-sampled. */
+#ifdef VIPER_WII_SUPERSAMPLE
+    if(sprite_near&(1u<<unit))filter=GX_NEAR;
+#endif
     GX_InitTexObjLOD(&tex,filter,filter,0,0,0,GX_FALSE,GX_FALSE,GX_ANISO_1);
 #endif
 #if defined(VIPER_WII_TEXLOAD_SKIP) && defined(VIPER_WII_NATIVE_TEXTURE_RESOURCE)
@@ -1394,7 +1511,74 @@ static void memo_multi_record_end(const WiiVoodooView *v,uint32_t cmd){
     e->used=1;e->stamp=++memo_stamp;memo_multi_records++;
 }
 #endif
+#ifdef VIPER_WII_SUPERSAMPLE
+static unsigned sprite_unit_1to1(const WiiVoodooVertex p[3],unsigned unit){
+    float q0=unit?p[0].w1:p[0].w0,q1=unit?p[1].w1:p[1].w0,q2=unit?p[2].w1:p[2].w0;
+    if(q0!=q1||q0!=q2||!(q0>0))return 0;   /* perspective-mapped: 3D */
+    float dx1=p[1].x-p[0].x,dy1=p[1].y-p[0].y,dx2=p[2].x-p[0].x,dy2=p[2].y-p[0].y;
+    float det=dx1*dy2-dx2*dy1;
+    if(!(fabsf(det)>=1.f))return 0;
+    float r=1.f/(det*q0);
+    float s0=unit?p[0].s1:p[0].s,s1=unit?p[1].s1:p[1].s,s2=unit?p[2].s1:p[2].s;
+    float t0=unit?p[0].t1:p[0].t,t1=unit?p[1].t1:p[1].t,t2=unit?p[2].t1:p[2].t;
+    float sx=((s1-s0)*dy2-(s2-s0)*dy1)*r,sy=((s2-s0)*dx1-(s1-s0)*dx2)*r;
+    float tx=((t1-t0)*dy2-(t2-t0)*dy1)*r,ty=((t2-t0)*dx1-(t1-t0)*dx2)*r;
+    if(!(fabsf(fabsf(sx)-1.f)<0.02f&&fabsf(fabsf(ty)-1.f)<0.02f&&fabsf(sy)<0.02f&&fabsf(tx)<0.02f))return 0;
+    sprite_s_min[unit]=fminf(s0,fminf(s1,s2))/q0;sprite_s_max[unit]=fmaxf(s0,fmaxf(s1,s2))/q0;
+    sprite_t_min[unit]=fminf(t0,fminf(t1,t2))/q0;sprite_t_max[unit]=fmaxf(t0,fmaxf(t1,t2))/q0;
+    return 1;
+}
+static void sprite_near_update(const WiiVoodooVertex p[3]){
+    unsigned n=ss_recording?sprite_unit_1to1(p,0)|sprite_unit_1to1(p,1)<<1:0;
+    /* Bits 2-3: that unit's texels fit a 256 texture (a clamp candidate; the
+     * bind checks the real size). Part of the state, so cached bindings
+     * are dropped when it changes. */
+    for(unsigned u=0;u<2;u++)if(n>>u&1&&sprite_s_min[u]>=0&&sprite_t_min[u]>=0&&sprite_s_max[u]<=256&&sprite_t_max[u]<=256)n|=4u<<u;
+#ifdef VIPER_WII_SPRITE_TRACE
+    {static unsigned logged;float xmin=fminf(p[0].x,fminf(p[1].x,p[2].x));
+     int textured=p[0].s!=0||p[1].s!=0||p[2].s!=0||p[0].t!=0||p[1].t!=0||p[2].t!=0;
+     if(logged<60&&render_frame>=1300&&render_frame<=1500&&textured&&xmin>-4&&xmin<4){logged++;
+      rt_log("VIPER WII SPRITE f=%u near=%u v0=%.4f,%.4f st=%.4f,%.4f q=%.4f v1=%.4f,%.4f st=%.4f,%.4f v2=%.4f,%.4f st=%.4f,%.4f tex=%08lx\n",render_frame,n,
+        (double)p[0].x,(double)p[0].y,(double)p[0].s,(double)p[0].t,(double)p[0].w0,(double)p[1].x,(double)p[1].y,(double)p[1].s,(double)p[1].t,
+        (double)p[2].x,(double)p[2].y,(double)p[2].s,(double)p[2].t,(unsigned long)0);}}
+#endif
+    sprite_near_tris+=n!=0;
+#ifdef VIPER_WII_FRAME_CAPTURE
+    {float xmin=fminf(p[0].x,fminf(p[1].x,p[2].x));
+     if((p[0].s!=p[1].s||p[0].t!=p[1].t||p[0].s!=p[2].s)&&xmin<4&&edge_sprite_len<sizeof edge_sprite_text-200)
+        edge_sprite_len+=snprintf(edge_sprite_text+edge_sprite_len,sizeof edge_sprite_text-edge_sprite_len,
+          "n=%u (%.4f,%.4f s%.4f t%.4f q%.3f) (%.4f,%.4f s%.4f t%.4f) (%.4f,%.4f s%.4f t%.4f)\n",n,
+          (double)p[0].x,(double)p[0].y,(double)p[0].s,(double)p[0].t,(double)p[0].w0,(double)p[1].x,(double)p[1].y,(double)p[1].s,(double)p[1].t,
+          (double)p[2].x,(double)p[2].y,(double)p[2].s,(double)p[2].t);}
+#endif
+    if(n==sprite_near)return;
+    sprite_near=n;
+    /* Bound texture objects carry the filter: no cached binding survives. */
+    TEXLOAD_FORGET();
+#ifdef VIPER_WII_MATERIAL_BIND_SKIP
+    material_bind_valid=0;
+#endif
+#ifdef VIPER_WII_TRIANGLE_MEMO
+    tri_memo.valid=0;
+#endif
+}
+#endif
+
+#ifndef RENDER_O3
+#define RENDER_O3   /* defined with the triangle memo; plain otherwise */
+#endif
 WII_HOT_triangle RENDER_O3 static void triangle(void *user,const WiiVoodooView *v,const WiiVoodooVertex p[3],uint32_t cmd) {
+#ifdef VIPER_WII_FONT_TRACE
+    /* Diagnostic: triangles textured from the game font pages (VRAM 0x5e400
+     * digits, 0x6e400 letters), to recover how the game lays out glyphs. */
+    {unsigned base=v->tmu[0][3]&0xfffff0;static unsigned n;
+     if((base==0x6e400||base==0x5e400)&&n<20000){n++;
+        rt_log("VIPER WII FONT f=%u base=%x mode=%08lx lod=%08lx v=%.2f,%.2f,%.4f,%.4f,%.4f %.2f,%.2f,%.4f,%.4f,%.4f %.2f,%.2f,%.4f,%.4f,%.4f\n",
+          render_frame,base,(unsigned long)v->tmu[0][0],(unsigned long)v->tmu[0][1],
+          (double)p[0].x,(double)p[0].y,(double)p[0].s,(double)p[0].t,(double)p[0].wb,
+          (double)p[1].x,(double)p[1].y,(double)p[1].s,(double)p[1].t,(double)p[1].wb,
+          (double)p[2].x,(double)p[2].y,(double)p[2].s,(double)p[2].t,(double)p[2].wb);}}
+#endif
 #if defined(VIPER_WII_PARENT_PROJECTION) && defined(VIPER_WII_GX_WDEPTH_APPROX)
     /* Recursive children are synchronous: neither guest register writes nor
      * clear/present callbacks can interleave. All other draws reset this. */
@@ -1422,6 +1606,26 @@ WII_HOT_triangle RENDER_O3 static void triangle(void *user,const WiiVoodooView *
     }
 #endif
     wii_gx_own_thread();
+#ifdef VIPER_WII_FRAME_CAPTURE
+    tally_state(v,p);
+#endif
+    /* WIDE draws 682 columns; an untextured flat triangle whose every
+     * vertex sits on the game's left or right edge is a full-width overlay
+     * (the white fade as a car lands in the river): it reaches the margin's
+     * edge too, as a clear rectangle does, instead of leaving the margins
+     * unfaded. */
+    WiiVoodooVertex wide_overlay[3];
+    if(WIDE_M&&!(v->regs[0x104/4]&(1u<<27))&&p[1].wb==p[0].wb&&p[2].wb==p[0].wb){
+        float right=(float)width(v);unsigned left_n=0,right_n=0;
+        for(unsigned i=0;i<3;i++){if(p[i].x<=0.5f)left_n++;else if(p[i].x>=right-0.5f)right_n++;}
+        if(left_n&&right_n&&left_n+right_n==3){
+            for(unsigned i=0;i<3;i++){wide_overlay[i]=p[i];wide_overlay[i].x=p[i].x<=0.5f?-(float)WIDE_M:right+(float)WIDE_M;}
+            p=wide_overlay;
+        }
+    }
+#ifdef VIPER_WII_SUPERSAMPLE
+    sprite_near_update(p);
+#endif
 #ifdef VIPER_WII_TRIANGLE_MEMO
     if(tri_memo.valid&&active_depth_band<0&&triangle_memo(v,p,cmd,area))return;
 #ifdef VIPER_WII_MEMO_MULTI
@@ -1810,6 +2014,11 @@ WII_HOT_triangle_full static void triangle_full(void *user,const WiiVoodooView *
             for(unsigned i=0;i<3;i++)depths[i]=1.f-p[i].wb;
             linear_depth=1;
             varying=0;
+#if defined(VIPER_WII_DEPTH_TRACE) || defined(VIPER_WII_FRAME_CAPTURE)
+            for(unsigned i=0;i<3;i++){float w=p[i].wb;if(w<depth_trace_min)depth_trace_min=w;if(w>depth_trace_max&&w<0.99f)depth_trace_max=w;
+             int e=w>0?-(int)floorf(log2f(w)):31;if(e>31)e=31;if(e<0)e=0;depth_trace_hist[e]++;}
+            {float a=fabsf(p[1].wb-p[0].wb)+fabsf(p[2].wb-p[0].wb);if(a<1e-12f)depth_trace_flat++;}
+#endif
         }
 #endif
 #ifdef VIPER_WII_WDEPTH_CONSTANT
@@ -2565,6 +2774,64 @@ static void letterbox_borders(void){
     }
     GX_End();
 }
+#ifdef VIPER_WII_NATIVE_RES
+/* The finished native picture (render box) is copied to native_tex and drawn
+ * bilinear into the output box; after the display copy it is drawn back 1:1
+ * (point sampled) into the render box, so a frame the game leaves undrawn
+ * (loading) still shows the same picture, as the EFB keeps it at 1x. */
+static u8 *native_tex;
+static int native_scaled;   /* this frame's picture is in native_tex */
+static void native_quad(u8 filter,float x0,float y0,float x1,float y1){
+    GX_SetViewport(0,0,640,480,0,1);GX_SetScissor(0,0,640,480);
+    {Mtx44 p;guOrtho(p,0,480,0,640,0,1);GX_LoadProjectionMtx(p,GX_ORTHOGRAPHIC);}
+    GX_SetZMode(GX_FALSE,GX_ALWAYS,GX_FALSE);GX_SetColorUpdate(GX_TRUE);GX_SetAlphaUpdate(GX_FALSE);
+    GX_SetBlendMode(GX_BM_NONE,GX_BL_ONE,GX_BL_ZERO,GX_LO_COPY);
+    GX_SetAlphaCompare(GX_ALWAYS,0,GX_AOP_AND,GX_ALWAYS,0);
+    GX_SetCullMode(GX_CULL_NONE);GX_SetFog(GX_FOG_NONE,0,1,0,1,(GXColor){0,0,0,0});
+    GX_SetNumChans(1);GX_SetNumTexGens(1);GX_SetNumTevStages(1);GX_SetNumIndStages(0);
+    GX_SetTevDirect(GX_TEVSTAGE0);
+    GX_SetTexCoordGen(GX_TEXCOORD0,GX_TG_MTX2x4,GX_TG_TEX0,GX_IDENTITY);
+    GX_SetTevSwapModeTable(GX_TEV_SWAP0,GX_CH_RED,GX_CH_GREEN,GX_CH_BLUE,GX_CH_ALPHA);
+    GX_SetTevSwapMode(GX_TEVSTAGE0,GX_TEV_SWAP0,GX_TEV_SWAP0);
+    GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLORNULL);
+    GX_SetTevOp(GX_TEVSTAGE0,GX_REPLACE);
+    GX_ClearVtxDesc();GX_SetVtxDesc(GX_VA_POS,GX_DIRECT);GX_SetVtxDesc(GX_VA_CLR0,GX_DIRECT);
+    GX_SetVtxDesc(GX_VA_TEX0,GX_DIRECT);
+    GX_SetVtxAttrFmt(GX_VTXFMT7,GX_VA_POS,GX_POS_XYZ,GX_F32,0);
+    GX_SetVtxAttrFmt(GX_VTXFMT7,GX_VA_CLR0,GX_CLR_RGBA,GX_RGBA8,0);
+    GX_SetVtxAttrFmt(GX_VTXFMT7,GX_VA_TEX0,GX_TEX_ST,GX_F32,0);
+    GXTexObj o;GX_InitTexObj(&o,native_tex,RB_W,RB_H,GX_TF_RGBA8,GX_CLAMP,GX_CLAMP,GX_FALSE);
+    GX_InitTexObjLOD(&o,filter,filter,0,0,0,GX_FALSE,GX_FALSE,GX_ANISO_1);
+    GX_LoadTexObj(&o,GX_TEXMAP0);
+    GX_Begin(GX_QUADS,GX_VTXFMT7,4);
+    GX_Position3f32(x0,y0,-0.5f);GX_Color4u8(255,255,255,255);GX_TexCoord2f32(0,0);
+    GX_Position3f32(x1,y0,-0.5f);GX_Color4u8(255,255,255,255);GX_TexCoord2f32(1,0);
+    GX_Position3f32(x1,y1,-0.5f);GX_Color4u8(255,255,255,255);GX_TexCoord2f32(1,1);
+    GX_Position3f32(x0,y1,-0.5f);GX_Color4u8(255,255,255,255);GX_TexCoord2f32(0,1);
+    GX_End();
+    GX_SetAlphaUpdate(GX_TRUE);
+#ifdef VIPER_WII_VERTEX_STQ
+    stq_desc=-1;stq_set_mode(0);   /* back to the renderer's mode 0, re-sent */
+#endif
+    TEXLOAD_FORGET();gx_shadow.proj_w=gx_shadow.proj_h=0;
+}
+static void native_upscale(void){
+    if(RB_X==OUT_X&&RB_Y==OUT_Y&&RB_W==OUT_W&&RB_H==OUT_H)return;   /* already 1:1 */
+    if(!native_tex&&!(native_tex=memalign(32,640*384*4)))rt_fatal("GX native picture allocation");
+    GX_SetTexCopySrc(RB_X,RB_Y,RB_W,RB_H);
+    GX_SetTexCopyDst(RB_W,RB_H,GX_TF_RGBA8,GX_FALSE);
+    GX_CopyTex(native_tex,GX_FALSE);
+    GX_PixModeSync();GX_InvalidateTexAll();
+    native_quad(GX_LINEAR,OUT_X,OUT_Y,OUT_X+OUT_W,OUT_Y+OUT_H);
+    native_scaled=1;
+}
+static void native_restore(void){
+    if(!native_scaled)return;
+    native_scaled=0;
+    native_quad(GX_NEAR,RB_X,RB_Y,RB_X+RB_W,RB_Y+RB_H);
+    GX_SetViewport(RB_X,RB_Y,RB_W,RB_H,0,1);
+}
+#endif
 #ifdef VIPER_WII_SUPERSAMPLE
 /* 2x2 supersampling (playable option; it changes the picture). Each frame's
  * GX commands are recorded into a display list between presents and
@@ -2586,7 +2853,102 @@ static unsigned ss_n_begin,ss_n_abort42;
 #else
 #define SS_TRACE(...) ((void)0)
 #endif
+#ifdef VIPER_WII_NATIVE_RES
+/* Tiles at full size: the four quarters of the 2x native picture (1024x768
+ * from 512x384, the cabinet's own output size) are composited straight into
+ * the output box, bilinear: more detail than 384 lines, rasterised at an
+ * exact 2x. */
+#define SS_TILE_W RB_W
+#define SS_TILE_H RB_H
+#define SS_TILE_BOX GX_FALSE
+#define SS_TILE_FILTER GX_LINEAR
+#define SS_OX OUT_X
+#define SS_OY OUT_Y
+#define SS_OW OUT_W
+#define SS_OH OUT_H
+#define SS_TILE_BYTES (640*384*4)
+#else
+/* Tiles box-filtered to half size by the copy, composited 1:1. */
+#define SS_TILE_W (RB_W/2)
+#define SS_TILE_H (RB_H/2)
+#define SS_TILE_BOX GX_TRUE
+#define SS_TILE_FILTER GX_NEAR
+#define SS_OX RB_X
+#define SS_OY RB_Y
+#define SS_OW RB_W
+#define SS_OH RB_H
+#define SS_TILE_BYTES (320*240*4)
+#endif
+/* What the last resolve did; present scales only a picture left in the
+ * render box (VIPER_WII_NATIVE_RES). */
+enum {SS_NONE,SS_TILED,SS_EMPTY};
+static int ss_result,ss_last_tiled;
 static u8 *ss_dl,*ss_tile[4];
+#ifdef VIPER_WII_SS_SHARPEN
+static u8 *ss_sharp;   /* the composited picture, re-read by the sharpening pass */
+#endif
+#ifdef VIPER_WII_SS_PIPELINE
+/* Two lists: the GPU replays frame N from one while the CPU records frame
+ * N + 1 into the other. ss_resolve waits for frame N - 1's GPU work (the
+ * other list's last use) before queueing frame N, instead of present waiting
+ * after it, so the 4 replays overlap the next frame's emulation. */
+static u8 *ss_dl_buf[2];static unsigned ss_dl_index;
+static int ss_waited;   /* this frame's present wait was done by ss_resolve */
+/* GPU-bound scenes (the attract tunnel explosion: 4x the fill) slowed the
+ * game below real time and the sound ran dry. When the previous frame's GPU
+ * work is still running by more than SS_BEHIND_US at a resolve, the next
+ * frames are drawn plain; each repeat doubles the pause (to SS_BACKOFF_MAX),
+ * and a supersampled frame that keeps up resets it. */
+#define SS_BEHIND_US 2000
+#define SS_BACKOFF_MIN 30
+#define SS_BACKOFF_MAX 240
+static unsigned ss_backoff,ss_backoff_len=SS_BACKOFF_MIN;
+static int ss_prev_tiled;   /* the frame the resolve waits for was supersampled */
+#endif
+/* A recorded frame is a run of list segments, one per clip rectangle: the
+ * scissor is not recorded (it would be wrong for every tile but one); each
+ * replay sets the segment's rectangle scaled and offset for its tile. The
+ * interior and bumper cameras clip their rear-view mirror this way, and
+ * before segments those frames were drawn at 1x. */
+#define SS_SEGMENTS 64
+static struct {u32 off,n;s16 x,y,w,h;} ss_seg[SS_SEGMENTS];
+static unsigned ss_nseg;
+static void ss_seg_start(u32 off,u32 x,u32 y,u32 w,u32 h){
+    ss_seg[ss_nseg].off=off;ss_seg[ss_nseg].n=0;
+    ss_seg[ss_nseg].x=(s16)x;ss_seg[ss_nseg].y=(s16)y;ss_seg[ss_nseg].w=(s16)w;ss_seg[ss_nseg].h=(s16)h;
+    GX_BeginDispList(ss_dl+off,SS_DL_BYTES-off);
+    wgPipe->U8=0;   /* GX NOP: an empty segment pads to 32 bytes, so 0 means overflow */
+}
+static u32 ss_seg_end(void){u32 n=GX_EndDispList();ss_seg[ss_nseg++].n=n;return n;}
+/* tile < 0: each segment's own rectangle; else scaled into that tile. A
+ * rectangle that misses the tile gets an empty one outside the render box
+ * (the segment's state still applies, nothing is drawn). */
+static void ss_seg_scissor(unsigned i,int tile){
+    int x=ss_seg[i].x,y=ss_seg[i].y,w=ss_seg[i].w,h=ss_seg[i].h;
+    if(tile<0){GX_SetScissor(x,y,w,h);return;}
+    int ox=(tile&1)*RB_W/2,oy=(tile>>1)*RB_H/2;
+    int x0=x-RB_X,x1=x+w-RB_X,y0=y-RB_Y,y1=y+h-RB_Y;
+    x0=(x0-ox)*2;x1=(x1-ox)*2;y0=(y0-oy)*2;y1=(y1-oy)*2;
+    if(x0<0)x0=0;if(y0<0)y0=0;if(x1>RB_W)x1=RB_W;if(y1>RB_H)y1=RB_H;
+    if(x1<=x0||y1<=y0){if(RB_Y>0)GX_SetScissor(0,0,640,RB_Y);else GX_SetScissor(0,RB_Y+RB_H,640,1);return;}
+    GX_SetScissor(RB_X+x0,RB_Y+y0,x1-x0,y1-y0);
+}
+static void ss_replay_segments(int tile){
+    for(unsigned i=0;i<ss_nseg;i++){
+        if(!ss_seg[i].n)continue;   /* overflowed: lost */
+        ss_seg_scissor(i,tile);GX_CallDispList(ss_dl+ss_seg[i].off,ss_seg[i].n);
+    }
+}
+static int ss_scissor_segment(u32 x,u32 y,u32 w,u32 h){
+    if(!ss_recording)return 0;
+    if(ss_nseg+1>=SS_SEGMENTS){ss_abort();return 0;}   /* too many: this frame at 1x */
+    u32 n=ss_seg_end();
+    if(!n){ss_abort();return 0;}
+    u32 off=ss_seg[ss_nseg-1].off+((n+31)&~31u);
+    if(off+64>=SS_DL_BYTES){ss_abort();return 0;}
+    ss_seg_start(off,x,y,w,h);
+    return 1;
+}
 /* tile < 0: the plain projection; else quarter tile (x = tile&1, y = tile>>1). */
 static void ss_load_projection(int tile){
     if(!ss_proj_set)return;
@@ -2598,12 +2960,45 @@ static void ss_load_projection(int tile){
     }
     GX_LoadProjectionMtx(p,GX_ORTHOGRAPHIC);
 }
+#ifdef VIPER_WII_HANG_TRACE
+int usleep(unsigned int);   /* newlib hides it under -std=c11 */
+/* Diagnostic: the last supersample events in RAM; a watchdog thread writes
+ * them out when frames stop (a GPU hang leaves the guest in a fence). */
+static struct {unsigned frame;char what;int a,b;} hang_ring[64];static volatile unsigned hang_pos;
+static void hang_note(char w,int x,int y){unsigned i=hang_pos++&63;hang_ring[i].frame=render_frame;hang_ring[i].what=w;hang_ring[i].a=x;hang_ring[i].b=y;}
+static void *hang_watch(void *arg){
+    (void)arg;unsigned last=~0u,still=0;
+    for(;;){
+        usleep(500000);
+        if(render_frame!=last){last=render_frame;still=0;continue;}
+        if(++still==6){
+            rt_log("VIPER WII HANG frame=%u events (B begin, A abort line/bytes, R resolve bytes/proj, C partial clip, W wait site):\n",render_frame);
+            for(unsigned k=0;k<64;k++){unsigned i=(hang_pos+k)&63;if(!hang_ring[i].what)continue;
+                rt_log("  f=%u %c %d %d\n",hang_ring[i].frame,hang_ring[i].what,hang_ring[i].a,hang_ring[i].b);}
+            rt_log("VIPER WII HANG recording=%d wait_site=%u\n",ss_recording,(unsigned)wii_gx_wait_site);
+            extern void wii_log_sync(void);wii_log_sync();
+        }
+    }
+    return NULL;
+}
+#endif
 static unsigned long long ss_frames,ss_plain;
+unsigned ss_dl_peak,ss_dl_overflows;   /* largest recorded list and overflows (diagnostics read them) */
 static void ss_begin(void){
     if(!ss_dl){
+#ifdef VIPER_WII_SS_PIPELINE
+        ss_dl_buf[0]=memalign(32,SS_DL_BYTES);ss_dl_buf[1]=memalign(32,SS_DL_BYTES);
+        if(!ss_dl_buf[1])rt_fatal("GX supersample allocation");
+        DCInvalidateRange(ss_dl_buf[1],SS_DL_BYTES);
+        ss_dl=ss_dl_buf[0];
+#else
         ss_dl=memalign(32,SS_DL_BYTES);
-        for(unsigned t=0;t<4;t++)ss_tile[t]=memalign(32,320*240*4);
+#endif
+        for(unsigned t=0;t<4;t++)ss_tile[t]=memalign(32,SS_TILE_BYTES);
         if(!ss_dl||!ss_tile[3])rt_fatal("GX supersample allocation");
+#ifdef VIPER_WII_SS_SHARPEN
+        if(!(ss_sharp=memalign(32,640*480*4)))rt_fatal("GX supersample allocation");
+#endif
         /* The write-gather pipe fills the list behind the cache: no stale
          * lines may sit over it (libogc's display-list note). */
         DCInvalidateRange(ss_dl,SS_DL_BYTES);
@@ -2614,13 +3009,53 @@ static void ss_begin(void){
          * stale values (a wrong vertex size: "Unknown opcode"). */
         GX_SetMisc(GX_MT_DL_SAVE_CTX,0);
     }
-    if(!DISPLAY_SUPERSAMPLE||((OUT_W|OUT_H)&7))return;   /* tiles must be whole 4x4 texture blocks */
+    if(!DISPLAY_SUPERSAMPLE||((RB_W|RB_H)&7))return;   /* tiles must be whole 4x4 texture blocks */
+#ifdef VIPER_WII_SS_PIPELINE
+    ss_prev_tiled=0;   /* set again by this frame's resolve if it is tiled */
+#endif
+    if(ss_partial_clip){ss_partial_clip=0;ss_plain++;return;}
+#ifdef VIPER_WII_SS_PIPELINE
+    if(ss_backoff){ss_backoff--;ss_plain++;return;}
+#endif
 #ifdef VIPER_WII_SUPERSAMPLE_TRACE
     if(!(++ss_n_begin%25))SS_TRACE("VIPER WII SS heartbeat frame=%u begins=%u thread_aborts=%u resolved=%llu plain=%llu\n",
         render_frame,ss_n_begin,ss_n_abort42,ss_frames,ss_plain);
 #endif
+    /* The four replays run the same list, but only the first starts from the
+     * GPU state current while it was recorded; the others start from what
+     * the list itself left. So the list must carry every state it relies on:
+     * no CPU-side cache may skip a command because the GPU "already has" it
+     * from before the frame (rare skips drew some quarters with the previous
+     * frame's TEV/texture state: torn WIDE SUPER frames with the Cobra). */
+    gx_shadow_reset();clip_key_stale=1;TEXLOAD_FORGET();
+#ifdef VIPER_WII_COMBINER_PROGRAM_CACHE
+    wii_combiner_program_invalidate(&combiner_cache);
+#endif
+#ifdef VIPER_WII_MATERIAL_RUN
+    wii_material_run_invalidate(&material_run);
+#endif
+#ifdef VIPER_WII_MATERIAL_BIND_SKIP
+    material_bind_valid=0;
+#endif
+#ifdef VIPER_WII_LOOKUP_PLANE_REUSE
+    lookup_plane_cache.valid=0;
+#endif
+#ifdef VIPER_WII_TRIANGLE_MEMO
+    tri_memo.valid=0;
+#endif
     GX_Flush();
-    GX_BeginDispList(ss_dl,SS_DL_BYTES);
+#ifdef VIPER_WII_SS_PIPELINE
+    ss_dl=ss_dl_buf[ss_dl_index^=1];
+#endif
+    HANG_NOTE('B',ss_dl_index,0);
+    ss_nseg=0;ss_seg_start(0,0,0,640,480);
+    /* libogc sends the vertex descriptor only when it changes, so a list
+     * could start drawing with the one in force before it, which replays 2-4
+     * do not have (they start from the list's last one): the GPU then reads
+     * vertices at the wrong size ("Unknown opcode", a hang; interior view in
+     * WIDE SUPER). Mark the current descriptor dirty: the list's first draw
+     * sends it. */
+    {GXVtxDesc vd[GX_MAX_VTXDESC_LISTSIZE];GX_GetVtxDescv(vd);GX_SetVtxDescv(vd);}
     ss_recording=1;ss_proj_set=0;
 #ifdef VIPER_WII_VERTEX_STQ
     /* libogc sends vertex descriptors lazily (at the next GX_Begin): make
@@ -2632,21 +3067,97 @@ static void ss_begin(void){
 }
 static void ss_abort_line(int line){
     if(!ss_recording)return;
+#ifdef VIPER_WII_GX_BATCH
+    /* Batched triangles belong to the recorded frame: put them in the list
+     * before it ends. Otherwise the projection load below flushes them
+     * straight to the GPU ahead of the list's replay, with the previous
+     * frame's vertex layout: "Unknown opcode" and a hang (an abort at the
+     * interior view's partial clip in WIDE SUPER; the same order fix as
+     * wii_gx_batch_flush at the end of a run). */
+    gx_batch_flush();
+#endif
     ss_recording=0;
-    u32 n=GX_EndDispList();
+    u32 n=ss_seg_end();
+    HANG_NOTE('A',line,n);
 #ifdef VIPER_WII_SUPERSAMPLE_TRACE
     if(line==42)ss_n_abort42++;
     else SS_TRACE("VIPER WII SS abort frame=%u bytes=%lu line=%d thread=%p\n",render_frame,(unsigned long)n,line,(void*)LWP_GetSelf());
 #endif
-    (void)line;
+    (void)line;(void)n;
     ss_load_projection(-1);
-    if(n)GX_CallDispList(ss_dl,n);
+    ss_replay_segments(-1);
     ss_plain++;
 }
+#ifdef VIPER_WII_SS_SHARPEN
+/* Unsharp mask over the composited picture, which the 2x2 box downscale
+ * leaves soft: out = c + k (c - b), b the mean of the 4 neighbours, k the
+ * TEV constant VIPER_WII_SS_SHARPEN (GX_TEV_KCSEL_1_4 .. _1). Only TEV input
+ * d keeps a sign, so stage 4 forms k (c - b) as d - lerp(c, b, k) unclamped
+ * and stage 5 adds c. Every GX call here is shadowed and present resets the
+ * shadows after the resolve; vertex descriptors are put back as the
+ * composite left them. Called with the composite's state current. */
+static void ss_sharpen(void){
+    GX_SetTexCopySrc(SS_OX,SS_OY,SS_OW,SS_OH);
+    GX_SetTexCopyDst(SS_OW,SS_OH,GX_TF_RGBA8,GX_FALSE);
+    GX_CopyTex(ss_sharp,GX_FALSE);
+    GX_PixModeSync();GX_InvalidateTexAll();
+    GXTexObj o;GX_InitTexObj(&o,ss_sharp,SS_OW,SS_OH,GX_TF_RGBA8,GX_CLAMP,GX_CLAMP,GX_FALSE);
+    GX_InitTexObjLOD(&o,GX_NEAR,GX_NEAR,0,0,0,GX_FALSE,GX_FALSE,GX_ANISO_1);
+    GX_LoadTexObj(&o,GX_TEXMAP0);
+    GX_SetNumChans(0);GX_SetNumTexGens(5);GX_SetNumTevStages(6);
+    for(unsigned i=0;i<5;i++)GX_SetTexCoordGen(GX_TEXCOORD0+i,GX_TG_MTX2x4,GX_TG_TEX0+i,GX_IDENTITY);
+    /* Stages 0-3: b = n/4 + e/4 + s/4 + w/4 (texcoords 1-4). */
+    for(unsigned st=0;st<4;st++){
+        GX_SetTevOrder(st,GX_TEXCOORD1+st,GX_TEXMAP0,GX_COLORNULL);
+        GX_SetTevKColorSel(st,GX_TEV_KCSEL_1_4);
+        GX_SetTevColorIn(st,GX_CC_ZERO,GX_CC_TEXC,GX_CC_KONST,st?GX_CC_CPREV:GX_CC_ZERO);
+        GX_SetTevColorOp(st,GX_TEV_ADD,GX_TB_ZERO,GX_CS_SCALE_1,GX_TRUE,GX_TEVPREV);
+        GX_SetTevAlphaIn(st,GX_CA_ZERO,GX_CA_ZERO,GX_CA_ZERO,GX_CA_ZERO);
+        GX_SetTevAlphaOp(st,GX_TEV_ADD,GX_TB_ZERO,GX_CS_SCALE_1,GX_TRUE,GX_TEVPREV);
+    }
+    /* Stage 4: c - lerp(c, b, k) = k (c - b), signed. Stage 5: + c. */
+    GX_SetTevOrder(GX_TEVSTAGE4,GX_TEXCOORD0,GX_TEXMAP0,GX_COLORNULL);
+    GX_SetTevKColorSel(GX_TEVSTAGE4,VIPER_WII_SS_SHARPEN);
+    GX_SetTevColorIn(GX_TEVSTAGE4,GX_CC_TEXC,GX_CC_CPREV,GX_CC_KONST,GX_CC_TEXC);
+    GX_SetTevColorOp(GX_TEVSTAGE4,GX_TEV_SUB,GX_TB_ZERO,GX_CS_SCALE_1,GX_FALSE,GX_TEVPREV);
+    GX_SetTevOrder(GX_TEVSTAGE5,GX_TEXCOORD0,GX_TEXMAP0,GX_COLORNULL);
+    GX_SetTevColorIn(GX_TEVSTAGE5,GX_CC_ZERO,GX_CC_TEXC,GX_CC_ONE,GX_CC_CPREV);
+    GX_SetTevColorOp(GX_TEVSTAGE5,GX_TEV_ADD,GX_TB_ZERO,GX_CS_SCALE_1,GX_TRUE,GX_TEVPREV);
+    for(unsigned st=4;st<6;st++){
+        GX_SetTevAlphaIn(st,GX_CA_ZERO,GX_CA_ZERO,GX_CA_ZERO,GX_CA_ZERO);
+        GX_SetTevAlphaOp(st,GX_TEV_ADD,GX_TB_ZERO,GX_CS_SCALE_1,GX_TRUE,GX_TEVPREV);
+    }
+    GX_ClearVtxDesc();GX_SetVtxDesc(GX_VA_POS,GX_DIRECT);
+    for(unsigned i=0;i<5;i++){
+        GX_SetVtxDesc(GX_VA_TEX0+i,GX_DIRECT);
+        GX_SetVtxAttrFmt(GX_VTXFMT7,GX_VA_TEX0+i,GX_TEX_ST,GX_F32,0);
+    }
+    const float du=1.f/SS_OW,dv=1.f/SS_OH;
+    static const float corner[4][2]={{0,0},{1,0},{1,1},{0,1}};
+    GX_Begin(GX_QUADS,GX_VTXFMT7,4);
+    for(unsigned c=0;c<4;c++){
+        float u=corner[c][0],v=corner[c][1];
+        GX_Position3f32(SS_OX+u*SS_OW,SS_OY+v*SS_OH,-0.5f);
+        GX_TexCoord2f32(u,v);
+        GX_TexCoord2f32(u,v-dv);GX_TexCoord2f32(u+du,v);GX_TexCoord2f32(u,v+dv);GX_TexCoord2f32(u-du,v);
+    }
+    GX_End();
+    /* As the composite left them (it ran with these): */
+    GX_SetNumChans(1);GX_SetNumTexGens(1);GX_SetNumTevStages(1);
+    GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLORNULL);GX_SetTevOp(GX_TEVSTAGE0,GX_REPLACE);
+    GX_ClearVtxDesc();GX_SetVtxDesc(GX_VA_POS,GX_DIRECT);GX_SetVtxDesc(GX_VA_CLR0,GX_DIRECT);
+    GX_SetVtxDesc(GX_VA_TEX0,GX_DIRECT);
+}
+#endif
 static void ss_resolve(void){
+    ss_result=SS_NONE;
     if(!ss_recording)return;
     ss_recording=0;
-    u32 n=GX_EndDispList();
+    u32 n=ss_seg_end(),total=0;int empty=1;
+    for(unsigned i=0;i<ss_nseg;i++){total+=ss_seg[i].n;if(ss_seg[i].n>32)empty=0;}
+    HANG_NOTE('R',total,ss_nseg);
+    if(total>ss_dl_peak)ss_dl_peak=total;
+    if(!n)ss_dl_overflows++;
     SS_TRACE("VIPER WII SS resolve frame=%u bytes=%lu proj=%d %ux%u\n",render_frame,(unsigned long)n,ss_proj_set,ss_proj_w,ss_proj_h);
 #ifdef VIPER_WII_SUPERSAMPLE_TRACE
     {static unsigned dumps;
@@ -2659,22 +3170,51 @@ static void ss_resolve(void){
         }}}
 #endif
     if(!n){ss_plain++;gx_shadow.proj_w=gx_shadow.proj_h=0;return;}   /* overflowed: the frame is lost, the next one is not */
+    /* Nothing drawn (32 bytes: only ss_begin's descriptor setup; any draw adds
+     * far more): the game is loading and presents the same picture. The EFB
+     * still holds the last composite, so the tiles would copy it again at
+     * half size: a 2x2 grid, then 4x4, then flat grey. Replay the list once
+     * for its state (libogc's model already counts it as sent) and keep the
+     * picture, as the plain renderer does. */
+    if(empty){ss_load_projection(-1);ss_replay_segments(-1);ss_plain++;ss_result=SS_EMPTY;return;}
 #ifdef VIPER_WII_SS_PLAIN_RESOLVE
     /* Diagnostic: record and replay once at 1x (no tiles, copies or composite). */
-    ss_load_projection(-1);GX_CallDispList(ss_dl,n);ss_frames++;return;
+    ss_load_projection(-1);ss_replay_segments(-1);ss_frames++;return;
 #endif
     ss_frames++;
+#ifdef VIPER_WII_SS_PIPELINE
+    {uint64_t t=gettime();
+     gx_wait(4);ss_waited=1;   /* frame N - 1 done: its list is free for frame N + 1 */
+     if(ticks_to_microsecs(gettime()-t)>SS_BEHIND_US){
+        ss_backoff=ss_backoff_len;
+        if(ss_backoff_len<SS_BACKOFF_MAX)ss_backoff_len*=2;
+     }else if(ss_prev_tiled)ss_backoff_len=SS_BACKOFF_MIN;   /* only a supersampled frame proves it keeps up */
+     ss_prev_tiled=1;}
+#endif
     for(unsigned t=0;t<4;t++){
         unsigned tx=t&1,ty=t>>1;
         (void)tx;(void)ty;
-        GX_SetViewport(OUT_X,OUT_Y,OUT_W,OUT_H,0,1);GX_SetScissor(0,0,640,480);
+        GX_SetViewport(RB_X,RB_Y,RB_W,RB_H,0,1);
         ss_load_projection((int)t);
-        GX_CallDispList(ss_dl,n);
-        GX_SetTexCopySrc(OUT_X,OUT_Y,OUT_W,OUT_H);
-        GX_SetTexCopyDst(OUT_W/2,OUT_H/2,GX_TF_RGBA8,GX_TRUE);
+        ss_replay_segments((int)t);
+        GX_SetTexCopySrc(RB_X,RB_Y,RB_W,RB_H);
+        GX_SetTexCopyDst(SS_TILE_W,SS_TILE_H,GX_TF_RGBA8,SS_TILE_BOX);
+#ifdef VIPER_WII_SS_TILE_MAGENTA
+        /* Diagnostic: each copy clears the render box to magenta (Z far), so
+         * pixels a frame never draws show in the next tile's quarter. */
+        GX_SetCopyClear((GXColor){255,0,255,255},0xffffff);
+        GX_CopyTex(ss_tile[t],GX_TRUE);
+        GX_SetCopyClear((GXColor){0,0,0,255},0xffffff);
+#else
         GX_CopyTex(ss_tile[t],GX_FALSE);
+#endif
     }
     GX_PixModeSync();GX_InvalidateTexAll();
+    /* The replayed list set the hardware state (its scissor is the render
+     * box), while the shadow still holds what was set before each replay:
+     * forget it, or the composite's full-screen scissor is skipped and the
+     * picture is clipped to the render box (VIPER_WII_NATIVE_RES). */
+    gx_shadow_reset();
     /* Composite: four textured quads, point sampled (one texel per pixel). */
     GX_SetViewport(0,0,640,480,0,1);GX_SetScissor(0,0,640,480);
     {Mtx44 p;guOrtho(p,0,480,0,640,0,1);GX_LoadProjectionMtx(p,GX_ORTHOGRAPHIC);}
@@ -2697,10 +3237,10 @@ static void ss_resolve(void){
     GX_SetVtxAttrFmt(GX_VTXFMT7,GX_VA_CLR0,GX_CLR_RGBA,GX_RGBA8,0);
     GX_SetVtxAttrFmt(GX_VTXFMT7,GX_VA_TEX0,GX_TEX_ST,GX_F32,0);
     for(unsigned t=0;t<4;t++){
-        GXTexObj o;GX_InitTexObj(&o,ss_tile[t],OUT_W/2,OUT_H/2,GX_TF_RGBA8,GX_CLAMP,GX_CLAMP,GX_FALSE);
-        GX_InitTexObjLOD(&o,GX_NEAR,GX_NEAR,0,0,0,GX_FALSE,GX_FALSE,GX_ANISO_1);
+        GXTexObj o;GX_InitTexObj(&o,ss_tile[t],SS_TILE_W,SS_TILE_H,GX_TF_RGBA8,GX_CLAMP,GX_CLAMP,GX_FALSE);
+        GX_InitTexObjLOD(&o,SS_TILE_FILTER,SS_TILE_FILTER,0,0,0,GX_FALSE,GX_FALSE,GX_ANISO_1);
         GX_LoadTexObj(&o,GX_TEXMAP0);
-        float x0=OUT_X+(t&1)*(OUT_W/2),y0=OUT_Y+(t>>1)*(OUT_H/2),x1=x0+OUT_W/2,y1=y0+OUT_H/2;
+        float x0=SS_OX+(t&1)*(SS_OW/2),y0=SS_OY+(t>>1)*(SS_OH/2),x1=x0+SS_OW/2,y1=y0+SS_OH/2;
         GX_Begin(GX_QUADS,GX_VTXFMT7,4);
         GX_Position3f32(x0,y0,-0.5f);GX_Color4u8(255,255,255,255);GX_TexCoord2f32(0,0);
         GX_Position3f32(x1,y0,-0.5f);GX_Color4u8(255,255,255,255);GX_TexCoord2f32(1,0);
@@ -2708,6 +3248,10 @@ static void ss_resolve(void){
         GX_Position3f32(x0,y1,-0.5f);GX_Color4u8(255,255,255,255);GX_TexCoord2f32(0,1);
         GX_End();
     }
+#ifdef VIPER_WII_SS_SHARPEN
+    ss_sharpen();
+#endif
+    ss_result=SS_TILED;
     GX_SetAlphaUpdate(GX_TRUE);
 #ifdef VIPER_WII_VERTEX_STQ
     stq_desc=-1;stq_set_mode(0);   /* back to the renderer's mode 0, re-sent */
@@ -2745,11 +3289,37 @@ static void present(void *user,const WiiVoodooView *v,unsigned base) {
 #ifdef VIPER_WII_SUPERSAMPLE
     ss_resolve();
 #endif
+#ifdef VIPER_WII_NATIVE_RES
+#ifdef VIPER_WII_SUPERSAMPLE
+    /* A tiled frame is already in the output box; an empty one after it
+     * keeps that picture (the render box under it is overdrawn). */
+#ifdef VIPER_WII_NATIVE_TRACE
+    {static unsigned n;if(n<400&&render_frame>1500){n++;rt_log("VIPER WII NATIVE f=%u ss=%d last=%d scaled=%d rb=%d,%d,%d,%d out=%d,%d,%d,%d\n",
+      render_frame,ss_result,ss_last_tiled,native_scaled,RB_X,RB_Y,RB_W,RB_H,OUT_X,OUT_Y,OUT_W,OUT_H);}}
+#endif
+    if(ss_result==SS_TILED)ss_last_tiled=1;
+    else if(!(ss_result==SS_EMPTY&&ss_last_tiled)){ss_last_tiled=0;native_upscale();}
+#else
+    native_upscale();
+#endif
+#endif
+#ifdef VIPER_WII_FRAME_CAPTURE
+    frame_capture();
+    edge_sprite_len=0;edge_sprite_text[0]=0;state_tally_n=0;
+#endif
+#ifdef VIPER_WII_DEPTH_TRACE
+    if(!(render_frame%15)){char b[400];unsigned o=0;
+     for(unsigned e=0;e<32;e++)if(depth_trace_hist[e])o+=snprintf(b+o,sizeof b-o," %u:%u",e,depth_trace_hist[e]);
+     rt_log("VIPER WII DEPTH f=%u wb=%.3g..%.3g flat=%u hist(-log2)%s\n",render_frame,(double)depth_trace_min,(double)depth_trace_max,depth_trace_flat,b);}
+#endif
+#if defined(VIPER_WII_DEPTH_TRACE) || defined(VIPER_WII_FRAME_CAPTURE)
+    depth_trace_min=1e30f;depth_trace_max=0;depth_trace_flat=0;memset(depth_trace_hist,0,sizeof depth_trace_hist);
+#endif
     if(OUT_W!=640||OUT_H!=480)letterbox_borders();
     wii_menu_draw();
     gx_shadow_reset(); /* menu.c sets the shadowed GX state directly. */
     /* menu.c sets its own viewport; the game uses the box. */
-    GX_SetViewport(OUT_X,OUT_Y,OUT_W,OUT_H,0,1);gx_shadow.proj_w=gx_shadow.proj_h=0;
+    GX_SetViewport(RB_X,RB_Y,RB_W,RB_H,0,1);gx_shadow.proj_w=gx_shadow.proj_h=0;
 #ifdef VIPER_WII_VERTEX_STQ
     GX_SetVtxDesc(GX_VA_TEX0,menu_tex0); /* menu.c also sets TEX0 directly. */
 #endif
@@ -2757,9 +3327,22 @@ static void present(void *user,const WiiVoodooView *v,unsigned base) {
     /* The copy is queued, not awaited: later draws follow it in FIFO order,
      * the next present's site-4 wait covers it, and the CPU writes no XFB
      * before the end-of-run GX_DrawDone. */
-    (void)v;gx_wait(4);GX_CopyDisp(framebuffer,GX_FALSE);GX_Flush();
+#if defined(VIPER_WII_SS_PIPELINE) && defined(VIPER_WII_SUPERSAMPLE)
+    if(ss_waited)ss_waited=0;else
+#endif
+    gx_wait(4);
+    (void)v;GX_CopyDisp(framebuffer,GX_FALSE);GX_Flush();
+#ifdef VIPER_WII_NATIVE_RES
+    native_restore();   /* queued after the copy: the render box back at 1x */
+#endif
 #else
+#if defined(VIPER_WII_SS_PIPELINE) && defined(VIPER_WII_SUPERSAMPLE)
+    ss_waited=0;
+#endif
     (void)v;gx_wait(4);GX_CopyDisp(framebuffer,GX_FALSE);gx_wait(5);
+#ifdef VIPER_WII_NATIVE_RES
+    native_restore();
+#endif
 #endif
     VIDEO_SetNextFramebuffer(framebuffer);VIDEO_Flush();
 #ifdef VIPER_WII_DISPLAY_CYCLE
@@ -2772,7 +3355,7 @@ static void present(void *user,const WiiVoodooView *v,unsigned base) {
         display_applied=display_mode;
         wii_wide_set(DISPLAY_WIDE?85:0);   /* 16:9 at 384 lines (runtime/enhanced.c) */
         output_box_init();clip_key_stale=1;gx_shadow.proj_w=gx_shadow.proj_h=0;
-        GX_SetViewport(OUT_X,OUT_Y,OUT_W,OUT_H,0,1);
+        GX_SetViewport(RB_X,RB_Y,RB_W,RB_H,0,1);
         TEXLOAD_FORGET();
 #ifdef VIPER_WII_COMBINER_PROGRAM_CACHE
         wii_combiner_program_invalidate(&combiner_cache);
@@ -2780,7 +3363,7 @@ static void present(void *user,const WiiVoodooView *v,unsigned base) {
 #ifdef VIPER_WII_NATIVE_TEXTURE_RESOURCE
         for(unsigned i=0;i<COLOR_CACHE_SLOTS;i++)texture_resources[i].valid=0;   /* filters rebuilt */
 #endif
-        if(!first)wii_menu_notice(display_names[display_mode]);
+        if(!first){display_mode_save();wii_menu_notice(display_names[display_mode]);}   /* changes only, not the restored mode at boot */
     }
 #endif
 #ifdef VIPER_WII_SUPERSAMPLE
@@ -2794,7 +3377,61 @@ static void cpu_floor_triangle(void *user,const WiiVoodooView *view,const WiiVoo
 static void cpu_floor_clear(void *user,const WiiVoodooView *view){(void)user;(void)view;}
 static void cpu_floor_present(void *user,const WiiVoodooView *view,unsigned base){(void)user;(void)view;(void)base;}
 #endif
+#ifdef VIPER_WII_FRAME_CAPTURE
+/* Diagnostic: save the finished output box (RGB8, row-major) of every STEPth
+ * showroom frame (all linear-depth W in 2..20, which only the attract/result
+ * car showroom uses), COUNT in all, as sd:/viper/capNNNNN.bin. A remote run
+ * (report=) sends them back after the last one and returns to the loader. */
+#ifndef VIPER_WII_FRAME_CAPTURE_STEP
+#define VIPER_WII_FRAME_CAPTURE_STEP 1
+#endif
+#ifndef VIPER_WII_FRAME_CAPTURE_COUNT
+#define VIPER_WII_FRAME_CAPTURE_COUNT 40
+#endif
+static void frame_capture(void){
+    static unsigned taken,seen;static char names[VIPER_WII_FRAME_CAPTURE_COUNT][16];
+    unsigned tris=0;for(unsigned e=0;e<32;e++)tris+=depth_trace_hist[e];
+#if VIPER_WII_FRAME_CAPTURE+0>1
+    (void)tris;if(taken>=VIPER_WII_FRAME_CAPTURE_COUNT||render_frame<VIPER_WII_FRAME_CAPTURE)return;   /* from a fixed frame */
+#else
+    if(taken>=VIPER_WII_FRAME_CAPTURE_COUNT||tris<60||depth_trace_min<0.05f||depth_trace_max>0.5f)return;
+#endif
+    if(seen++%VIPER_WII_FRAME_CAPTURE_STEP)return;
+    wii_gx_own_thread();GX_DrawDone();
+    snprintf(names[taken],sizeof names[taken],"cap%05u.bin",render_frame);
+    char path[40];snprintf(path,sizeof path,"sd:/viper/%s",names[taken]);
+    FILE *f=fopen(path,"wb");
+    if(f){
+        static uint8_t row[640*3];
+        for(int y=0;y<OUT_H;y++){
+            for(int x=0;x<OUT_W;x++){GXColor c;GX_PeekARGB(OUT_X+x,OUT_Y+y,&c);row[x*3]=c.r;row[x*3+1]=c.g;row[x*3+2]=c.b;}
+            fwrite(row,1,OUT_W*3,f);
+        }
+#ifdef VIPER_WII_SUPERSAMPLE
+        /* Trailer: how this frame was drawn. */
+        fprintf(f,"ss_result=%d ss_backoff=%u ss_len=%u sprite_near_tris=%llu display=%d\n",ss_result,ss_backoff,ss_backoff_len,sprite_near_tris,display_mode);
+        fputs(edge_sprite_text,f);
+        for(unsigned i=0;i<state_tally_n;i++)fprintf(f,"state fbz=%08lx alpha=%08lx cp=%08lx tris=%u wb=%.4f..%.4f\n",(unsigned long)state_tally[i].fbz,(unsigned long)state_tally[i].alpha,(unsigned long)state_tally[i].cp,state_tally[i].n,(double)state_tally[i].wmin,(double)state_tally[i].wmax);
+#endif
+        fclose(f);
+    }
+    rt_log("VIPER WII CAPTURE frame=%u %dx%d %s\n",render_frame,OUT_W,OUT_H,f?"ok":"failed");
+    if(++taken==VIPER_WII_FRAME_CAPTURE_COUNT&&wii_net_report_wanted()){
+        const char *list[VIPER_WII_FRAME_CAPTURE_COUNT+1];
+        for(unsigned i=0;i<VIPER_WII_FRAME_CAPTURE_COUNT;i++)list[i]=names[i];
+        list[VIPER_WII_FRAME_CAPTURE_COUNT]=NULL;
+        wii_net_report_send("sd:/viper",list);
+        VIDEO_SetBlack(TRUE);VIDEO_Flush();VIDEO_WaitVSync();exit(0);
+    }
+}
+#endif
 void wii_gx_renderer_init(GXRModeObj *mode,void *xfb) {
+#ifdef VIPER_WII_HANG_TRACE
+    {static lwp_t t;LWP_CreateThread(&t,hang_watch,NULL,NULL,16384,90);}
+#endif
+#ifdef VIPER_WII_DISPLAY_MULTI
+    display_mode_load();
+#endif
     /* GX_Init before any other GX call (wii_menu_init invalidates the texture
      * cache). Until then the write-gather pipe still targets the Homebrew
      * Channel's old FIFO, which on hardware lies inside our guest RAM: stray
@@ -2907,7 +3544,7 @@ void wii_gx_renderer_init(GXRModeObj *mode,void *xfb) {
 #endif
 #endif
     output_box_init();
-    GX_SetViewport(OUT_X,OUT_Y,OUT_W,OUT_H,0,1);GX_SetScissor(0,0,640,480);
+    GX_SetViewport(RB_X,RB_Y,RB_W,RB_H,0,1);GX_SetScissor(0,0,640,480);
     GX_SetDispCopySrc(0,0,640,480);GX_SetDispCopyDst(video->fbWidth,video->xfbHeight);
     GX_SetDispCopyYScale((float)video->xfbHeight/480);
     /* RGB565_Z16 implicitly enables 3x multisampling and limits physical EFB
@@ -2951,11 +3588,11 @@ void wii_gx_renderer_init(GXRModeObj *mode,void *xfb) {
 }
 /* main.c fences outside this file must see every buffered triangle. */
 void wii_gx_batch_flush(void){
+#ifdef VIPER_WII_GX_BATCH
+    gx_batch_flush();   /* into the recorded frame first, as present does */
+#endif
 #ifdef VIPER_WII_SUPERSAMPLE
     ss_abort();   /* callers wait for the GPU next (main.c) */
-#endif
-#ifdef VIPER_WII_GX_BATCH
-    gx_batch_flush();
 #endif
 }
 void wii_gx_triangle_memo_stats(unsigned long long *hits,unsigned long long *misses){

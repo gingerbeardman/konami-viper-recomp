@@ -728,7 +728,9 @@ esac
 case "${WII_PERF_WATCHDOG:-1}" in
     1) ;;
     0) flags="$flags -DVIPER_WII_WATCHDOG_S=0"; output="$output-nowatchdog" ;;
-    *) echo 'WII_PERF_WATCHDOG must be 0 or 1' >&2; exit 2 ;;
+    # Seconds: supersampled runs plus the EFB send outlast the default 150.
+    [1-9][0-9]*) flags="$flags -DVIPER_WII_WATCHDOG_S=$WII_PERF_WATCHDOG"; output="$output-wd$WII_PERF_WATCHDOG" ;;
+    *) echo 'WII_PERF_WATCHDOG must be 0, 1 or a number of seconds' >&2; exit 2 ;;
 esac
 case "${WII_PERF_GATHER_MORE:-0}" in
     0) ;;
@@ -765,6 +767,18 @@ case "${WII_PERF_AUDIO:-0}" in
     1) flags="$flags -DVIPER_WII_AUDIO"; output="$output-audio" ;;
     *) echo 'WII_PERF_AUDIO must be 0 or 1' >&2; exit 2 ;;
 esac
+# Supersampled frames sharpened (unsharp mask, k = 1/4, 1/2 or 3/4).
+case "${WII_PERF_SS_SHARPEN:-0}" in
+    0) ;;
+    1_4|1_2|3_4) flags="$flags -DVIPER_WII_SS_SHARPEN=GX_TEV_KCSEL_$WII_PERF_SS_SHARPEN"; output="$output-sharp$WII_PERF_SS_SHARPEN" ;;
+    *) echo 'WII_PERF_SS_SHARPEN must be 0, 1_4, 1_2 or 3_4' >&2; exit 2 ;;
+esac
+# Supersampled frames replayed while the next one is emulated (two lists).
+case "${WII_PERF_SS_PIPELINE:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_SS_PIPELINE"; output="$output-sspipe" ;;
+    *) echo 'WII_PERF_SS_PIPELINE must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_SUPERSAMPLE:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_SUPERSAMPLE"; output="$output-ss" ;;
@@ -800,6 +814,16 @@ case "${WII_PERF_DISPLAY_MULTI:-0}" in
     1) flags="$flags -DVIPER_WII_DISPLAY_MULTI -DVIPER_WII_SUPERSAMPLE"; output="$output-multi" ;;
     2) flags="$flags -DVIPER_WII_DISPLAY_MULTI -DVIPER_WII_SUPERSAMPLE -DVIPER_WII_DISPLAY_CYCLE"; output="$output-multicycle" ;;
     *) echo 'WII_PERF_DISPLAY_MULTI must be 0, 1 or 2' >&2; exit 2 ;;
+esac
+case "${WII_PERF_NATIVE_RES:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_NATIVE_RES"; output="$output-native" ;;
+    *) echo 'WII_PERF_NATIVE_RES must be 0 or 1' >&2; exit 2 ;;
+esac
+case "${WII_PERF_ASPECT:-}" in
+    '') ;;
+    43|169) flags="$flags -DVIPER_WII_FORCE_ASPECT=$WII_PERF_ASPECT"; output="$output-ar$WII_PERF_ASPECT" ;;
+    *) echo 'WII_PERF_ASPECT must be 43 or 169' >&2; exit 2 ;;
 esac
 case "${WII_PERF_DISPLAY_START:-}" in
     '') ;;
@@ -953,6 +977,11 @@ case "${WII_PERF_CAPTURE:-0}" in
     *) echo 'WII_PERF_CAPTURE must be 0 or 1' >&2; exit 2 ;;
 esac
 # Diagnostic: log each distinct renderer clear (rect, colour, fbz).
+case "${WII_PERF_FONT_TRACE:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_FONT_TRACE"; output="$output-ftrace" ;;
+    *) echo 'WII_PERF_FONT_TRACE must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_CLEAR_TRACE:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_CLEAR_TRACE"; output="$output-ctrace" ;;

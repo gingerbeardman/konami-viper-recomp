@@ -4,4 +4,5 @@
 void wii_audio_init(void);
 void wii_audio_push_block(const uint8_t *blk);
 void wii_audio_shutdown(void);
+int wii_audio_backlog_us(void);
 extern volatile unsigned wii_audio_underruns, wii_audio_skips;

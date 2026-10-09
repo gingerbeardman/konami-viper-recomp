@@ -134,3 +134,8 @@ f_g_000427d8
 f_g_0003fea4
 f_s_009a09cc
 f_s_009a73b0
+# Load-time hot spots (physical-Wii profile 2026-10-09, sampled only while the
+# audio queue ran low: scene loads): the LZSS decoder step and the word feeder
+# that calls it 4 times per input word (rsqrt/sqrt, also hot there, are above).
+f_k_0000e438
+f_k_0000e338
