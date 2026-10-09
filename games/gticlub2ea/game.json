@@ -64,6 +64,8 @@
         "0x8b5c4": null,
         "0x45e88": "file_loaded",
         "0x8b5e8": "car_select",
+        "0x4b9c0": null,
+        "0x4b9e4": "view_cone",
         "0x839d8": "name_index",
         "0x83a1c": "name_confirm"
       }

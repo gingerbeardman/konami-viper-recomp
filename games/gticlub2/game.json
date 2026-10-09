@@ -142,7 +142,8 @@
         "0x8ec84": "explorer_camera",
         "0xb403c": "explorer_race",
         "0x45e64": "file_loaded",
-        "0x8b5c4": "car_select"
+        "0x8b5c4": "car_select",
+        "0x4b9c0": "view_cone"
       },
       "gl": {
         "0x213f4": "projection",

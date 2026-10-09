@@ -589,6 +589,11 @@ it was, but the clip volume is k times wider; the frustum's left and right are w
 around their centre, so the culling matches. The game then draws the same picture plus what
 lies to its left and right, at x from −M to 512 + M. The 2D layer, drawn through the same
 transform, keeps its 4:3 layout in the centre.
+- **Game-side culling** (GTI Club 2 only): before a part reaches the gl library, the game's
+  draw-node builder (JAB `0x4b4b4`) drops it unless its bounding sphere passes a top-down view
+  cone (`0x4b930`), whose half-angle tangent (0.7, view struct `+0x38`) is the 4:3 one. The
+  `view_cone` hook (JAB `0x4b9c0`, EAA `0x4b9e4`, just after that load) multiplies it by k, so
+  wheels and glass past the 4:3 edges (the car select's outer cars) are no longer dropped.
 - **Hooks** (`enhanced.hooks.gl`): `projection` after each write of a slot (identity, the two
   frustum commands of the command-list dispatcher, the library's init), `viewport` after the
   viewport API and the init. GTI Club 2 (JAB and EAA share the module): `0x213F4`, `0x21718`,
