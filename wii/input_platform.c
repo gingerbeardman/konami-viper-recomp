@@ -42,21 +42,20 @@ void wii_input_init(void){
  * The game shakes the wheel over rough surfaces and impacts: commands with
  * bit 5 set alternating with torque (cobbles: 0xa0 and 0x89 about 14 times a
  * second), or torque flipping direction (bit 4) between commands. A shake
- * plays as software PWM, on for VIPER_WII_RUMBLE_SHAKE_ON of every
- * VIPER_WII_RUMBLE_SHAKE_PERIOD polls (60 Hz): 1 of 6 felt right for cobbles on
- * hardware (wii/rumble_tester.c); shakes at torque 10+ (big bumps, impacts)
- * use twice the on-time. It lasts SHAKE_HOLD polls past the last one.
+ * plays as software PWM (wii/rumble_tester.c), tuned on hardware: light shakes
+ * (cobbles, torque up to 9) on 1 of every VIPER_WII_RUMBLE_SHAKE_PERIOD polls
+ * (60 Hz; 1 of 6 was a bit much, 1 of 8), heavy ones (torque 10+: big bumps,
+ * impacts) on 2 of every 6. It lasts SHAKE_HOLD polls past the last one.
  * Otherwise the motor is on while the drive is strong enough, with at most
  * one change per 100 ms (6 polls). */
 #ifndef VIPER_WII_RUMBLE_MIN_TORQUE
 #define VIPER_WII_RUMBLE_MIN_TORQUE 6
 #endif
 #ifndef VIPER_WII_RUMBLE_SHAKE_PERIOD
-#define VIPER_WII_RUMBLE_SHAKE_PERIOD 6
+#define VIPER_WII_RUMBLE_SHAKE_PERIOD 8
 #endif
-#ifndef VIPER_WII_RUMBLE_SHAKE_ON
-#define VIPER_WII_RUMBLE_SHAKE_ON 1
-#endif
+#define HEAVY_SHAKE_PERIOD 6
+#define HEAVY_SHAKE_ON 2
 #define SHAKE_HOLD 7
 extern volatile uint8_t wii_motor;
 static int rumble_on;static unsigned rumble_hold;
@@ -81,8 +80,9 @@ static void rumble_update(int connected){
     if(!connected||poll_count<=600){if(connected)rumble_set(0);shake_left=0;return;}
     if(shake_left){
         shake_left--;
-        unsigned on=VIPER_WII_RUMBLE_SHAKE_ON*(shake_level>=10?2:1);
-        rumble_set(shake_phase++%VIPER_WII_RUMBLE_SHAKE_PERIOD<on);
+        int heavy=shake_level>=10;
+        unsigned period=heavy?HEAVY_SHAKE_PERIOD:VIPER_WII_RUMBLE_SHAKE_PERIOD,on=heavy?HEAVY_SHAKE_ON:1;
+        rumble_set(shake_phase++%period<on);
         rumble_hold=0;
         return;
     }
