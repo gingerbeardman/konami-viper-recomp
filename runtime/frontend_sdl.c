@@ -205,6 +205,7 @@ static void open_pad(void) {
 
 static atomic_uchar g_motor_output;
 static atomic_uint g_motor_writes, g_motor_energized_writes;
+static atomic_uint g_shake_level, g_shake_at;   /* the last shake the game commanded, and when */
 static Uint32 g_rumble_trace_started, g_rumble_trace_tick;
 static int g_rumble_trace;
 static ControllerRumble g_rumble = { .id = -1 };
@@ -234,6 +235,13 @@ static void test_rumble(void) {
 
 /* Guest publishes motor commands; SDL calls stay on the host main thread. */
 void frontend_set_motor(uint8_t command) {
+    static uint8_t prev;
+    unsigned shake = controller_shake_level(prev, command);
+    prev = command;
+    if (shake) {
+        atomic_store_explicit(&g_shake_level, shake, memory_order_relaxed);
+        atomic_store_explicit(&g_shake_at, SDL_GetTicks(), memory_order_relaxed);
+    }
     atomic_store_explicit(&g_motor_output, command, memory_order_relaxed);
     atomic_fetch_add_explicit(&g_motor_writes, 1, memory_order_relaxed);
     if ((command & 0x80) && (command & 15)) atomic_fetch_add_explicit(&g_motor_energized_writes, 1, memory_order_relaxed);
@@ -245,8 +253,11 @@ static void update_rumble(int active) {
     if (g_rumble_testing && (!window || (Uint32)(now - g_rumble_test_started) >= 1000))
         g_rumble_testing = 0;
     uint8_t motor = atomic_load_explicit(&g_motor_output, memory_order_relaxed);
+    /* a shake lasts until the game's next one (bursts alternate every ~70 ms) */
+    unsigned shake = (Uint32)(now - atomic_load_explicit(&g_shake_at, memory_order_relaxed)) < 120
+                   ? atomic_load_explicit(&g_shake_level, memory_order_relaxed) : 0;
     if (!g_rumble_testing)
-        controller_rumble_update(&g_rumble, g_pad, motor, g_rumble_gain, active, now);
+        controller_rumble_update(&g_rumble, g_pad, motor, g_rumble_gain, active, now, shake);
     if (g_rumble_trace && (Uint32)(now - g_rumble_trace_started) >= 30000) g_rumble_trace = 0;
     if ((g_rumble_trace || g_controller_log) && (Uint32)(now - g_rumble_trace_tick) >= 1000) {
         g_rumble_trace_tick = now;
