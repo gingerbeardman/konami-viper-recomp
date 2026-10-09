@@ -57,10 +57,10 @@ extern int g_enhanced;
 
 /* per player car (settings word order: mini, fiat, super7, cobra, juguar, wagen, gtv, ferr): its
  * alternate, a traffic car (TCAR_carNNa; the log name), and its R<car> section: name, id, model
- * count, the indices of the R1 main body, the first R2 and R3 bodies and the R1 floor pan */
+ * count, the indices of the R1 main body, the R2 and R3 main bodies and the R1 floor pan */
 static const struct { int tcar; const char *name, *rsec; int sec, count, body, mid, far, pan, shadow, rshadow; } k_cars[] = {
     { 1, "FIAT PANDA", "Rmini", 25, 27, 5, 24, 26, 3, 108, 13 },     { 15, "CITROEN 2CV", "Rfiat", 22, 27, 5, 24, 26, 3, 75, 10 },
-    { 11, "BEETLE", "Rsuper7", 26, 36, 6, 28, 34, 5, 165, 14 },      { 2, "LANCIA", "Rcobra", 20, 27, 4, 24, 26, 3, 16, 8 },
+    { 11, "BEETLE", "Rsuper7", 26, 36, 6, 29, 34, 5, 165, 14 },      { 2, "LANCIA", "Rcobra", 20, 27, 4, 24, 26, 3, 16, 8 },
     { 7, "TAXI", "Rjuguar", 24, 43, 4, 40, 42, 3, 107, 12 },         { 3, "VAN", "Rwagen", 27, 27, 5, 24, 26, 3, 170, 15 },
     { 8, "RED CAR", "Rgtv", 23, 27, 5, 24, 26, 3, 76, 11 },          { 5, "VOLVO ESTATE", "Rferr", 21, 29, 7, 27, 28, 5, 74, 9 },
 };
@@ -313,8 +313,10 @@ static int names_with_pan(Names *t, const uint8_t *a, uint32_t alen, uint32_t an
     return 1;
 }
 
-/* A rival section, at boot: one more model, the shadow under the alternate's body, for
- * show_alternates to put in the floor pan's place. The staging buffer holds far larger files. */
+/* A rival section, at boot: two more models for show_alternates, the floor pan under the
+ * alternate's body and an empty model for every part it hides (the lowest details also cast the
+ * car's shadow, drawn whatever the part's bounding radius). The staging buffer holds far larger
+ * files. */
 static void add_rival_pan(int car, uint32_t dest) {
     Loaded l;
     if (!load_container(&l, dest)) return;
@@ -322,17 +324,26 @@ static void add_rival_pan(int car, uint32_t dest) {
     uint32_t n = l.k.nmodels, car_off, car_size;
     if ((int)n != k_cars[car].count || !names_with_pan(&t, l.bytes + 8, l.k.names_len, l.k.ntex, NULL, 0, 0)) { free(l.bytes); return; }
     tcar_model(k_cars[car].tcar, &car_off, &car_size);
-    uint8_t *models[65], *pan = malloc(g_pan_size);
-    uint32_t sizes[65];
-    if (!pan) { free(l.bytes); return; }
+    uint32_t empty_off, empty_size;
+    tcar_model(TCAR_EMPTY_SRC, &empty_off, &empty_size);
+    uint8_t *models[66], *pan = malloc(g_pan_size), *empty = malloc(empty_size);
+    uint32_t sizes[66];
+    if (!pan || !empty) { free(pan); free(empty); free(l.bytes); return; }
     memcpy(pan, g_pan, g_pan_size);
     rect_pan(pan, g_tcar + car_off);
     set_texture(pan, g_pan_size, t.pan_tex);
+    memcpy(empty, g_tcar + empty_off, empty_size);            /* every vertex at the origin */
+    uint32_t nverts = (uint32_t)empty[8] << 8 | empty[9];
+    if (0x1c + 6 * nverts <= empty_size) memset(empty + 0x1c, 0, 6 * nverts);
+    set_texture(empty, empty_size, t.pan_tex);
     for (uint32_t m = 0; m < n; m++) { models[m] = l.bytes + l.at[m]; sizes[m] = l.size[m]; }
     models[n] = pan;
     sizes[n] = g_pan_size;
-    emit_container(dest, 0x40000, t.names, t.len, t.n, n + 1, models, sizes);
+    models[n + 1] = empty;
+    sizes[n + 1] = empty_size;
+    emit_container(dest, 0x40000, t.names, t.len, t.n, n + 2, models, sizes);
     free(pan);
+    free(empty);
     free(l.bytes);
 }
 
@@ -473,10 +484,12 @@ static void show_alternates(void) {
             int from = (int)m == k_cars[car].body ? t : (int)m == k_cars[car].mid ? 48 + t : (int)m == k_cars[car].far ? 16 + t : -1;
             if (from >= 0)
                 for (int b = 0; b < 16; b++) ST8(models + 16 * m + (uint32_t)b, LD8(tcar + 16 * (uint32_t)from + (uint32_t)b));
-            else if ((int)m == k_cars[car].pan && (int)n == k_cars[car].count + 1)   /* the fitted pan */
-                for (int b = 0; b < 16; b++) ST8(models + 16 * m + (uint32_t)b, LD8(models + 16 * (n - 1) + (uint32_t)b));
-            else
-                STF32(models + 16 * m + 4, -1e30f);           /* culled */
+            else if ((int)n != k_cars[car].count + 2 || m >= (uint32_t)k_cars[car].count)
+                STF32(models + 16 * m + 4, -1e30f);           /* culled (the added models are never drawn) */
+            else {                                            /* the fitted pan, or the empty model */
+                uint32_t to = (uint32_t)k_cars[car].count + ((int)m == k_cars[car].pan ? 0 : 1);
+                for (int b = 0; b < 16; b++) ST8(models + 16 * m + (uint32_t)b, LD8(models + 16 * to + (uint32_t)b));
+            }
         }
     }
     uint32_t en, effects = section_models(SEC_EFFECTS, &en);
