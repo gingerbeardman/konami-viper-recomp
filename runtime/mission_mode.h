@@ -890,6 +890,43 @@ static int mission_ground(PPCContext *live, float x, float z, float *y) {
     memcpy(g_ram+sp-sizeof saved,saved,sizeof saved);
     return !c.unwind && !fallback && isfinite(*y) && fabsf(*y)<1000;
 }
+/* The native road surface map (JAB 0x55fec, through the car's map pointer at +34c and the flag
+ * at +504->2): a 13-bit attribute per point. Bits 8-11 are the surface type, which the
+ * physics stores in car+370 and the force feedback shakes on (0 asphalt, 1 cobbles, ...);
+ * bit 2 draws thin lines along the road edges (kerbs, by the look of it). n x n samples
+ * centred on (cx, cz), spacing apart, with their ground heights (NAN where there is none),
+ * under one stack save. */
+static int mission_surface_samples(PPCContext *live,unsigned car,float cx,float cz,float spacing,
+                                   int n,uint16_t *attr,float *y) {
+    RtFn surface=rt_lookup(0x55fec),tile=rt_lookup(0x5576c),plane=rt_lookup(0x566f0);
+    unsigned sp=live->r[1];
+    if(!surface || !tile || !plane || sp<16384 || sp>=RAM_SIZE || !race_valid(car,0x514)) return 0;
+    unsigned map_flag=LD32(car+0x504);
+    if(!race_valid(map_flag,4)) return 0;
+    unsigned flag=LD8(map_flag+2),defaults=LD32(live->r[2]+0x324),scratch=sp-256;
+    static uint8_t saved[8192];memcpy(saved,g_ram+sp-sizeof saved,sizeof saved);
+    int ok=1;
+    for(int j=0;ok && j<n;j++) for(int i=0;ok && i<n;i++) {
+        float x=cx+(i-n/2)*spacing,z=cz+(j-n/2)*spacing;
+        PPCContext c=*live;c.r[1]=sp-512;c.budget=10000000;c.unwind=0;
+        STF32(scratch+32,x);STF32(scratch+36,0);STF32(scratch+40,z);
+        c.r[3]=scratch+32;c.r[4]=car+0x34c;c.r[5]=flag;surface(&c);
+        if(c.unwind) {ok=0;break;}
+        attr[j*n+i]=(uint16_t)c.r[3];
+        c=*live;c.r[1]=sp-512;c.budget=10000000;c.unwind=0;
+        memset(g_ram+scratch,0,32);
+        c.f[1]=x;c.f[2]=z;c.r[5]=scratch;tile(&c);
+        if(!c.unwind) {
+            STF32(scratch+16,x);STF32(scratch+20,0);STF32(scratch+24,z);
+            c.r[3]=scratch+16;c.r[4]=scratch;plane(&c);
+        }
+        int ground=!c.unwind && c.r[3] && !(defaults && c.r[3]==defaults) && isfinite(c.f[1]) && fabs(c.f[1])<1000;
+        y[j*n+i]=ground?(float)c.f[1]:NAN;
+        if(c.unwind) ok=0;
+    }
+    memcpy(g_ram+sp-sizeof saved,saved,sizeof saved);
+    return ok;
+}
 /* Wheel positions are native world-space arrays, not an estimate from body roll.
  * Count only a grounded left or right pair, never front/rear wheels or airborne frames. */
 static int mission_on_two_wheels(PPCContext *c,unsigned car) {

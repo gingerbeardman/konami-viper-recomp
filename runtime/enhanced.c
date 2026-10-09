@@ -235,6 +235,7 @@ static _Atomic float g_debug_gate[MISSION_MAX_GATES][6];
 static _Atomic float g_debug_gate_height[MISSION_MAX_GATES];
 static atomic_uint g_debug_gate_role[MISSION_MAX_GATES];
 static void gate_editor_publish(PPCContext *c);
+static void surface_publish(PPCContext *c);
 static _Atomic float g_debug_camera[5];
 static _Atomic float g_debug_view[12],g_debug_projection[4],g_debug_viewport[4];
 static atomic_int g_debug_view_valid;
@@ -483,6 +484,7 @@ static void track_debug_tick(PPCContext *c) {
     }
     atomic_store(&g_debug_gate_count,mission_engaged()?g_mission_run.gate_count:0);
     if(!mission_engaged() || enh_gate_editor_active()) gate_editor_publish(c);
+    surface_publish(c);
     atomic_store(&g_debug_gate_mask,g_mission_run.met_mask);
     atomic_store(&g_debug_gate_any,g_mission_run.any_order);
 }
@@ -1895,6 +1897,37 @@ static void mission_draw_selector(uint32_t *fb, int w, int h) {
 }
 
 #include "gate_editor.h"
+/* Track debug: the road surface map around the free-roam camera (or the car), SURFACE_N x
+ * SURFACE_N samples 2 m apart, drawn as dots on the ground coloured by surface type. */
+#define SURFACE_N 15
+static _Atomic unsigned g_debug_surface[SURFACE_N*SURFACE_N];
+static _Atomic float g_debug_surface_y[SURFACE_N*SURFACE_N],g_debug_surface_origin[2];
+static atomic_int g_debug_surface_valid;
+static void surface_publish(PPCContext *c) {
+    unsigned car=LD32(c->r[2]+0x488);
+    int flying=enh_gate_editor_active() && g_author_flying;
+    float cx=flying?atomic_load(&g_debug_camera[0]):atomic_load(&g_debug_x);
+    float cz=flying?atomic_load(&g_debug_camera[2]):atomic_load(&g_debug_z);
+    cx=roundf(cx*.5f)*2;cz=roundf(cz*.5f)*2;                    /* a grid fixed to the ground */
+    uint16_t attr[SURFACE_N*SURFACE_N];float y[SURFACE_N*SURFACE_N];
+    if(!atomic_load(&g_track_debug) || !isfinite(cx) || !isfinite(cz) ||
+       !mission_surface_samples(c,car,cx,cz,2,SURFACE_N,attr,y)) {atomic_store(&g_debug_surface_valid,0);return;}
+    for(unsigned i=0;i<SURFACE_N*SURFACE_N;i++) {atomic_store(&g_debug_surface[i],attr[i]);atomic_store(&g_debug_surface_y[i],y[i]);}
+    atomic_store(&g_debug_surface_origin[0],cx);atomic_store(&g_debug_surface_origin[1],cz);
+    atomic_store(&g_debug_surface_valid,1);
+}
+static const char *surface_name(unsigned attr) {
+    static const char *const names[16]={"ASPHALT","COBBLES"};
+    static char other[16];
+    unsigned type=attr>>8&15;
+    if(names[type]) return names[type];
+    snprintf(other,sizeof other,"TYPE %u",type);return other;
+}
+static uint32_t surface_colour(unsigned attr) {
+    static const uint32_t colours[16]={0x909090,0xff4040,0x40d040,0x4070ff,0xffe030,0xffffff,0x30e0e0,
+        0xe040e0,0xff9000,0x9060ff,0x806040,0x608040,0x406080,0x804060,0x608080,0x808060};
+    return attr&4 ? 0xffffff : colours[attr>>8&15];               /* road-edge lines in white */
+}
 
 static void debug_text(uint32_t *fb,int w,int h,int x,int y,const char *text,uint32_t colour) {
     (void)fb;(void)h;
@@ -1994,6 +2027,16 @@ static int debug_project(float x,float y,float z,int w,int h,int *sx,int *sy) {
     if(!native && enh_mirrored()) px=w-1-px;
     g_debug_project_depth=depth;
     *sx=(int)px; *sy=(int)py; return 1;
+}
+static void debug_draw_surface(uint32_t *fb,int w,int h) {
+    if(!atomic_load(&g_debug_surface_valid)) return;
+    float ox=atomic_load(&g_debug_surface_origin[0]),oz=atomic_load(&g_debug_surface_origin[1]);
+    for(int j=0;j<SURFACE_N;j++) for(int i=0;i<SURFACE_N;i++) {
+        unsigned k=(unsigned)(j*SURFACE_N+i);float y=atomic_load(&g_debug_surface_y[k]);int sx,sy;
+        if(!isfinite(y) || !debug_project(ox+(i-SURFACE_N/2)*2,y+.1f,oz+(j-SURFACE_N/2)*2,w,h,&sx,&sy)) continue;
+        uint32_t colour=surface_colour(atomic_load(&g_debug_surface[k]));
+        for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++) debug_dot(fb,sx+dx,sy+dy,colour);
+    }
 }
 static void debug_draw_gates(uint32_t *fb,int w,int h) {
     for(unsigned i=0;!enh_gate_editor_active() && i<atomic_load(&g_debug_item_count);i++) {
@@ -2166,7 +2209,7 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
     if (g_paused && g_pause_controls) draw_controls(fb, w, h, g_controls_cursor);
     if (enh_menu_active()) draw_menu(fb, w, h);
     if (atomic_load(&g_track_debug) && (race_time_trial() || mission_engaged())) {
-        if(!g_paused) {track_debug_view_select();debug_draw_gates(fb,w,h);}
+        if(!g_paused) {track_debug_view_select();debug_draw_surface(fb,w,h);debug_draw_gates(fb,w,h);}
         char label[128]; int y=16, x=w/2-6*8;
         unsigned gates=atomic_load(&g_debug_gate_count);
         unsigned vehicle=atomic_load(&g_debug_vehicle_kind);
@@ -2186,6 +2229,11 @@ void enh_draw_overlay(uint32_t *fb, int w, int h) {
         snprintf(label,sizeof label,"Y %.1f H %.1f",
             debug_y,debug_heading);
         debug_text(fb,w,h,x,y,label,0x40ff40); y+=16;
+        if(atomic_load(&g_debug_surface_valid)) {
+            unsigned here=atomic_load(&g_debug_surface[SURFACE_N*SURFACE_N/2]);
+            snprintf(label,sizeof label,"SURFACE %s %04X",surface_name(here),here);
+            debug_text(fb,w,h,x,y,label,surface_colour(here)); y+=16;
+        }
         snprintf(label,sizeof label,"OBJ %08X X %.1f Z %.1f",
             atomic_load(&g_debug_object),atomic_load(&g_debug_object_x),atomic_load(&g_debug_object_z));
         debug_text(fb,w,h,x,y,label,0x40ffff); y+=16;

@@ -469,6 +469,15 @@ approach heading is calculated from the road ahead.
 Mission 23 starts with a rolling-start gate on the cliff-top road. Its cliff
 waypoint, lower-road failure gate and bridge finish remain player objectives.
 
+### Road surfaces in track debug
+
+Track debug draws the game's road surface map around the free-roam camera, or the car
+when not flying: 15 × 15 dots, 2 m apart, on the ground, coloured by surface type (grey
+asphalt, red cobbles, other types in their own colours; white marks the thin lines the map
+draws along road edges, probably kerbs). The status lines name the surface under the camera
+with its raw attribute. The map is the one the physics samples into car+370 and the force
+feedback shakes on (JAB 0x55fec).
+
 ### Gate editor
 
 With track debug enabled, Select opens the editor for the selected mission.
