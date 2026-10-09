@@ -61,7 +61,7 @@ static const struct { int tcar; const char *name, *rsec; int sec, count, body, m
     { 1, "FIAT PANDA", "Rmini", 25, 27, 5, 24, 26, 3 },     { 15, "CITROEN 2CV", "Rfiat", 22, 27, 5, 24, 26, 3 },
     { 11, "BEETLE", "Rsuper7", 26, 36, 6, 28, 34, 5 },      { 2, "LANCIA", "Rcobra", 20, 27, 4, 24, 26, 3 },
     { 7, "TAXI", "Rjuguar", 24, 43, 4, 40, 42, 3 },         { 3, "VAN", "Rwagen", 27, 27, 5, 24, 26, 3 },
-    { 5, "VOLVO ESTATE", "Rgtv", 23, 27, 5, 24, 26, 3 },    { 8, "RED CAR", "Rferr", 21, 29, 7, 27, 28, 5 },
+    { 8, "RED CAR", "Rgtv", 23, 27, 5, 24, 26, 3 },         { 5, "VOLVO ESTATE", "Rferr", 21, 29, 7, 27, 28, 5 },
 };
 #define N_CARS ((int)(sizeof k_cars / sizeof k_cars[0]))
 #define SEC_TCAR 31
