@@ -47,54 +47,68 @@ void wii_input_init(void){
  * (the game's own motor test) or without a remote.
  * The game shakes the wheel over rough surfaces and impacts: commands with
  * bit 5 set alternating with torque (cobbles: 0xa0 and 0x89 about 14 times a
- * second), or torque flipping direction (bit 4) between commands. A shake
- * plays as software PWM (wii/rumble_tester.c), tuned on hardware: light shakes
- * (cobbles, torque up to 9) on 1 of every VIPER_WII_RUMBLE_SHAKE_PERIOD polls
- * (60 Hz; 1 of 6 was a bit much, 1 of 8), heavy ones (torque 10+: big bumps,
- * impacts) on 2 of every 6. It lasts SHAKE_HOLD polls past the last one.
- * Otherwise the motor is on while the drive is strong enough, with at most
- * one change per 100 ms (6 polls). */
+ * second), or torque flipping direction (bit 4) from the last command with
+ * torque (car rubs: 0x8a 0x80 0x9a 0x80, zero commands between). Strength is
+ * the game's own torque, mapped directly (wii/rumble_tester.c, button 2):
+ * software PWM with the motor on for torque/15 of each period, the torque
+ * averaged over the last TORQUE_WINDOW polls (60 Hz) so the game's zero
+ * commands between shakes count. Light shakes (torque up to 9: cobbles, wall
+ * scrapes) use an 8-poll period, heavy ones (car rubs, big bumps) 6, steady
+ * steering pull from torque VIPER_WII_RUMBLE_MIN_TORQUE up 5. A shake lasts
+ * SHAKE_HOLD polls past its last command. Hold B and press MINUS to cycle
+ * FULL, MILD (half the on-time, same rhythm) and OFF. */
 #ifndef VIPER_WII_RUMBLE_MIN_TORQUE
 #define VIPER_WII_RUMBLE_MIN_TORQUE 6
 #endif
-#ifndef VIPER_WII_RUMBLE_SHAKE_PERIOD
-#define VIPER_WII_RUMBLE_SHAKE_PERIOD 8
-#endif
+#define LIGHT_SHAKE_PERIOD 8
 #define HEAVY_SHAKE_PERIOD 6
-#define HEAVY_SHAKE_ON 2
+#define PULL_PERIOD 5
 #define SHAKE_HOLD 7
+#define TORQUE_WINDOW 8
 extern volatile uint8_t wii_motor;
-static int rumble_on;static unsigned rumble_hold;
-static uint8_t shake_prev;static unsigned shake_left,shake_level,shake_phase;
-static unsigned shake_level_of(uint8_t prev,uint8_t m){
+enum{RUMBLE_FULL,RUMBLE_MILD,RUMBLE_OFF};
+static int rumble_on,rumble_mode;
+static uint8_t shake_prev,shake_drive;static unsigned shake_left,shake_level,phase;
+static uint8_t torque_ring[TORQUE_WINDOW];static unsigned torque_sum,torque_at;
+/* drive: the last command with torque */
+static unsigned shake_level_of(uint8_t prev,uint8_t drive,uint8_t m){
     unsigned level=(m&15)>(prev&15)?(m&15):(prev&15);
     if(!(m&0x80))return 0;
     if(m&0x20)return level?level:8;
-    if((prev&0x80)&&(prev&15)&&(m&15)&&((prev^m)&0x10))return level;
+    if((drive&0x80)&&(drive&15)&&(m&15)&&((drive^m)&0x10))return (m&15)>(drive&15)?(m&15):(drive&15);
     return 0;
 }
 static void rumble_set(int want){
     if(want!=rumble_on&&remote_enabled){WPAD_Rumble(WPAD_CHAN_0,want);rumble_on=want;}
 }
+static void rumble_cycle_mode(void){
+    static const char *const names[]={"RUMBLE FULL","RUMBLE MILD","RUMBLE OFF"};
+    rumble_mode=(rumble_mode+1)%3;
+    void wii_menu_notice(const char *);wii_menu_notice(names[rumble_mode]);
+}
+/* motor on for torque/15 of every period polls (rounded); MILD halves it */
+static int rumble_pwm(unsigned period,unsigned torque_x_window){
+    unsigned on=(2*period*torque_x_window+15*TORQUE_WINDOW)/(30*TORQUE_WINDOW);
+    if(rumble_mode==RUMBLE_MILD)on=on>1?on/2:on;
+    return phase++%period<on;
+}
 static void rumble_update(int connected){
     uint8_t m=wii_motor;
+    unsigned torque=(m&0x80)?m&15:0;
+    torque_sum+=torque-torque_ring[torque_at];torque_ring[torque_at]=(uint8_t)torque;torque_at=(torque_at+1)%TORQUE_WINDOW;
     if(m!=shake_prev){
-        unsigned level=shake_level_of(shake_prev,m);
-        if(level){shake_level=level;if(!shake_left)shake_phase=0;shake_left=SHAKE_HOLD;}
-        shake_prev=m;
+        unsigned level=shake_level_of(shake_prev,shake_drive,m);
+        if(level){shake_level=level;if(!shake_left)phase=0;shake_left=SHAKE_HOLD;}
+        shake_prev=m;if((m&0x80)&&(m&15))shake_drive=m;
     }
-    if(!connected||poll_count<=600){if(connected)rumble_set(0);shake_left=0;return;}
+    if(!connected||poll_count<=600||rumble_mode==RUMBLE_OFF){if(connected)rumble_set(0);shake_left=0;return;}
     if(shake_left){
         shake_left--;
-        int heavy=shake_level>=10;
-        unsigned period=heavy?HEAVY_SHAKE_PERIOD:VIPER_WII_RUMBLE_SHAKE_PERIOD,on=heavy?HEAVY_SHAKE_ON:1;
-        rumble_set(shake_phase++%period<on);
-        rumble_hold=0;
+        rumble_set(rumble_pwm(shake_level>=10?HEAVY_SHAKE_PERIOD:LIGHT_SHAKE_PERIOD,torque_sum));
         return;
     }
-    int want=(m&0x80)&&(m&15)>=VIPER_WII_RUMBLE_MIN_TORQUE;
-    if(rumble_hold){rumble_hold--;return;}
-    if(want!=rumble_on){rumble_set(want);rumble_hold=6;}
+    if(torque>=VIPER_WII_RUMBLE_MIN_TORQUE)rumble_set(rumble_pwm(PULL_PERIOD,torque*TORQUE_WINDOW));
+    else{rumble_set(0);phase=0;}
 }
 void wii_input_shutdown(void){
     if(initialized&&remote_enabled){if(rumble_on)WPAD_Rumble(WPAD_CHAN_0,0);WPAD_Shutdown();}
@@ -131,9 +145,11 @@ void wii_input_poll(void){
             if(d->btns_d&&!menu_revealed&&wii_enhanced_menu_active())menu_reveal_request=1;   /* swallowed: not a display change */
             else
 #ifdef VIPER_WII_DISPLAY_MULTI
-            if(d->btns_d&WPAD_BUTTON_MINUS){void wii_gx_display_cycle(void);wii_gx_display_cycle();}
+            if((d->btns_d&WPAD_BUTTON_MINUS)&&(b&WPAD_BUTTON_B))rumble_cycle_mode();
+            else if(d->btns_d&WPAD_BUTTON_MINUS){void wii_gx_display_cycle(void);wii_gx_display_cycle();}
 #else
-            if(d->btns_d&WPAD_BUTTON_MINUS)roll_center=tilt;
+            if((d->btns_d&WPAD_BUTTON_MINUS)&&(b&WPAD_BUTTON_B))rumble_cycle_mode();
+            else if(d->btns_d&WPAD_BUTTON_MINUS)roll_center=tilt;
 #endif
             float delta=tilt-roll_center,mag=fabsf(delta)-2.5f;
             float frac=mag<=0?0:fminf(1,mag/(45.0f-2.5f));
