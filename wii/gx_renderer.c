@@ -25,6 +25,10 @@ static struct { const void *image; unsigned width,height,wrap_s,wrap_t,filter,ma
 #else
 #define TEXLOAD_FORGET() ((void)0)
 #endif
+#ifdef VIPER_WII_MEMO_MULTI
+#include "gx_memo_log.h"
+static unsigned memo_tex_gen;   /* bumped by every texture upload and discard */
+#endif
 /* libogc's GX_SetCurrentGXThread names the thread the CP FIFO overflow
  * interrupt suspends; it disables interrupts around the update. Every
  * caller in the port goes through here (GX_Init names the initial thread
@@ -742,6 +746,9 @@ enum { COLOR_RESIDENT_BUDGET=VIPER_WII_GX_RESIDENT_BUDGET };
 static uint8_t *texture_slot_images[COLOR_CACHE_SLOTS];
 static unsigned texture_slot_bytes[COLOR_CACHE_SLOTS],texture_resident_bytes;
 static void discard_texture_slot(unsigned slot){
+#ifdef VIPER_WII_MEMO_MULTI
+    memo_tex_gen++;
+#endif
     /* Caller has drained all queued GX users before freeing any valid image. */
     texture_resident_bytes-=texture_slot_bytes[slot];
     free(texture_slot_images[slot]);texture_slot_images[slot]=NULL;
@@ -913,6 +920,9 @@ WII_HOT_bind_flat_texture static void bind_flat_texture(const WiiVoodooView *v,u
         if(!wii_texture_rgba8(texture_image,wii_texture_rgba8_size(w,h),v->vram,0x800000,base,w,h,format,v->palette[unit]))unsupported(v,cmd,"GX AI44 conversion failed");
         DCFlushRange(texture_image,wii_texture_rgba8_size(w,h));GX_InvalidateTexAll();
         wii_texture_cache_commit(entry,&request,v->vram_versions);
+#ifdef VIPER_WII_MEMO_MULTI
+        memo_tex_gen++;
+#endif
 #ifdef VIPER_WII_TEXTURE_SLOT_HINT
         texture_slot_hint[slot]=(uint8_t)hint;
 #endif
@@ -1303,6 +1313,87 @@ RENDER_O3 static int triangle_memo(const WiiVoodooView *v,const WiiVoodooVertex 
 #endif /* VIPER_WII_MEMO_VERTEX_PREP */
 #endif
 static void triangle_full(void *user,const WiiVoodooView *v,const WiiVoodooVertex p[3],uint32_t cmd,float early_area) __attribute__((noinline));
+#ifdef VIPER_WII_MEMO_MULTI
+/* Multi-entry triangle memo: each entry is a full-path triangle's memo with
+ * the device state it was made in (every FBI, I/O and TMU register, the
+ * texture epoch and packet format) and the GX setter calls that path made
+ * (gx_memo_log.h). When the device returns to a recorded state, the calls
+ * are replayed (through the same wrappers) and the entry becomes the current
+ * memo. Recording starts from cold renderer caches so the log is complete;
+ * a replay leaves them cold too. Entries die with any texture upload or
+ * discard (their texture objects name slot memory). */
+#define MEMO_KEY_WORDS (256+64+128+2)
+#define MEMO_ENTRIES 8
+typedef struct {
+    int used;uint32_t hash;unsigned tex_gen;uint64_t stamp;
+    uint32_t key[MEMO_KEY_WORDS];
+    __typeof__(tri_memo) memo;
+    WiiTMUPipelinePlan plan;
+    unsigned nlog;MemoCall *log;
+} MemoEntry;
+static MemoEntry *memo_entries;
+static uint64_t memo_stamp,memo_multi_hits,memo_multi_records;
+static uint32_t memo_key_hash(const WiiVoodooView *v,uint32_t cmd,uint32_t *key){
+    memcpy(key,v->regs,256*4);memcpy(key+256,v->io,64*4);memcpy(key+320,v->tmu,128*4);
+    key[448]=wii_voodoo_texture_epoch;key[449]=(cmd>>10)&255;
+    uint32_t h=2166136261u;
+    for(unsigned i=0;i<MEMO_KEY_WORDS;i++)h=(h^key[i])*16777619u;
+    return h;
+}
+static void memo_caches_cold(void){
+    wii_combiner_program_invalidate(&combiner_cache);
+    wii_material_run_invalidate(&material_run);
+    TEXLOAD_FORGET();
+#ifdef VIPER_WII_MATERIAL_BIND_SKIP
+    material_bind_valid=0;
+#endif
+#ifdef VIPER_WII_VERTEX_STQ
+    stq_desc=-1;
+#endif
+    gx_shadow.proj_w=gx_shadow.proj_h=0;
+#ifdef VIPER_WII_LOOKUP_PLANE_REUSE
+    lookup_plane_cache.valid=0;
+#endif
+}
+static uint32_t memo_key_now[MEMO_KEY_WORDS];
+/* A device-state memo miss: put a recorded entry back, or 0. */
+static int memo_multi_restore(const WiiVoodooView *v,uint32_t cmd){
+    if(!memo_entries)return 0;
+    uint32_t h=memo_key_hash(v,cmd,memo_key_now);
+    for(unsigned i=0;i<MEMO_ENTRIES;i++){
+        MemoEntry *e=&memo_entries[i];
+        if(!e->used||e->hash!=h||e->tex_gen!=memo_tex_gen||memcmp(e->key,memo_key_now,sizeof e->key))continue;
+        memo_caches_cold();
+        memo_replay(e->log,e->nlog);
+        memo_caches_cold();
+        tri_memo=e->memo;tri_memo.plan=&e->plan;
+        tri_memo.state_epoch=wii_voodoo_state_epoch;tri_memo.gx_gen=gx_state_gen;tri_memo.valid=1;
+        e->stamp=++memo_stamp;memo_multi_hits++;
+        return 1;
+    }
+    return 0;
+}
+static void memo_multi_record_begin(void){
+    memo_caches_cold();
+    memo_log_n=0;memo_log_bad=0;memo_logging=1;
+}
+static void memo_multi_record_end(const WiiVoodooView *v,uint32_t cmd){
+    memo_logging=0;
+    if(memo_log_bad||!tri_memo.valid||tri_memo.state_epoch!=wii_voodoo_state_epoch||tri_memo.gx_gen!=gx_state_gen)return;
+    if(!memo_entries){
+        memo_entries=calloc(MEMO_ENTRIES,sizeof *memo_entries);
+        if(!memo_entries)return;
+        for(unsigned i=0;i<MEMO_ENTRIES;i++)memo_entries[i].log=malloc(MEMO_LOG_CAP*sizeof(MemoCall));
+    }
+    MemoEntry *e=&memo_entries[0];
+    for(unsigned i=1;i<MEMO_ENTRIES;i++)if(!memo_entries[i].used||memo_entries[i].stamp<e->stamp)e=&memo_entries[i];
+    if(!e->log)return;
+    e->hash=memo_key_hash(v,cmd,e->key);e->tex_gen=memo_tex_gen;
+    e->memo=tri_memo;e->plan=*tri_memo.plan;e->memo.plan=&e->plan;
+    memcpy(e->log,memo_log,memo_log_n*sizeof(MemoCall));e->nlog=memo_log_n;
+    e->used=1;e->stamp=++memo_stamp;memo_multi_records++;
+}
+#endif
 WII_HOT_triangle RENDER_O3 static void triangle(void *user,const WiiVoodooView *v,const WiiVoodooVertex p[3],uint32_t cmd) {
 #if defined(VIPER_WII_PARENT_PROJECTION) && defined(VIPER_WII_GX_WDEPTH_APPROX)
     /* Recursive children are synchronous: neither guest register writes nor
@@ -1333,13 +1424,21 @@ WII_HOT_triangle RENDER_O3 static void triangle(void *user,const WiiVoodooView *
     wii_gx_own_thread();
 #ifdef VIPER_WII_TRIANGLE_MEMO
     if(tri_memo.valid&&active_depth_band<0&&triangle_memo(v,p,cmd,area))return;
+#ifdef VIPER_WII_MEMO_MULTI
+    if(active_depth_band<0&&(!tri_memo.valid||tri_memo.state_epoch!=wii_voodoo_state_epoch)&&
+       memo_multi_restore(v,cmd)&&triangle_memo(v,p,cmd,area))return;
+#endif
     if(tri_memo.valid)tri_memo.misses++;
     else memo_miss[8]++;
     if(active_depth_band>=0)memo_miss[9]++;
     tri_memo.valid=0;
 #endif
 #ifdef VIPER_WII_GX_EARLY_CULL
-#ifdef VIPER_WII_MEMO_SPURIOUS_STATS
+#if defined(VIPER_WII_MEMO_MULTI)
+    memo_multi_record_begin();
+    triangle_full(user,v,p,cmd,area);
+    memo_multi_record_end(v,cmd);
+#elif defined(VIPER_WII_MEMO_SPURIOUS_STATS)
     {   /* Diagnostic: a memo miss after which the full path changed no GX
          * state could have kept the memo (a keyed multi-entry memo's case). */
         static unsigned long long misses,quiet;unsigned gen=gx_state_gen;
@@ -2862,6 +2961,9 @@ void wii_gx_batch_flush(void){
 void wii_gx_triangle_memo_stats(unsigned long long *hits,unsigned long long *misses){
 #ifdef VIPER_WII_TRIANGLE_MEMO
     *hits=tri_memo.hits;*misses=tri_memo.misses;
+#ifdef VIPER_WII_MEMO_MULTI
+    rt_log("VIPER WII GX MEMO MULTI restores=%llu records=%llu\n",(unsigned long long)memo_multi_hits,(unsigned long long)memo_multi_records);
+#endif
 #ifdef VIPER_WII_TEXLOAD_SKIP
     rt_log("VIPER WII GX TEXLOAD skipped=%llu\n",(unsigned long long)texload.skipped);
 #endif

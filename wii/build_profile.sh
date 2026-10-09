@@ -831,6 +831,11 @@ case "${WII_PERF_NATIVE_PACKET:-0}" in
     1) flags="$flags -DVIPER_WII_NATIVE_PACKET"; output="$output-npacket" ;;
     *) echo 'WII_PERF_NATIVE_PACKET must be 0 or 1' >&2; exit 2 ;;
 esac
+case "${WII_PERF_MEMO_MULTI:-0}" in
+    0) ;;
+    1) flags="$flags -DVIPER_WII_MEMO_MULTI"; output="$output-memomulti" ;;
+    *) echo 'WII_PERF_MEMO_MULTI must be 0 or 1' >&2; exit 2 ;;
+esac
 case "${WII_PERF_MEMO_REVISIT_STATS:-0}" in
     0) ;;
     1) flags="$flags -DVIPER_WII_MEMO_REVISIT_STATS"; output="$output-revisit" ;;
