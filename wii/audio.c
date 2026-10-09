@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "audio.h"
+#include "input.h"
 
 #ifndef VIPER_WII_AUDIO_DMA_FRAMES
 #define VIPER_WII_AUDIO_DMA_FRAMES 512   /* ~10.7 ms per buffer */
@@ -70,6 +71,9 @@ void wii_audio_push_block(const uint8_t *blk) {
 
 /* Fill one 48 kHz buffer by linear interpolation from the 44.1 kHz ring. */
 static void fill(int16_t (*out)[2]) {
+    /* Paused, the DMA plays silence and the queue waits as it is: emptied,
+     * the audio-paced game would run fast to refill it on resume. */
+    if (wii_pause_open) { memset(out, 0, DMA_FRAMES * 4); DCFlushRange(out, DMA_FRAMES * 4); return; }
     unsigned r = ring_r, w = ring_w;
     if (w - r > BACKLOG_MAX) { r = w - BACKLOG_KEEP; wii_audio_skips++; }
     for (int i = 0; i < DMA_FRAMES; i++) {

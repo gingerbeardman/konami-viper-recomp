@@ -62,6 +62,7 @@ void wii_gx_own_thread(void){
 #include "voodoo_headless.h"
 #include "runtime.h"
 #include "menu.h"
+#include "input.h"
 #ifdef VIPER_WII_FRAME_CAPTURE
 #include "net_report.h"
 static void frame_capture(void);
@@ -3363,6 +3364,33 @@ static void ss_resolve(void){
     TEXLOAD_FORGET();
 }
 #endif
+#ifndef VIPER_WII_SCRIPTED_RACE
+/* HOME pause (wii/input.h): the guest waits here, inside its present, while
+ * the menu is open, so the game, its clock and its sound stop together. The
+ * finished picture (before our overlay) is copied out once and drawn dimmed
+ * under the menu each vsync, then put back for the present to go on. */
+int wii_quit_pending(void);
+static void pause_hold(void){
+    u32 size=GX_GetTexBufferSize(640,480,GX_TF_RGB565,GX_FALSE,0);
+    void *pixels=memalign(32,size);
+    if(!pixels){wii_pause_open=0;rt_log("VIPER WII PAUSE no memory for the frame\n");return;}
+    rt_log("VIPER WII PAUSE open frame=%u\n",render_frame);
+    gx_wait(8);   /* the frame finished, outside any recording */
+    GX_SetTexCopySrc(0,0,640,480);GX_SetTexCopyDst(640,480,GX_TF_RGB565,GX_FALSE);
+    GX_CopyTex(pixels,GX_FALSE);GX_PixModeSync();GX_DrawDone();GX_InvalidateTexAll();
+    GXTexObj frame;GX_InitTexObj(&frame,pixels,640,480,GX_TF_RGB565,GX_CLAMP,GX_CLAMP,GX_FALSE);
+    GX_InitTexObjLOD(&frame,GX_NEAR,GX_NEAR,0,0,0,GX_FALSE,GX_FALSE,GX_ANISO_1);
+    while(wii_pause_open&&!wii_quit_pending()){
+        wii_menu_pause_draw(&frame,110);
+        GX_CopyDisp(framebuffer,GX_FALSE);GX_DrawDone();
+        VIDEO_SetNextFramebuffer(framebuffer);VIDEO_Flush();VIDEO_WaitVSync();
+    }
+    wii_pause_open=0;
+    wii_menu_pause_draw(&frame,255);GX_DrawDone();
+    free(pixels);GX_InvalidateTexAll();TEXLOAD_FORGET();
+    rt_log("VIPER WII PAUSE close%s\n",wii_quit_pending()?" to quit":"");
+}
+#endif
 static void present(void *user,const WiiVoodooView *v,unsigned base) {
     TEXLOAD_FORGET();
 #ifdef VIPER_WII_TRIANGLE_MEMO
@@ -3433,6 +3461,9 @@ static void present(void *user,const WiiVoodooView *v,unsigned base) {
     depth_trace_min=1e30f;depth_trace_max=0;depth_trace_flat=0;memset(depth_trace_hist,0,sizeof depth_trace_hist);
 #endif
     if(OUT_W!=640||OUT_H!=480)letterbox_borders();
+#ifndef VIPER_WII_SCRIPTED_RACE
+    if(wii_pause_open)pause_hold();
+#endif
     wii_menu_draw();
     gx_shadow_reset(); /* menu.c sets the shadowed GX state directly. */
     /* menu.c sets its own viewport; the game uses the box. */

@@ -15,4 +15,9 @@ void wii_input_init(void);
 void wii_input_poll(void);
 void wii_input_shutdown(void);
 void wii_input_guest_tick(void);
+/* Pause menu (HOME): open flag and row, set by the input poll; give-up is
+ * wii/main.c's (in a race only). */
+extern volatile int wii_pause_open,wii_pause_cursor;
+int wii_give_up_available(void);
+void wii_request_give_up(void);
 #endif

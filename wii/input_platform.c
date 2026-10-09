@@ -31,6 +31,31 @@ static float roll_center;
 static volatile int menu_revealed,menu_reveal_request;
 static int menu_swallow;
 int wii_menu_revealed(void){return menu_revealed;}
+/* HOME pauses: the renderer holds the guest at its next present and draws
+ * the pause menu (wii/menu.c) until it closes. Rows: RESUME, GIVE UP (in a
+ * race only), SYSTEM MENU. Held sideways, the player's up is the D-pad's
+ * RIGHT; A, 2 or PLUS chooses, HOME or B resumes. A GameCube pad steers it
+ * with its D-pad, A, and B or START. Every button stays ignored after the
+ * menu closes until all are released. */
+static int pause_swallow;
+static void pause_move(int dir){
+    int c=wii_pause_cursor;
+    do c=(c+dir+3)%3;while(c==1&&!wii_give_up_available());
+    wii_pause_cursor=c;
+}
+static void pause_choose(void){
+    int c=wii_pause_cursor;
+    wii_pause_open=0;
+    if(c==1)wii_request_give_up();
+    else if(c==2){void wii_request_quit(int);wii_request_quit(3);}
+}
+/* One poll's new presses while the menu is open. */
+static void pause_input(int up,int down,int choose,int back){
+    if(back)wii_pause_open=0;
+    else if(choose)pause_choose();
+    else if(up)pause_move(-1);
+    else if(down)pause_move(1);
+}
 void wii_input_init(void){
     if(initialized)return;
     if(LWP_MutexInit(&mutex,0))rt_fatal("Wii input mutex initialization");
@@ -93,6 +118,7 @@ static int rumble_pwm(unsigned period,unsigned torque_x_window){
     return phase++%period<on;
 }
 static void rumble_update(int connected){
+    if(wii_pause_open){if(connected)rumble_set(0);shake_left=0;return;}   /* the game is frozen mid-shake */
     uint8_t m=wii_motor;
     unsigned torque=(m&0x80)?m&15:0;
     torque_sum+=torque-torque_ring[torque_at];torque_ring[torque_at]=(uint8_t)torque;torque_at=(torque_at+1)%TORQUE_WINDOW;
@@ -130,7 +156,11 @@ void wii_input_poll(void){
             LWP_MutexLock(mutex);queue_diagnostic(2,format_result,0,0);LWP_MutexUnlock(mutex);
         }
         WPADData *d=WPAD_Data(WPAD_CHAN_0);u32 b=d->btns_h;
-        if(d->btns_d&WPAD_BUTTON_HOME){void wii_request_quit(int);wii_request_quit(1);}
+        if(wii_pause_open){
+            u32 p=d->btns_d;
+            pause_input(!!(p&WPAD_BUTTON_RIGHT),!!(p&WPAD_BUTTON_LEFT),
+                !!(p&(WPAD_BUTTON_A|WPAD_BUTTON_2|WPAD_BUTTON_PLUS)),!!(p&(WPAD_BUTTON_HOME|WPAD_BUTTON_B)));
+        }else if(d->btns_d&WPAD_BUTTON_HOME){wii_pause_cursor=0;wii_pause_open=1;}
         s.connected=1;
         /* Held sideways and turned like a steering wheel, the remote's long
          * axis tilts: its gravity component g.y against the other two axes.
@@ -142,7 +172,8 @@ void wii_input_poll(void){
         float gx=d->gforce.x,gy=d->gforce.y,gz=d->gforce.z;
         float tilt=atan2f(gy,sqrtf(gx*gx+gz*gz))*(180.0f/(float)M_PI);
         if(isfinite(tilt)){
-            if(d->btns_d&&!menu_revealed&&wii_enhanced_menu_active())menu_reveal_request=1;   /* swallowed: not a display change */
+            if(wii_pause_open){}   /* the pause menu has them */
+            else if(d->btns_d&&!menu_revealed&&wii_enhanced_menu_active())menu_reveal_request=1;   /* swallowed: not a display change */
             else
 #ifdef VIPER_WII_DISPLAY_MULTI
             if((d->btns_d&WPAD_BUTTON_MINUS)&&(b&WPAD_BUTTON_B))rumble_cycle_mode();
@@ -171,6 +202,10 @@ void wii_input_poll(void){
 #ifndef VIPER_WII_NO_RUMBLE
     rumble_update(connected);
 #endif
+    if((pads&PAD_CHAN0_BIT)&&wii_pause_open){
+        u16 p=PAD_ButtonsDown(0);
+        pause_input(!!(p&PAD_BUTTON_UP),!!(p&PAD_BUTTON_DOWN),!!(p&PAD_BUTTON_A),!!(p&(PAD_BUTTON_B|PAD_BUTTON_START)));
+    }
     if(pads&PAD_CHAN0_BIT){
         u16 b=PAD_ButtonsHeld(0);s.connected=1;
         int x=PAD_StickX(0);if(x>12||x< -12)s.steer=x>0?(x-12)*200/115:(x+12)*200/116;
@@ -185,6 +220,11 @@ void wii_input_poll(void){
         if(b&PAD_BUTTON_RIGHT)s.buttons|=WII_IN_RIGHT;
         if(b&PAD_TRIGGER_Z)s.buttons|=WII_IN_COIN;
         if(b&PAD_BUTTON_Y)s.buttons|=WII_IN_RESTART;
+    }
+    if(wii_pause_open)pause_swallow=1;
+    if(pause_swallow){
+        if(!s.buttons&&s.accel<=-190&&s.brake<=-190&&!wii_pause_open)pause_swallow=0;
+        s.buttons=0;s.accel=s.brake=-200;
     }
     LWP_MutexLock(mutex);wii_input_observe(&latch,&s);LWP_MutexUnlock(mutex);
 }

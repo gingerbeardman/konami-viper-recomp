@@ -44,7 +44,9 @@ static uint64_t started;
 static unsigned boot_phase=~0u,boot_step=~0u,driving_substate=~0u;
 static const RtModuleInfo *const modules[]={RT_ALL_MODULES};
 int rt_verbose(void){return 0;}
-static volatile int quit_request;   /* 1 loader, 2 power off (see quit_now) */
+static volatile int quit_request;   /* 1 loader, 2 power off, 3 System Menu (see quit_now) */
+int wii_quit_pending(void){return quit_request;}
+volatile int wii_pause_open,wii_pause_cursor;   /* wii/input.h; never set in scripted runs */
 void rt_log(const char *fmt,...) {
 #ifdef VIPER_WII_NO_LOG
     /* Release build: no SD log and no console text (every line was a
@@ -86,7 +88,8 @@ void rt_fatal(const char *why){
         exit(0);
     }
     /* Reset/Home/Power still leave a stopped game. */
-    for(;;){VIDEO_WaitVSync();if(quit_request){if(quit_request==2)SYS_ResetSystem(SYS_POWEROFF,0,0);exit(0);}}
+    for(;;){VIDEO_WaitVSync();if(quit_request){if(quit_request==2)SYS_ResetSystem(SYS_POWEROFF,0,0);
+        if(quit_request==3)SYS_ResetSystem(SYS_RETURNTOMENU,0,0);exit(0);}}
 }
 #if !defined(VIPER_WII_SCRIPTED_RACE) && defined(GAME_ENH_HOOK_RACE_DISPATCH)
 /* Restart race (D-pad right / GameCube Y), as the desktop pause menu's
@@ -103,11 +106,31 @@ int wii_race_restart_pending(void){return race_restart_pending();}
 void wii_request_race_restart(void){}
 int wii_race_restart_pending(void){return 0;}
 #endif
+/* GIVE UP (pause menu): the race clock runs out, so the game itself ends the
+ * race as when the time is up. At the native countdown store r5 is the
+ * decremented remaining-vblank count: held at 1, the next frame reaches 0. */
+#if !defined(VIPER_WII_SCRIPTED_RACE) && defined(GAME_ENH_HOOK_RACE_DISPATCH) && defined(GAME_ENH_HOOK_RACE_COUNTDOWN)
+static volatile int give_up;
+int wii_give_up_available(void){return race_restart_available()&&!race_restart_pending();}
+void wii_request_give_up(void){if(wii_give_up_available())give_up=1;}
+static void give_up_hook(PPCContext *c){
+    if(!give_up)return;
+    if(!race_restart_available()){give_up=0;return;}
+    if(c->r[5]>1)c->r[5]=1;
+    else{give_up=0;rt_log("VIPER WII give up: race time out\n");}
+}
+#else
+int wii_give_up_available(void){return 0;}
+void wii_request_give_up(void){}
+#endif
 #include "widescreen.h"
 void rt_hook(PPCContext *c,uint32_t pc){
     if(wii_wide_hook(pc))return;
 #if !defined(VIPER_WII_SCRIPTED_RACE) && defined(GAME_ENH_HOOK_RACE_DISPATCH)
     if(g_enhanced&&pc==GAME_ENH_HOOK_RACE_DISPATCH)race_dispatch_hook(c);
+#endif
+#if !defined(VIPER_WII_SCRIPTED_RACE) && defined(GAME_ENH_HOOK_RACE_DISPATCH) && defined(GAME_ENH_HOOK_RACE_COUNTDOWN)
+    if(pc==GAME_ENH_HOOK_RACE_COUNTDOWN)give_up_hook(c);
 #endif
     (void)c;
 #ifdef GAME_ENH_HOOK_ATTRACT
@@ -181,12 +204,13 @@ static void quit_now(void){
     /* Whole-session hardware PC profile, written to the log on the way out. */
     if(logfile){extern void wii_pc_profile_stop(void);wii_pc_profile_stop();}
 #endif
-    if(logfile){rt_log("VIPER WII QUIT %s\n",kind==2?"power off":"to loader");fclose(logfile);logfile=NULL;}
+    if(logfile){rt_log("VIPER WII QUIT %s\n",kind==2?"power off":kind==3?"to System Menu":"to loader");fclose(logfile);logfile=NULL;}
     VIDEO_SetBlack(TRUE);VIDEO_Flush();VIDEO_WaitVSync();
 #ifndef VIPER_WII_SCRIPTED_RACE
     wii_input_shutdown();
 #endif
     if(kind==2)SYS_ResetSystem(SYS_POWEROFF,0,0);
+    if(kind==3)SYS_ResetSystem(SYS_RETURNTOMENU,0,0);
     exit(0);
 }
 static void quit_buttons_init(void){

@@ -7,6 +7,7 @@
 #include "gx_renderer.h"
 #include "enhanced_headless.h"
 #include "runtime.h"
+#include "input.h"
 #include <gccore.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,14 +63,16 @@ static void quad(float x,float y,float right,float bottom,float u,float v,float 
     vert(x,y,u,v,c,textured);vert(right,y,ur,v,c,textured);vert(right,bottom,ur,vb,c,textured);
     vert(x,y,u,v,c,textured);vert(right,bottom,ur,vb,c,textured);vert(x,bottom,u,vb,c,textured);GX_End();
 }
-static void text(float x,float y,const char *s,int selected){
-    GXColor color={255,selected?217:255,selected?0:255,255};
+static void text_color(float x,float y,const char *s,GXColor color){
     for(;*s;s++){
         unsigned ch=(unsigned char)*s;
         if(ch>=128||!glyphs[ch].w){x+=SPACE;continue;}
         Glyph g=glyphs[ch];quad(x,y,x+g.w,y+32,(float)g.x/FONT_W,(float)g.y/FONT_H,
             (float)(g.x+g.w)/FONT_W,(float)(g.y+32)/FONT_H,color,1);x+=CELL;
     }
+}
+static void text(float x,float y,const char *s,int selected){
+    text_color(x,y,s,(GXColor){255,selected?217:255,selected?0:255,255});
 }
 static const char *notice;
 static unsigned notice_frames;
@@ -116,6 +119,47 @@ void wii_menu_draw(void){
     if(notice_frames){text(nx,16,notice,1);notice_frames--;}
     /* The backend re-establishes projection, masks, blend and depth per draw.
      * Restore its untextured vertex descriptor/TEV invariant immediately. */
+    GX_SetVtxDesc(GX_VA_TEX0,GX_NONE);GX_SetNumTexGens(0);
+    GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORDNULL,GX_TEXMAP_NULL,GX_COLOR0A0);GX_SetTevOp(GX_TEVSTAGE0,GX_PASSCLR);
+}
+/* The pause menu over the frozen frame (the whole EFB, copied to `frame`):
+ * shade 255 redraws that frame exactly as it was, for the game to resume
+ * on; below 255 it is dimmed under the menu. Sets its own GX state, as
+ * wii_menu_draw does. */
+void wii_menu_pause_draw(GXTexObj *frame,unsigned shade){
+    if(!font)rt_fatal("Wii menu draw before font initialization");
+    Mtx44 p;guOrtho(p,0,480,0,640,0,1);GX_LoadProjectionMtx(p,GX_ORTHOGRAPHIC);
+    GX_SetViewport(0,0,640,480,0,1);GX_SetScissor(0,0,640,480);
+    GX_SetCullMode(GX_CULL_NONE);GX_SetZMode(GX_FALSE,GX_ALWAYS,GX_FALSE);GX_SetZCompLoc(GX_FALSE);
+    GX_SetAlphaCompare(GX_ALWAYS,0,GX_AOP_AND,GX_ALWAYS,0);
+    GX_SetBlendMode(GX_BM_NONE,GX_BL_ONE,GX_BL_ZERO,GX_LO_COPY);
+    GX_SetColorUpdate(GX_TRUE);GX_SetAlphaUpdate(GX_FALSE);GX_SetDither(GX_FALSE);
+    GX_SetFog(GX_FOG_NONE,0,1,0,1,(GXColor){0,0,0,0});
+    GX_SetNumTevStages(1);GX_SetNumChans(1);
+    GX_LoadTexObj(frame,GX_TEXMAP0);GX_SetVtxDesc(GX_VA_TEX0,GX_DIRECT);
+    GX_SetVtxAttrFmt(GX_VTXFMT0,GX_VA_TEX0,GX_TEX_ST,GX_F32,0);GX_SetNumTexGens(1);
+    GX_SetTexCoordGen(GX_TEXCOORD0,GX_TG_MTX2x4,GX_TG_TEX0,GX_IDENTITY);
+    GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLOR0A0);
+    GX_SetTevOp(GX_TEVSTAGE0,shade>=255?GX_REPLACE:GX_MODULATE);
+    quad(0,0,640,480,0,0,1,1,(GXColor){shade,shade,shade,255},1);
+    if(shade<255){
+        static const char *const rows[3]={"RESUME","GIVE UP","SYSTEM MENU"};
+        int bx,by,bw,bh;wii_gx_output_box(&bx,&by,&bw,&bh);   /* the game's box, as wii_menu_draw */
+        guOrtho(p,0,384,0,512,0,1);GX_LoadProjectionMtx(p,GX_ORTHOGRAPHIC);GX_SetViewport(bx,by,bw,bh,0,1);
+        GX_SetBlendMode(GX_BM_BLEND,GX_BL_SRCALPHA,GX_BL_INVSRCALPHA,GX_LO_COPY);
+        GX_SetVtxDesc(GX_VA_TEX0,GX_NONE);GX_SetNumTexGens(0);
+        GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORDNULL,GX_TEXMAP_NULL,GX_COLOR0A0);GX_SetTevOp(GX_TEVSTAGE0,GX_PASSCLR);
+        quad(136,104,376,276,0,0,0,0,(GXColor){0,0,0,179},0);
+        GX_LoadTexObj(&texture,GX_TEXMAP0);GX_SetVtxDesc(GX_VA_TEX0,GX_DIRECT);GX_SetNumTexGens(1);
+        GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLOR0A0);GX_SetTevOp(GX_TEVSTAGE0,GX_MODULATE);
+        text((512-text_width("PAUSE"))/2,114,"PAUSE",0);
+        int give_up=wii_give_up_available();
+        for(int i=0;i<3;i++){
+            GXColor c=i==wii_pause_cursor?(GXColor){255,217,0,255}:
+                i==1&&!give_up?(GXColor){110,110,110,255}:(GXColor){255,255,255,255};
+            text_color((512-text_width(rows[i]))/2,164+i*34,rows[i],c);
+        }
+    }
     GX_SetVtxDesc(GX_VA_TEX0,GX_NONE);GX_SetNumTexGens(0);
     GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORDNULL,GX_TEXMAP_NULL,GX_COLOR0A0);GX_SetTevOp(GX_TEVSTAGE0,GX_PASSCLR);
 }
