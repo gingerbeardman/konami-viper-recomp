@@ -143,21 +143,21 @@ void wii_menu_pause_draw(GXTexObj *frame,unsigned shade){
     GX_SetTevOp(GX_TEVSTAGE0,shade>=255?GX_REPLACE:GX_MODULATE);
     quad(0,0,640,480,0,0,1,1,(GXColor){shade,shade,shade,255},1);
     if(shade<255){
-        static const char *const rows[3]={"RESUME","GIVE UP","SYSTEM MENU"};
+        static const char *const rows[4]={"RESUME","GIVE UP","EXIT TO HBC","SYSTEM MENU"};
         int bx,by,bw,bh;wii_gx_output_box(&bx,&by,&bw,&bh);   /* the game's box, as wii_menu_draw */
         guOrtho(p,0,384,0,512,0,1);GX_LoadProjectionMtx(p,GX_ORTHOGRAPHIC);GX_SetViewport(bx,by,bw,bh,0,1);
         GX_SetBlendMode(GX_BM_BLEND,GX_BL_SRCALPHA,GX_BL_INVSRCALPHA,GX_LO_COPY);
         GX_SetVtxDesc(GX_VA_TEX0,GX_NONE);GX_SetNumTexGens(0);
         GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORDNULL,GX_TEXMAP_NULL,GX_COLOR0A0);GX_SetTevOp(GX_TEVSTAGE0,GX_PASSCLR);
-        quad(136,104,376,276,0,0,0,0,(GXColor){0,0,0,179},0);
+        quad(136,87,376,293,0,0,0,0,(GXColor){0,0,0,179},0);
         GX_LoadTexObj(&texture,GX_TEXMAP0);GX_SetVtxDesc(GX_VA_TEX0,GX_DIRECT);GX_SetNumTexGens(1);
         GX_SetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLOR0A0);GX_SetTevOp(GX_TEVSTAGE0,GX_MODULATE);
-        text((512-text_width("PAUSE"))/2,114,"PAUSE",0);
+        text((512-text_width("PAUSE"))/2,97,"PAUSE",0);
         int give_up=wii_give_up_available();
-        for(int i=0;i<3;i++){
+        for(int i=0;i<4;i++){
             GXColor c=i==wii_pause_cursor?(GXColor){255,217,0,255}:
                 i==1&&!give_up?(GXColor){110,110,110,255}:(GXColor){255,255,255,255};
-            text_color((512-text_width(rows[i]))/2,164+i*34,rows[i],c);
+            text_color((512-text_width(rows[i]))/2,147+i*34,rows[i],c);
         }
     }
     GX_SetVtxDesc(GX_VA_TEX0,GX_NONE);GX_SetNumTexGens(0);

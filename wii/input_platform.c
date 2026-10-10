@@ -33,21 +33,23 @@ static int menu_swallow;
 int wii_menu_revealed(void){return menu_revealed;}
 /* HOME pauses: the renderer holds the guest at its next present and draws
  * the pause menu (wii/menu.c) until it closes. Rows: RESUME, GIVE UP (in a
- * race only), SYSTEM MENU. Held sideways, the player's up is the D-pad's
+ * race only), EXIT TO HBC, SYSTEM MENU. Held sideways, the player's up is the D-pad's
  * RIGHT; A, 2 or PLUS chooses, HOME or B resumes. A GameCube pad steers it
  * with its D-pad, A, and B or START. Every button stays ignored after the
  * menu closes until all are released. */
 static int pause_swallow;
 static void pause_move(int dir){
     int c=wii_pause_cursor;
-    do c=(c+dir+3)%3;while(c==1&&!wii_give_up_available());
+    do c=(c+dir+4)%4;while(c==1&&!wii_give_up_available());
     wii_pause_cursor=c;
 }
 static void pause_choose(void){
     int c=wii_pause_cursor;
     wii_pause_open=0;
+    void wii_request_quit(int);
     if(c==1)wii_request_give_up();
-    else if(c==2){void wii_request_quit(int);wii_request_quit(3);}
+    else if(c==2)wii_request_quit(1);   /* the Homebrew Channel (the loader) */
+    else if(c==3)wii_request_quit(3);   /* the Wii System Menu */
 }
 /* One poll's new presses while the menu is open. */
 static void pause_input(int up,int down,int choose,int back){
